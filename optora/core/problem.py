@@ -22,8 +22,7 @@ class UnconstrainedOptimizationProblem:
 
     The problem object contains the mathematical ingredients required by a
     solver, but does not prescribe a training loop, method registry, or
-    workflow. Researchers instantiate the problem and pass it to the method
-    implementation they want to study.
+    workflow.
 
     Args:
         objective: Scalar objective with derivative information.
