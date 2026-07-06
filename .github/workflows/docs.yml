@@ -29,6 +29,9 @@ jobs:
           python-version: "3.12"
           cache: pip
       - uses: actions/configure-pages@v6
+        with:
+          enablement: ${{ secrets.PAGES_TOKEN != '' }}
+          token: ${{ secrets.PAGES_TOKEN || github.token }}
       - run: python -m pip install -U pip
       - run: python -m pip install -e ".[docs]"
       - run: zensical build --clean
