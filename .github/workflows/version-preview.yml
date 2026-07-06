@@ -1,0 +1,42 @@
+name: Version Preview
+
+on:
+  pull_request:
+    types:
+      - opened
+      - reopened
+      - synchronize
+      - edited
+
+permissions:
+  contents: read
+
+concurrency:
+  group: version-preview-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  preview:
+    name: next release version
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event.pull_request.head.sha }}
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - id: version
+        run: python tools/release_version.py preview
+      - name: Write summary
+        run: |
+          {
+            echo "### Release preview"
+            echo ""
+            echo "- Base version: \`${{ steps.version.outputs.base-version }}\`"
+            echo "- Bump: \`${{ steps.version.outputs.bump }}\`"
+            echo "- Next release: \`${{ steps.version.outputs.tag }}\`"
+            echo ""
+            echo "Add \`#release\` to the final merge commit message to publish. Add \`#minor\` or \`#major\` when the release should not be a patch."
+          } >> "$GITHUB_STEP_SUMMARY"

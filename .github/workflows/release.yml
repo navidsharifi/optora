@@ -1,0 +1,133 @@
+name: Release
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+      - master
+    tags:
+      - "v*"
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  prepare:
+    name: version and tag
+    if: >-
+      ${{
+        (
+          github.actor == vars.PYPI_RELEASE_ACTOR ||
+          (vars.PYPI_RELEASE_ACTOR == '' && github.actor == github.repository_owner)
+        ) &&
+        (
+          github.event_name == 'workflow_dispatch' ||
+          (
+            github.event_name == 'push' &&
+            startsWith(github.ref, 'refs/heads/') &&
+            contains(github.event.head_commit.message, '#release') &&
+            !startsWith(github.event.head_commit.message, 'chore(release): v')
+          )
+        )
+      }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - name: Verify release marker
+        run: |
+          message="$(git log -1 --pretty=%B)"
+          message_lower="$(printf '%s' "$message" | tr '[:upper:]' '[:lower:]')"
+          if [[ ! "$message_lower" =~ (^|[[:space:]])#release($|[[:space:]]) ]]; then
+            echo "::error::Release preparation requires #release as a standalone marker in the latest commit message."
+            exit 1
+          fi
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          cache: pip
+      - id: version
+        run: python tools/release_version.py bump
+      - run: python -m pip install -U pip
+      - run: python -m pip install -e ".[dev,docs]"
+      - run: ruff check .
+      - run: mypy optora
+      - run: pytest
+      - run: zensical build --clean
+      - run: python -m build
+      - run: twine check dist/*
+      - name: Commit and tag release
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add pyproject.toml optora/_version.py docs/index.md docs/release.md
+          if git diff --cached --quiet; then
+            echo "No version files changed; tagging the current commit."
+          else
+            git commit -m "chore(release): ${{ steps.version.outputs.tag }}"
+          fi
+          git tag "${{ steps.version.outputs.tag }}"
+      - name: Push release commit and tag
+        run: |
+          git push origin HEAD:${{ github.ref_name }}
+          git push origin "${{ steps.version.outputs.tag }}"
+
+  publish:
+    name: publish tagged release
+    if: >-
+      ${{
+        github.event_name == 'push' &&
+        startsWith(github.ref, 'refs/tags/v') &&
+        (
+          github.actor == 'github-actions[bot]' ||
+          github.actor == vars.PYPI_RELEASE_ACTOR ||
+          (vars.PYPI_RELEASE_ACTOR == '' && github.actor == github.repository_owner)
+        )
+      }}
+    runs-on: ubuntu-latest
+    environment:
+      name: pypi
+      url: https://pypi.org/project/optora/
+    permissions:
+      contents: write
+      id-token: write
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - name: Verify release marker
+        run: |
+          source_ref="HEAD"
+          subject="$(git log -1 --pretty=%s HEAD)"
+          if [[ "$subject" == chore\(release\):\ v* ]]; then
+            source_ref="HEAD^"
+          fi
+
+          message="$(git log -1 --pretty=%B "$source_ref")"
+          message_lower="$(printf '%s' "$message" | tr '[:upper:]' '[:lower:]')"
+          if [[ ! "$message_lower" =~ (^|[[:space:]])#release($|[[:space:]]) ]]; then
+            echo "::error::Tagged release does not trace back to a commit message containing #release as a standalone marker."
+            exit 1
+          fi
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: python -m pip install -U pip
+      - run: python -m pip install -e ".[dev]"
+      - run: python -m build
+      - run: twine check dist/*
+      - name: Publish package distributions to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
+      - name: Create GitHub release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create "${GITHUB_REF_NAME}" dist/* \
+            --title "${GITHUB_REF_NAME}" \
+            --notes "Automated Optora release ${GITHUB_REF_NAME}."
