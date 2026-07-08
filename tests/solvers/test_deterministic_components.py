@@ -1,9 +1,13 @@
 """Tests for explicit deterministic solver components."""
 
+import re
+
 import torch
 
 import optora as opt
 from optora.solvers.deterministic import BFGS, GradientDescent
+
+SEMVER_RE = re.compile(r"^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$")
 
 
 def quadratic(x: torch.Tensor) -> torch.Tensor:
@@ -74,5 +78,5 @@ def test_solver_preserves_initial_tensor_dtype() -> None:
 
 
 def test_package_exposes_components_not_minimize_dispatcher() -> None:
-    assert opt.__version__ == "0.1.0"
+    assert SEMVER_RE.fullmatch(opt.__version__) is not None
     assert not hasattr(opt, "minimize")

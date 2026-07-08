@@ -46,8 +46,8 @@ repository owner.
 
 1. Enable GitHub Pages for the repository and set the Pages build source to
    GitHub Actions.
-2. Optional: create a `PAGES_TOKEN` Actions secret with permission to enable
-   Pages automatically when the repository has not been configured yet.
+2. Until Pages is enabled, the documentation workflow still builds the site and
+   skips deployment successfully.
 3. Create or confirm the GitHub environment named `pypi`.
 4. Set `PYPI_RELEASE_ACTOR` in GitHub Actions repository variables when the
    release actor is not the repository owner.
