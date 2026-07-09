@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "optora"
-version = "0.0.2"
+version = "0.0.3"
 description = "A research-oriented optimization library for deterministic and stochastic methods."
 readme = "README.md"
 requires-python = ">=3.10"
