@@ -7,7 +7,7 @@ on:
       - main
       - master
     tags:
-      - "v*"
+      - 'v*' # Triggers the workflow when a version tag is pushed
 
 concurrency:
   group: release-${{ github.ref }}
@@ -16,22 +16,21 @@ concurrency:
 jobs:
   prepare:
     name: version and tag
+    # ONLY run if a push happens on a branch (not a tag) AND it's not the bot's own commit
     if: >-
-      ${{
+      github.ref_type == 'branch' &&
+      (
+        github.actor == vars.PYPI_RELEASE_ACTOR ||
+        (vars.PYPI_RELEASE_ACTOR == '' && github.actor == github.repository_owner)
+      ) &&
+      (
+        github.event_name == 'workflow_dispatch' ||
         (
-          github.actor == vars.PYPI_RELEASE_ACTOR ||
-          (vars.PYPI_RELEASE_ACTOR == '' && github.actor == github.repository_owner)
-        ) &&
-        (
-          github.event_name == 'workflow_dispatch' ||
-          (
-            github.event_name == 'push' &&
-            startsWith(github.ref, 'refs/heads/') &&
-            contains(github.event.head_commit.message, '#release') &&
-            !startsWith(github.event.head_commit.message, 'chore(release): v')
-          )
+          github.event_name == 'push' &&
+          contains(github.event.head_commit.message, '#release') &&
+          !startsWith(github.event.head_commit.message, 'chore(release): v')
         )
-      }}
+      )
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -44,7 +43,7 @@ jobs:
           message="$(git log -1 --pretty=%B)"
           message_lower="$(printf '%s' "$message" | tr '[:upper:]' '[:lower:]')"
           if [[ ! "$message_lower" =~ (^|[[:space:]])#release($|[[:space:]]) ]]; then
-            echo "::error::Release preparation requires #release as a standalone marker in the latest commit message."
+            echo "::error::Release preparation requires #release as a standalone marker."
             exit 1
           fi
       - uses: actions/setup-python@v6
@@ -62,12 +61,13 @@ jobs:
       - run: python -m build
       - run: twine check dist/*
       - name: Commit and tag release
+        id: git_meta
         run: |
           git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git config user.email "41898282+github-actions[bot]@://github.com"
           git add pyproject.toml optora/_version.py docs/index.md docs/release.md
           if git diff --cached --quiet; then
-            echo "No version files changed; tagging the current commit."
+            echo "No version files changed."
           else
             git commit -m "chore(release): ${{ steps.version.outputs.tag }}"
           fi
@@ -79,23 +79,15 @@ jobs:
 
   publish:
     name: publish tagged release
-    if: >-
-      ${{
-        github.event_name == 'push' &&
-        startsWith(github.ref, 'refs/tags/v') &&
-        (
-          github.actor == 'github-actions[bot]' ||
-          github.actor == vars.PYPI_RELEASE_ACTOR ||
-          (vars.PYPI_RELEASE_ACTOR == '' && github.actor == github.repository_owner)
-        )
-      }}
+    # ONLY run if the trigger event is a Tag creation event
+    if: github.ref_type == 'tag'
     runs-on: ubuntu-latest
     environment:
       name: pypi
-      url: https://pypi.org/project/optora/
+      url: https://pypi.org
     permissions:
       contents: write
-      id-token: write
+      id-token: write # Mandatory for Trusted Publishing
     steps:
       - uses: actions/checkout@v6
         with:
@@ -107,11 +99,10 @@ jobs:
           if [[ "$subject" == chore\(release\):\ v* ]]; then
             source_ref="HEAD^"
           fi
-
           message="$(git log -1 --pretty=%B "$source_ref")"
           message_lower="$(printf '%s' "$message" | tr '[:upper:]' '[:lower:]')"
           if [[ ! "$message_lower" =~ (^|[[:space:]])#release($|[[:space:]]) ]]; then
-            echo "::error::Tagged release does not trace back to a commit message containing #release as a standalone marker."
+            echo "::error::Tagged release does not trace back to a commit containing #release."
             exit 1
           fi
       - uses: actions/setup-python@v6
@@ -128,6 +119,6 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          gh release create "${GITHUB_REF_NAME}" dist/* \
-            --title "${GITHUB_REF_NAME}" \
-            --notes "Automated Optora release ${GITHUB_REF_NAME}."
+          gh release create "${{ github.ref_name }}" dist/* \
+            --title "${{ github.ref_name }}" \
+            --notes "Automated Optora release ${{ github.ref_name }}."
