@@ -5,7 +5,7 @@ icon: lucide/package-check
 # Release workflow
 
 <!-- optora-version-start -->
-Latest release: `v0.1.0`
+Latest release: `v0.0.0`
 <!-- optora-version-end -->
 
 Optora uses automated SemVer releases. Pull requests preview the next version,
