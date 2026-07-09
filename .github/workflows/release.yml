@@ -7,7 +7,7 @@ on:
       - main
       - master
     tags:
-      - 'v*' # Triggers the workflow when a version tag is pushed
+      - 'v*' # Triggers the workflow when a version tag is pushed clearly
 
 concurrency:
   group: release-${{ github.ref }}
