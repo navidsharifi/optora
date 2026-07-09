@@ -9,7 +9,7 @@ PyTorch deterministic core that can grow toward stochastic methods,
 differentiable backends, optimal transport, and reinforcement learning.
 
 <!-- optora-version-start -->
-Latest release: `v0.0.1`
+Latest release: `v0.0.2`
 <!-- optora-version-end -->
 
 ## Install
