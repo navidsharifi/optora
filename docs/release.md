@@ -57,10 +57,15 @@ repository owner.
    release markers to be unambiguous in the final commit message.
 7. Include `#release` in the final commit message only when the change should
    publish to PyPI.
-8. Let GitHub Actions build, test, create the release commit and tag, publish
-   the tagged package to PyPI, publish a GitHub release, and redeploy the
-   documentation site.
+8. Let GitHub Actions build, test, create the release commit and tag, check out
+   that tag for publishing, publish the package to PyPI, publish a GitHub
+   release, and redeploy the documentation site.
 
-Publishing runs from the pushed `vX.Y.Z` tag. If PyPI configuration is wrong
-on the first attempt, fix the trusted-publisher settings and rerun the failed
-tag workflow instead of creating a new version.
+Publishing runs from the `vX.Y.Z` tag created by release preparation. If PyPI
+configuration is wrong on the first attempt, fix the trusted-publisher settings
+and rerun the failed publish job instead of creating a new version.
+
+The publish job runs in the same workflow as release preparation. Do not rely
+on the workflow-created tag push to start a second release run, because GitHub
+does not create most follow-up workflow runs from events triggered with the
+repository `GITHUB_TOKEN`.
