@@ -9,6 +9,10 @@ through Zensical's plugin configuration.
 
 ## Public entry points
 
-- [`Core components`](core.md): objective, problem, and result abstractions.
+- [`Core components`](core.md): shared solver contracts and abstractions.
 - [`Deterministic solvers`](deterministic-solvers.md): gradient descent and
   BFGS method components.
+
+Pages in this section are placeholders while the core abstractions and
+solver implementations are rebuilt on the `skeleton` branch; docstring
+references will be restored as each component lands.
