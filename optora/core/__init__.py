@@ -1,7 +1,6 @@
-"""Core objective and result abstractions."""
+"""Core ABC contracts shared across optora packages."""
 
-from optora.core.objective import Objective
-from optora.core.problem import UnconstrainedOptimizationProblem
-from optora.core.result import OptimizationResult
+from optora.core.divergence_base import Divergence
+from optora.core.dro_base import AmbiguitySet
 
-__all__ = ["Objective", "OptimizationResult", "UnconstrainedOptimizationProblem"]
+__all__ = ["AmbiguitySet", "Divergence"]
