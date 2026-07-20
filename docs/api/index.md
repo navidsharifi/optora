@@ -14,5 +14,5 @@ through Zensical's plugin configuration.
   BFGS method components.
 
 Pages in this section are placeholders while the core abstractions and
-solver implementations are rebuilt; docstring references will be restored
-as each component lands.
+solver implementations are rebuilt on the `skeleton` branch; docstring
+references will be restored as each component lands.
