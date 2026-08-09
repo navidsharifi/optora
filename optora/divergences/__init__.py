@@ -6,10 +6,12 @@ from optora.divergences.f_divergence import (
     TotalVariationDivergence,
 )
 from optora.divergences.kl import KLDivergence
+from optora.divergences.wasserstein import SinkhornDivergence
 
 __all__ = [
     "ChiSquareDivergence",
     "KLDivergence",
     "PhiDivergence",
+    "SinkhornDivergence",
     "TotalVariationDivergence",
 ]
