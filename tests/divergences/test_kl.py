@@ -86,7 +86,7 @@ def test_gradient_is_finite_through_clamped_zero_entries() -> None:
     q = torch.tensor([0.5, 0.5])
 
     value = divergence(p, q)
-    value.backward()
+    value.backward()  # type: ignore[no-untyped-call]
 
     assert p.grad is not None
     assert torch.all(torch.isfinite(p.grad))
