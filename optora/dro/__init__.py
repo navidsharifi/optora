@@ -6,10 +6,12 @@ from optora.dro.phi_dro import (
     PhiAmbiguitySet,
     TotalVariationAmbiguitySet,
 )
+from optora.dro.wasserstein_dro import WassersteinAmbiguitySet
 
 __all__ = [
     "KLAmbiguitySet",
     "PhiAmbiguitySet",
     "ChiSquareAmbiguitySet",
     "TotalVariationAmbiguitySet",
+    "WassersteinAmbiguitySet",
 ]
