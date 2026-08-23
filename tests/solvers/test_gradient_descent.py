@@ -59,6 +59,35 @@ def test_stops_at_max_iter_when_not_converged() -> None:
     assert result.num_iterations == 1
 
 
+def test_objective_running_a_nested_inner_solve_does_not_raise() -> None:
+    # Regression test: an objective that itself runs another autograd-based
+    # `GradientDescent` solve (as `AmbiguitySet.worst_case_expectation` does
+    # for KL/phi/Wasserstein-DRO) used to crash the outer solver's post-loop
+    # final-value computation with "element 0 of tensors does not require
+    # grad", because that computation ran under `torch.no_grad()`, which
+    # also disables autograd for the nested inner solve.
+    inner_solver = GradientDescent(step_size=0.5, max_iter=20, tol=1e-10)
+
+    def objective(x: torch.Tensor) -> torch.Tensor:
+        inner_result = inner_solver.solve(
+            GradientDescentProblem(
+                objective=lambda y: (y - 1.0) ** 2,
+                initial_point=torch.zeros(()),
+            )
+        )
+        return x**2 + inner_result.value
+
+    solver = GradientDescent(step_size=0.1, max_iter=200, tol=1e-8)
+    problem = GradientDescentProblem(
+        objective=objective, initial_point=torch.tensor(5.0)
+    )
+
+    result = solver.solve(problem)
+
+    assert result.converged
+    assert torch.allclose(result.point, torch.zeros(()), atol=1e-3)
+
+
 def test_invalid_step_size_raises_value_error() -> None:
     with pytest.raises(ValueError):
         GradientDescent(step_size=0.0)

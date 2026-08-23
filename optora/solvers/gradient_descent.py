@@ -114,11 +114,13 @@ class GradientDescent(Solver[GradientDescentProblem, GradientDescentResult]):
             with torch.no_grad():
                 point = point - self.step_size * grad
             point = point.detach().requires_grad_(True)
-        with torch.no_grad():
-            final_value = problem.objective(point)
+        # Not wrapped in `torch.no_grad()`: an objective composed from an
+        # `AmbiguitySet.worst_case_expectation` runs its own inner
+        # autograd-based dual solve, which needs autograd enabled here too.
+        final_value = problem.objective(point).detach()
         return GradientDescentResult(
             point=point.detach(),
-            value=final_value.detach(),
+            value=final_value,
             converged=converged,
             num_iterations=num_iterations,
         )
