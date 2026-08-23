@@ -161,12 +161,14 @@ class SaddlePointSolver(Solver[SaddlePointProblem, SaddlePointResult]):
                 dual_point = dual_projection(
                     dual_point + self.dual_step_size * dual_grad
                 )
-        with torch.no_grad():
-            final_value = problem.objective(primal_point, dual_point)
+        # Not wrapped in `torch.no_grad()`: an objective composed from an
+        # `AmbiguitySet.worst_case_expectation` runs its own inner
+        # autograd-based dual solve, which needs autograd enabled here too.
+        final_value = problem.objective(primal_point, dual_point).detach()
         return SaddlePointResult(
             primal_point=primal_point.detach(),
             dual_point=dual_point.detach(),
-            value=final_value.detach(),
+            value=final_value,
             converged=converged,
             num_iterations=num_iterations,
         )

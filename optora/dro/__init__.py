@@ -1,15 +1,21 @@
 """DRO formulations wiring a divergence-based ambiguity set into `AmbiguitySet`."""
 
 from optora.dro.kl_dro import KLAmbiguitySet
+from optora.dro.minimax_solver import MinimaxProblem, MinimaxResult, MinimaxSolver
 from optora.dro.phi_dro import (
     ChiSquareAmbiguitySet,
     PhiAmbiguitySet,
     TotalVariationAmbiguitySet,
 )
+from optora.dro.wasserstein_dro import WassersteinAmbiguitySet
 
 __all__ = [
     "KLAmbiguitySet",
     "PhiAmbiguitySet",
     "ChiSquareAmbiguitySet",
     "TotalVariationAmbiguitySet",
+    "WassersteinAmbiguitySet",
+    "MinimaxProblem",
+    "MinimaxResult",
+    "MinimaxSolver",
 ]
