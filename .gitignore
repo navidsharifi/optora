@@ -219,6 +219,25 @@ __marimo__/
 # Streamlit
 .streamlit/secrets.toml
 
+# Optora examples/ artifact hygiene: examples/ scripts are git-tracked
+# source, but anything they generate at run time (figures, animations,
+# convergence/data logs) is not. Keep the Git tree free of heavy binary
+# media and simulation output; host any curated media externally instead
+# (see examples/README.md).
+examples/**/outputs/
+examples/**/results/
+examples/**/*.png
+examples/**/*.jpg
+examples/**/*.jpeg
+examples/**/*.gif
+examples/**/*.webp
+examples/**/*.svg
+examples/**/*.mp4
+examples/**/*.mov
+examples/**/*.json
+examples/**/*.csv
+examples/**/*.log
+
 progress/
 
 # Local copilot instructions (not shared via version control)
