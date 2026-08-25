@@ -50,6 +50,7 @@ Copyright &copy; 2026 The authors
 # ]
 nav = [
   { "Get started" = "index.md" },
+  { "Mathematical formulations" = "formulations.md" },
   { "Release workflow" = "release.md" },
   { "API reference" = [
     { "Overview" = "api/index.md" },
