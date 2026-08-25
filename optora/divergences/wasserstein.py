@@ -18,9 +18,14 @@ class SinkhornDivergence(Divergence):
     where `U(p, q)` is the set of transport plans (joint distributions) with
     marginals `p` and `q`, and `eps` is the entropic regularization
     strength. Sinkhorn's algorithm computes the minimizing plan `pi` by
-    alternately rescaling potentials `u` and `v` against the Gibbs kernel
-    `K = exp(-cost / eps)` until both marginal constraints hold, and
-    `OT_eps` is then read off as `<cost, pi>` for the converged plan.
+    alternately updating dual potentials `f` and `g` until both marginal
+    constraints hold, and `OT_eps` is then read off as `<cost, pi>` for the
+    converged plan `pi = exp((f (+) g - cost) / eps)`. The potential updates
+    are computed with `torch.logsumexp` (the log-sum-exp trick) rather than
+    by forming the Gibbs kernel `exp(-cost / eps)` directly: that kernel
+    underflows to exact zero for small `eps` or large `cost`, which silently
+    collapses the whole divergence to zero instead of raising an error, so
+    it is avoided rather than merely guarded against with a larger `eps`.
 
     Plain entropic OT cost is biased: `OT_eps(p, p)` is not exactly zero for
     `eps > 0`. This class instead computes the debiased Sinkhorn divergence
@@ -40,12 +45,14 @@ class SinkhornDivergence(Divergence):
             approximate the exact Wasserstein distance more closely at the
             cost of more Sinkhorn iterations to converge.
         max_iter: Maximum number of Sinkhorn scaling iterations.
-        tol: Convergence tolerance on the change in the row-scaling vector
+        tol: Convergence tolerance on the change in the row dual potential
             between iterations.
-        eps: Small positive constant used to clamp Sinkhorn scaling
-            denominators away from zero, avoiding division by zero without
+        eps: Small positive constant used to clamp `p` and `q` away from
+            zero before taking the logarithm, avoiding `log(0)` without
             branching.
     """
+
+    cost: torch.Tensor
 
     def __init__(
         self,
@@ -62,16 +69,17 @@ class SinkhornDivergence(Divergence):
                 the shared support points of `p` and `q`, shape `(n, n)`.
             epsilon: Positive entropic regularization strength.
             max_iter: Maximum number of Sinkhorn scaling iterations.
-            tol: Convergence tolerance on the change in the row-scaling
-                vector between iterations.
-            eps: Small positive constant used to clamp Sinkhorn scaling
-                denominators away from zero.
+            tol: Convergence tolerance on the change in the row dual
+                potential between iterations.
+            eps: Small positive constant used to clamp `p` and `q` away
+                from zero before taking the logarithm.
 
         Raises:
             ValueError: If `cost` is not a square 2D tensor, contains
                 negative entries, or if `epsilon`, `max_iter`, `tol`, or
                 `eps` are not positive.
         """
+        super().__init__()
         if cost.ndim != 2 or cost.shape[0] != cost.shape[1]:
             raise ValueError(
                 f"cost must be a square 2D tensor, got shape {tuple(cost.shape)}."
@@ -86,13 +94,13 @@ class SinkhornDivergence(Divergence):
             raise ValueError(f"tol must be positive, got {tol}.")
         if eps <= 0:
             raise ValueError(f"eps must be positive, got {eps}.")
-        self.cost = cost
+        self.register_buffer("cost", cost)
         self.epsilon = epsilon
         self.max_iter = max_iter
         self.tol = tol
         self.eps = eps
 
-    def __call__(self, p: torch.Tensor, q: torch.Tensor) -> torch.Tensor:
+    def forward(self, p: torch.Tensor, q: torch.Tensor) -> torch.Tensor:
         """Compute the debiased Sinkhorn divergence of `p` from `q`.
 
         Args:
@@ -145,6 +153,14 @@ class SinkhornDivergence(Divergence):
     def _sinkhorn(self, p: torch.Tensor, q: torch.Tensor) -> torch.Tensor:
         """Run Sinkhorn's algorithm to compute an entropic transport plan.
 
+        Updates the dual potentials `f` and `g` in the log domain via
+        `torch.logsumexp` rather than rescaling `u = p / (kernel @ v)`
+        against the raw Gibbs kernel `exp(-cost / eps)`: the two are
+        algebraically equivalent (`f = eps * log(u)`, `g = eps * log(v)`),
+        but the raw kernel underflows to exact zero for small `eps` or
+        large `cost`, while `logsumexp` stays accurate in that regime by
+        construction.
+
         Args:
             p: Row marginal, a nonnegative tensor of shape `(n,)` that sums
                 to one.
@@ -152,17 +168,25 @@ class SinkhornDivergence(Divergence):
                 sums to one.
 
         Returns:
-            The converged transport plan `pi = diag(u) @ kernel @ diag(v)`,
-            a tensor of shape `(n, n)` with row sums approximating `p` and
+            The converged transport plan
+            `pi = exp((f.unsqueeze(-1) + g.unsqueeze(-2) - cost) / eps)`, a
+            tensor of shape `(n, n)` with row sums approximating `p` and
             column sums approximating `q`.
         """
-        kernel = torch.exp(-self.cost / self.epsilon)
-        u = torch.ones_like(p)
-        v = torch.ones_like(q)
+        log_p = torch.log(torch.clamp(p, min=self.eps))
+        log_q = torch.log(torch.clamp(q, min=self.eps))
+        f = torch.zeros_like(p)
+        g = torch.zeros_like(q)
         for _ in range(self.max_iter):
-            u_prev = u
-            u = p / torch.clamp(kernel @ v, min=self.eps)
-            v = q / torch.clamp(kernel.T @ u, min=self.eps)
-            if torch.max(torch.abs(u - u_prev)) < self.tol:
+            f_prev = f
+            f = self.epsilon * (
+                log_p
+                - torch.logsumexp((g.unsqueeze(-2) - self.cost) / self.epsilon, dim=-1)
+            )
+            g = self.epsilon * (
+                log_q
+                - torch.logsumexp((f.unsqueeze(-1) - self.cost) / self.epsilon, dim=-2)
+            )
+            if torch.max(torch.abs(f - f_prev)) < self.tol:
                 break
-        return u.unsqueeze(-1) * kernel * v.unsqueeze(-2)
+        return torch.exp((f.unsqueeze(-1) + g.unsqueeze(-2) - self.cost) / self.epsilon)

@@ -3,19 +3,28 @@
 from abc import ABC, abstractmethod
 
 import torch
+from torch import nn
 
 
-class Divergence(ABC):
+class Divergence(nn.Module, ABC):
     """Nonnegative discrepancy between two probability distributions.
 
     Subclasses implement a specific divergence (for example
     Kullback-Leibler, a general phi-divergence, or an entropy-regularized
     Wasserstein discrepancy) that `optora.dro` ambiguity sets use to bound
     how far a candidate distribution may lie from a nominal distribution.
+
+    Inherits from `torch.nn.Module` (rather than a plain ABC) so that any
+    divergence holding tensor state (for example `SinkhornDivergence`'s
+    ground-cost matrix) can register it as a buffer: that state then moves
+    automatically with `.to(device)`/`.cuda()` and is included in
+    `state_dict()`, consistent with the rest of `optora` staying GPU-first.
+    Call an instance directly (`divergence(p, q)`); `nn.Module.__call__`
+    dispatches to `forward`.
     """
 
     @abstractmethod
-    def __call__(self, p: torch.Tensor, q: torch.Tensor) -> torch.Tensor:
+    def forward(self, p: torch.Tensor, q: torch.Tensor) -> torch.Tensor:
         """Compute the divergence of `p` from `q`.
 
         Args:

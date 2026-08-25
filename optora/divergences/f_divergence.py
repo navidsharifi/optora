@@ -64,12 +64,13 @@ class PhiDivergence(Divergence):
         Raises:
             ValueError: If `eps` is not positive.
         """
+        super().__init__()
         if eps <= 0:
             raise ValueError(f"eps must be positive, got {eps}.")
         self.phi = phi
         self.eps = eps
 
-    def __call__(self, p: torch.Tensor, q: torch.Tensor) -> torch.Tensor:
+    def forward(self, p: torch.Tensor, q: torch.Tensor) -> torch.Tensor:
         """Compute the phi-divergence of `p` from `q`.
 
         Args:
@@ -107,6 +108,30 @@ class ChiSquareDivergence(PhiDivergence):
         """
         super().__init__(phi=_chi_square_generator, eps=eps)
 
+    def forward(self, p: torch.Tensor, q: torch.Tensor) -> torch.Tensor:
+        """Compute the chi-square divergence of `p` from `q`.
+
+        Uses the closed form `(p - q)^2 / q` directly instead of routing
+        through `PhiDivergence`'s generic `q * phi(p / q)` path: `q * (p / q
+        - 1)^2` and `(p - q)^2 / q` are algebraically identical, but the
+        generic path divides by `q` and then multiplies by `q` again after
+        squaring, a round trip that costs an extra elementwise operation and
+        loses precision by squaring an already-divided ratio before
+        rescaling it back up.
+
+        Args:
+            p: Candidate distribution, a nonnegative tensor that sums to one
+                along its last dimension.
+            q: Reference distribution with the same shape as `p`.
+
+        Returns:
+            A scalar tensor holding `D_chi2(p || q)`, clamped to be
+            nonnegative to absorb floating-point error near zero.
+        """
+        q_safe = torch.clamp(q, min=self.eps)
+        divergence = torch.sum((p - q_safe) ** 2 / q_safe)
+        return torch.clamp(divergence, min=0.0)
+
 
 class TotalVariationDivergence(PhiDivergence):
     r"""Total variation divergence of a candidate distribution from a reference.
@@ -127,3 +152,25 @@ class TotalVariationDivergence(PhiDivergence):
             ValueError: If `eps` is not positive.
         """
         super().__init__(phi=_total_variation_generator, eps=eps)
+
+    def forward(self, p: torch.Tensor, q: torch.Tensor) -> torch.Tensor:
+        """Compute the total variation divergence of `p` from `q`.
+
+        Uses the closed form `0.5 * sum(|p - q|)` directly instead of
+        routing through `PhiDivergence`'s generic `q * phi(p / q)` path:
+        for `q > 0`, `q * |p / q - 1| = |p - q|`, so the `q` factor and the
+        division it required cancel out algebraically. This removes the
+        division (and its `eps` clamp) from the computation entirely rather
+        than merely guarding it.
+
+        Args:
+            p: Candidate distribution, a nonnegative tensor that sums to one
+                along its last dimension.
+            q: Reference distribution with the same shape as `p`.
+
+        Returns:
+            A scalar tensor holding `D_TV(p || q)`, clamped to be
+            nonnegative to absorb floating-point error near zero.
+        """
+        divergence = 0.5 * torch.sum(torch.abs(p - q))
+        return torch.clamp(divergence, min=0.0)

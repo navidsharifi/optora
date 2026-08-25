@@ -29,11 +29,12 @@ class KLDivergence(Divergence):
         Raises:
             ValueError: If `eps` is not positive.
         """
+        super().__init__()
         if eps <= 0:
             raise ValueError(f"eps must be positive, got {eps}.")
         self.eps = eps
 
-    def __call__(self, p: torch.Tensor, q: torch.Tensor) -> torch.Tensor:
+    def forward(self, p: torch.Tensor, q: torch.Tensor) -> torch.Tensor:
         """Compute the KL divergence of `p` from `q`.
 
         Args:

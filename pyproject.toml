@@ -47,10 +47,27 @@ docs = [
   "zensical>=0.0.11",
   "mkdocstrings-python>=1.10"
 ]
+# Only for running scripts under examples/ (never a runtime dependency of
+# optora itself, and never shipped in the sdist/wheel — see MANIFEST.in).
+examples = [
+  "matplotlib>=3.8"
+]
+
+# Zero-bloat distribution: only the `optora` package ships in the wheel.
+# `examples/`, `docs/`, `progress/`, `site/`, `tests/`, and `tools/` are
+# excluded from both the wheel (via `packages.find` below) and the sdist
+# (via MANIFEST.in). `include-package-data = false` and
+# `exclude-package-data` are defense-in-depth against any non-Python file
+# (images, notebooks, data logs) ever being picked up from inside `optora/`.
+[tool.setuptools]
+include-package-data = false
 
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["optora*"]
+
+[tool.setuptools.exclude-package-data]
+"*" = ["*.png", "*.jpg", "*.jpeg", "*.gif", "*.svg", "*.mp4", "*.csv", "*.ipynb"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

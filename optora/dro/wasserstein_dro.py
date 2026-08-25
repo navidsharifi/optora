@@ -68,6 +68,8 @@ class WassersteinAmbiguitySet(AmbiguitySet):
             `dual_solver` for each `worst_case_expectation` call.
     """
 
+    cost: torch.Tensor
+
     def __init__(
         self,
         nominal: torch.Tensor,
@@ -128,7 +130,7 @@ class WassersteinAmbiguitySet(AmbiguitySet):
             ),
             radius=radius,
         )
-        self.cost = cost
+        self.register_buffer("cost", cost)
         self.dual_solver: Solver[GradientDescentProblem, GradientDescentResult] = (
             dual_solver
             if dual_solver is not None

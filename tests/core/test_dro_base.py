@@ -2,6 +2,7 @@
 
 import pytest
 import torch
+from torch import nn
 
 from optora.core.divergence_base import Divergence
 from optora.core.dro_base import AmbiguitySet
@@ -10,7 +11,7 @@ from optora.core.dro_base import AmbiguitySet
 class _AbsoluteDifferenceDivergence(Divergence):
     """Sum-of-absolute-differences divergence used to exercise the ABC."""
 
-    def __call__(self, p: torch.Tensor, q: torch.Tensor) -> torch.Tensor:
+    def forward(self, p: torch.Tensor, q: torch.Tensor) -> torch.Tensor:
         return torch.abs(p - q).sum()
 
 
@@ -58,3 +59,26 @@ def test_worst_case_expectation_is_delegated_to_subclass(
     result = ambiguity_set.worst_case_expectation(loss)
 
     assert torch.equal(result, torch.tensor(3.0))
+
+
+def test_ambiguity_set_is_an_nn_module_with_registered_buffer_and_submodule(
+    nominal: torch.Tensor,
+) -> None:
+    divergence = _AbsoluteDifferenceDivergence()
+    ambiguity_set = _MaxLossAmbiguitySet(nominal, divergence, radius=0.5)
+
+    assert isinstance(ambiguity_set, nn.Module)
+    assert "nominal" in dict(ambiguity_set.named_buffers())
+    assert dict(ambiguity_set.named_modules())["divergence"] is divergence
+
+
+def test_to_moves_nominal_buffer_and_divergence_submodule_together(
+    nominal: torch.Tensor,
+) -> None:
+    ambiguity_set = _MaxLossAmbiguitySet(
+        nominal, _AbsoluteDifferenceDivergence(), radius=0.5
+    )
+
+    ambiguity_set = ambiguity_set.to(dtype=torch.float64)
+
+    assert ambiguity_set.nominal.dtype == torch.float64
