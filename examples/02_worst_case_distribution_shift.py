@@ -18,10 +18,9 @@ Run:
 
 import matplotlib.pyplot as plt
 import torch
+from _plotting import save_figure
 
 from optora.dro import TotalVariationAmbiguitySet
-
-from _plotting import save_figure
 
 NOMINAL = torch.tensor([0.4, 0.3, 0.2, 0.1], dtype=torch.float64)
 LOSS = torch.tensor([0.5, 1.5, 3.0, 8.0], dtype=torch.float64)
@@ -62,7 +61,10 @@ def main() -> None:
     )
     reconstructed_values = reconstructed @ LOSS
     max_abs_diff = torch.max(torch.abs(reconstructed_values - library_values)).item()
-    print(f"max |reconstructed E_q*[loss] - library worst_case_expectation| = {max_abs_diff:.2e}")
+    print(
+        "max |reconstructed E_q*[loss] - library worst_case_expectation| = "
+        f"{max_abs_diff:.2e}"
+    )
     assert max_abs_diff < 1e-9
 
     fig, ax = plt.subplots(figsize=(7, 4))

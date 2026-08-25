@@ -18,6 +18,7 @@ Run:
 
 import matplotlib.pyplot as plt
 import torch
+from _plotting import save_figure
 
 from optora.dro import (
     ChiSquareAmbiguitySet,
@@ -28,8 +29,6 @@ from optora.dro import (
     WassersteinAmbiguitySet,
 )
 from optora.solvers import GradientDescent
-
-from _plotting import save_figure
 
 OUTCOMES = torch.tensor([1.0, 2.0, 3.0, 10.0], dtype=torch.float64)
 NOMINAL = torch.full_like(OUTCOMES, 1.0 / OUTCOMES.numel())
@@ -61,7 +60,9 @@ def robust_decision(ambiguity_set: object, radius: float) -> float:
 
 def main() -> None:
     erm_decision = OUTCOMES.mean().item()
-    print(f"empirical-risk decision (every formulation at radius=0): {erm_decision:.4f}")
+    print(
+        f"empirical-risk decision (every formulation at radius=0): {erm_decision:.4f}"
+    )
 
     families = {
         "KL": lambda radius: KLAmbiguitySet(
@@ -74,18 +75,25 @@ def main() -> None:
             nominal=NOMINAL, radius=radius
         ),
         "Wasserstein": lambda radius: WassersteinAmbiguitySet(
-            nominal=NOMINAL, cost=COST, radius=radius, dual_solver=WASSERSTEIN_DUAL_SOLVER
+            nominal=NOMINAL,
+            cost=COST,
+            radius=radius,
+            dual_solver=WASSERSTEIN_DUAL_SOLVER,
         ),
     }
     radii = [0.0, 0.02, 0.05, 0.1, 0.2, 0.4]
 
     fig, ax = plt.subplots(figsize=(7, 4))
     for name, build_ambiguity_set in families.items():
-        decisions = [robust_decision(build_ambiguity_set(radius), radius) for radius in radii]
+        decisions = [
+            robust_decision(build_ambiguity_set(radius), radius) for radius in radii
+        ]
         print(f"{name:>16}: " + " -> ".join(f"{value:.3f}" for value in decisions))
         ax.plot(radii, decisions, marker="o", label=name)
 
-    ax.axhline(erm_decision, color="gray", linestyle="--", label="empirical risk (radius=0)")
+    ax.axhline(
+        erm_decision, color="gray", linestyle="--", label="empirical risk (radius=0)"
+    )
     ax.set_xlabel("ambiguity radius")
     ax.set_ylabel("robust decision x*")
     ax.set_title("robust decision vs. radius, across ambiguity-set geometries")

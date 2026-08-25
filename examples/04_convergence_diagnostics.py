@@ -18,10 +18,9 @@ Run:
 
 import matplotlib.pyplot as plt
 import torch
+from _plotting import save_figure
 
 from optora.dro import KLAmbiguitySet
-
-from _plotting import save_figure
 
 OUTCOMES = torch.tensor([1.0, 2.0, 3.0, 10.0], dtype=torch.float64)
 NOMINAL = torch.full_like(OUTCOMES, 1.0 / OUTCOMES.numel())
@@ -100,7 +99,8 @@ def main() -> None:
         f"at log(eta)={log_eta_grid[grid_argmin_index].item():.4f}"
     )
     print(f"library worst_case_expectation:  {library_value.item():.6f}")
-    print(f"absolute difference:             {abs(grid_min_value.item() - library_value.item()):.2e}")
+    abs_diff = abs(grid_min_value.item() - library_value.item())
+    print(f"absolute difference:             {abs_diff:.2e}")
 
     fig2, ax = plt.subplots(figsize=(6, 4))
     ax.plot(log_eta_grid, dual_values.detach(), label="dual objective")

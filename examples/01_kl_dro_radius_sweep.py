@@ -21,10 +21,9 @@ Run:
 
 import matplotlib.pyplot as plt
 import torch
+from _plotting import save_figure
 
 from optora.dro import KLAmbiguitySet
-
-from _plotting import save_figure
 
 NOMINAL = torch.tensor([0.4, 0.3, 0.2, 0.1], dtype=torch.float64)
 LOSS = torch.tensor([0.5, 1.5, 3.0, 8.0], dtype=torch.float64)
@@ -51,11 +50,14 @@ def main() -> None:
     print(f"loss.max() (saturation limit)      = {worst_possible:.6f}")
 
     increments = torch.diff(torch.tensor(worst_case))
-    print(f"monotonically nondecreasing in radius: {bool(torch.all(increments >= -1e-9))}")
+    is_nondecreasing = bool(torch.all(increments >= -1e-9))
+    print(f"monotonically nondecreasing in radius: {is_nondecreasing}")
 
     fig, ax = plt.subplots(figsize=(6, 4))
     ax.plot(radii, worst_case, marker="o", label="worst-case E_q[loss]")
-    ax.axhline(nominal_expectation, color="gray", linestyle="--", label="E_nominal[loss]")
+    ax.axhline(
+        nominal_expectation, color="gray", linestyle="--", label="E_nominal[loss]"
+    )
     ax.axhline(worst_possible, color="firebrick", linestyle=":", label="max_i loss_i")
     ax.set_xscale("log")
     ax.set_xlabel("KL ambiguity radius")
