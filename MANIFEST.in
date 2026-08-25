@@ -1,0 +1,34 @@
+# Zero-bloat sdist policy: the source distribution ships the same surface
+# as the wheel (optora/ + essential top-level config), nothing else.
+# `tool.setuptools.packages.find` already restricts the wheel to `optora*`;
+# this file makes the sdist match on purpose instead of relying on
+# setuptools' default file-collection heuristics.
+
+include LICENSE
+include README.md
+include pyproject.toml
+
+# Never ship the documentation/examples ecosystem, progress tracker,
+# built docs site, tests, or release tooling in a source distribution.
+prune examples
+prune docs
+prune progress
+prune site
+prune tests
+prune tools
+prune .github
+
+# Belt-and-suspenders: no binary media, notebooks, or data-log artifacts,
+# regardless of where they might appear.
+global-exclude *.png
+global-exclude *.jpg
+global-exclude *.jpeg
+global-exclude *.gif
+global-exclude *.webp
+global-exclude *.svg
+global-exclude *.mp4
+global-exclude *.mov
+global-exclude *.csv
+global-exclude *.ipynb
+global-exclude __pycache__
+global-exclude *.py[co]
