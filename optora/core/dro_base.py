@@ -3,11 +3,12 @@
 from abc import ABC, abstractmethod
 
 import torch
+from torch import nn
 
 from optora.core.divergence_base import Divergence
 
 
-class AmbiguitySet(ABC):
+class AmbiguitySet(nn.Module, ABC):
     """Set of distributions within a bounded divergence of a nominal distribution.
 
     An ambiguity set pairs a `Divergence` with a radius: every distribution
@@ -16,6 +17,12 @@ class AmbiguitySet(ABC):
     maximization of the DRO minimax problem for a specific divergence
     geometry (for example KL, a general phi-divergence, or Wasserstein).
 
+    Inherits from `torch.nn.Module` (rather than a plain ABC) so `nominal`
+    is registered as a buffer and `divergence` as a submodule: a single
+    `.to(device)`/`.cuda()` call then moves the nominal distribution and any
+    tensor state the divergence holds (for example `SinkhornDivergence`'s
+    ground-cost matrix) together, and both surface through `state_dict()`.
+
     Attributes:
         nominal: Reference distribution the ambiguity set is centered on, a
             nonnegative tensor that sums to one along its last dimension.
@@ -23,6 +30,8 @@ class AmbiguitySet(ABC):
         radius: Nonnegative scalar bounding the divergence of any
             distribution inside the ambiguity set from `nominal`.
     """
+
+    nominal: torch.Tensor
 
     def __init__(
         self,
@@ -42,9 +51,10 @@ class AmbiguitySet(ABC):
         Raises:
             ValueError: If `radius` is negative.
         """
+        super().__init__()
         if radius < 0:
             raise ValueError(f"radius must be nonnegative, got {radius}.")
-        self.nominal = nominal
+        self.register_buffer("nominal", nominal)
         self.divergence = divergence
         self.radius = radius
 

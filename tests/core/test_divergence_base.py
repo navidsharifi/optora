@@ -2,6 +2,7 @@
 
 import pytest
 import torch
+from torch import nn
 
 from optora.core.divergence_base import Divergence
 
@@ -9,7 +10,7 @@ from optora.core.divergence_base import Divergence
 class _ZeroDivergence(Divergence):
     """Minimal concrete divergence used to exercise the ABC contract."""
 
-    def __call__(self, p: torch.Tensor, q: torch.Tensor) -> torch.Tensor:
+    def forward(self, p: torch.Tensor, q: torch.Tensor) -> torch.Tensor:
         return torch.zeros(())
 
 
@@ -34,3 +35,9 @@ def test_concrete_divergence_is_callable() -> None:
     value = divergence(p, q)
 
     assert torch.equal(value, torch.zeros(()))
+
+
+def test_divergence_is_an_nn_module() -> None:
+    divergence = _ZeroDivergence()
+
+    assert isinstance(divergence, nn.Module)

@@ -47,6 +47,8 @@ class SinkhornDivergence(Divergence):
             branching.
     """
 
+    cost: torch.Tensor
+
     def __init__(
         self,
         cost: torch.Tensor,
@@ -72,6 +74,7 @@ class SinkhornDivergence(Divergence):
                 negative entries, or if `epsilon`, `max_iter`, `tol`, or
                 `eps` are not positive.
         """
+        super().__init__()
         if cost.ndim != 2 or cost.shape[0] != cost.shape[1]:
             raise ValueError(
                 f"cost must be a square 2D tensor, got shape {tuple(cost.shape)}."
@@ -86,13 +89,13 @@ class SinkhornDivergence(Divergence):
             raise ValueError(f"tol must be positive, got {tol}.")
         if eps <= 0:
             raise ValueError(f"eps must be positive, got {eps}.")
-        self.cost = cost
+        self.register_buffer("cost", cost)
         self.epsilon = epsilon
         self.max_iter = max_iter
         self.tol = tol
         self.eps = eps
 
-    def __call__(self, p: torch.Tensor, q: torch.Tensor) -> torch.Tensor:
+    def forward(self, p: torch.Tensor, q: torch.Tensor) -> torch.Tensor:
         """Compute the debiased Sinkhorn divergence of `p` from `q`.
 
         Args:

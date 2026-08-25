@@ -64,12 +64,13 @@ class PhiDivergence(Divergence):
         Raises:
             ValueError: If `eps` is not positive.
         """
+        super().__init__()
         if eps <= 0:
             raise ValueError(f"eps must be positive, got {eps}.")
         self.phi = phi
         self.eps = eps
 
-    def __call__(self, p: torch.Tensor, q: torch.Tensor) -> torch.Tensor:
+    def forward(self, p: torch.Tensor, q: torch.Tensor) -> torch.Tensor:
         """Compute the phi-divergence of `p` from `q`.
 
         Args:
