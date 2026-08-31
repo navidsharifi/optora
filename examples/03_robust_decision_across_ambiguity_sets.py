@@ -16,6 +16,8 @@ Run:
     python examples/03_robust_decision_across_ambiguity_sets.py
 """
 
+from collections.abc import Callable
+
 import matplotlib.pyplot as plt
 import torch
 from _plotting import save_figure
@@ -64,7 +66,7 @@ def main() -> None:
         f"empirical-risk decision (every formulation at radius=0): {erm_decision:.4f}"
     )
 
-    families = {
+    families: dict[str, Callable[[float], object]] = {
         "KL": lambda radius: KLAmbiguitySet(
             nominal=NOMINAL, radius=radius, dual_solver=KL_DUAL_SOLVER
         ),
