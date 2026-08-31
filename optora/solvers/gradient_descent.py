@@ -46,11 +46,17 @@ class GradientDescentResult:
 
 
 class GradientDescent(Solver[GradientDescentProblem, GradientDescentResult]):
-    """Fixed-step-size gradient descent for a differentiable objective.
+    r"""Fixed-step-size gradient descent for a differentiable objective.
 
     Repeatedly steps the current point against the objective's gradient,
-    `point <- point - step_size * grad(objective)(point)`, until the
-    gradient norm falls below `tol` or `max_iter` steps are exhausted.
+
+    $$
+    \mathrm{point} \leftarrow \mathrm{point}
+        - \mathrm{step\_size} \cdot \nabla\, \mathrm{objective}(\mathrm{point}),
+    $$
+
+    until the gradient norm falls below `tol` or `max_iter` steps are
+    exhausted.
     `optora.dro` formulations use this as an inner-loop solver, for example
     to compute the dual variable of a phi-divergence ambiguity set's
     worst-case expectation.

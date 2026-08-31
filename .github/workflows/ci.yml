@@ -50,4 +50,5 @@ jobs:
       - run: mypy optora
       - run: python -m build
       - run: twine check dist/*
-      - run: zensical build --clean
+      - run: python -m tools.docs check
+      - run: python -m tools.docs build

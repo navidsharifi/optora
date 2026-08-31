@@ -20,7 +20,11 @@ class MinimaxProblem:
 
     Represents the DRO minimax problem
 
-        min_x sup_{q: divergence(q, nominal) <= radius} E_q[loss_fn(x)]
+    $$
+    \min_x \;
+    \sup_{q:\, \mathrm{divergence}(q, \mathrm{nominal}) \,\le\, \mathrm{radius}}
+        \mathbb{E}_q[\mathrm{loss\_fn}(x)]
+    $$
 
     Every `AmbiguitySet` subclass (`KLAmbiguitySet`, `PhiAmbiguitySet`,
     `ChiSquareAmbiguitySet`, `TotalVariationAmbiguitySet`,
@@ -70,7 +74,11 @@ class MinimaxSolver(Solver[MinimaxProblem, MinimaxResult]):
     Wires together a divergence-based `AmbiguitySet` and an (outer) `Solver`
     to solve
 
-        min_x sup_{q: divergence(q, nominal) <= radius} E_q[loss_fn(x)]
+    $$
+    \min_x \;
+    \sup_{q:\, \mathrm{divergence}(q, \mathrm{nominal}) \,\le\, \mathrm{radius}}
+        \mathbb{E}_q[\mathrm{loss\_fn}(x)]
+    $$
 
     Because every `AmbiguitySet` subclass already reformulates its inner
     supremum as a tractable convex dual objective (or an exact closed form)

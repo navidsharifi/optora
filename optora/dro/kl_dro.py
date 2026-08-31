@@ -16,16 +16,22 @@ class KLAmbiguitySet(AmbiguitySet):
     r"""KL-divergence-constrained ambiguity set for KL-DRO.
 
     Bounds every candidate distribution `q` by
-    `D_KL(q || nominal) <= radius`. The worst-case expected loss over this
-    set admits a convex dual (Hu and Hong 2013; Ben-Tal et al. 2013):
+    $D_{\mathrm{KL}}(q \,\|\, \mathrm{nominal}) \le \mathrm{radius}$. The
+    worst-case expected loss over this set admits a convex dual (Hu and Hong
+    2013; Ben-Tal et al. 2013):
 
-        sup_{q: D_KL(q || nominal) <= radius} E_q[loss]
-            = inf_{eta > 0} eta * radius + eta * log E_nominal[exp(loss / eta)]
+    $$
+    \sup_{q:\, D_{\mathrm{KL}}(q \,\|\, \mathrm{nominal}) \,\le\, \mathrm{radius}}
+        \mathbb{E}_q[\mathrm{loss}]
+    = \inf_{\eta > 0} \; \eta \cdot \mathrm{radius}
+        + \eta \log
+        \mathbb{E}_{\mathrm{nominal}}\!\left[\exp\!\left(\frac{\mathrm{loss}}{\eta}\right)\right]
+    $$
 
     reducing the worst-case expectation to a one-dimensional convex
-    minimization over the dual variable `eta`. `dual_solver` solves this
-    minimization over `log(eta)` rather than `eta` directly, so the
-    unconstrained `GradientDescent` solver keeps `eta` strictly positive
+    minimization over the dual variable $\eta$. `dual_solver` solves this
+    minimization over $\log(\eta)$ rather than $\eta$ directly, so the
+    unconstrained `GradientDescent` solver keeps $\eta$ strictly positive
     throughout the iteration. This formulation needs no optimal-transport
     machinery, making it the simplest DRO formulation to build (see
     `progress/architecture.md`).

@@ -10,8 +10,13 @@ class KLDivergence(Divergence):
 
     For discrete distributions represented as nonnegative tensors that sum to
     one along their last dimension, computes
-    `D_KL(p || q) = sum_i p_i * log(p_i / q_i)`. `optora.dro.kl_dro` uses this
-    divergence to define KL-based ambiguity sets.
+
+    $$
+    D_{\mathrm{KL}}(p \,\|\, q) = \sum_i p_i \log \frac{p_i}{q_i}.
+    $$
+
+    `optora.dro.kl_dro` uses this divergence to define KL-based ambiguity
+    sets.
 
     Attributes:
         eps: Small positive constant used to clamp `p` and `q` away from zero
@@ -35,7 +40,7 @@ class KLDivergence(Divergence):
         self.eps = eps
 
     def forward(self, p: torch.Tensor, q: torch.Tensor) -> torch.Tensor:
-        """Compute the KL divergence of `p` from `q`.
+        r"""Compute the KL divergence of `p` from `q`.
 
         Args:
             p: Candidate distribution, a nonnegative tensor that sums to one
@@ -43,7 +48,7 @@ class KLDivergence(Divergence):
             q: Reference distribution with the same shape as `p`.
 
         Returns:
-            A scalar tensor holding `D_KL(p || q)`, clamped to be
+            A scalar tensor holding $D_{\mathrm{KL}}(p \,\|\, q)$, clamped to be
             nonnegative to absorb floating-point error near zero.
         """
         p_safe = torch.clamp(p, min=self.eps)

@@ -27,7 +27,15 @@ site_author = "Optora contributors"
 # The site_url is the canonical URL for your site. When building online
 # documentation you should set this.
 # Read more: https://zensical.org/docs/setup/basics/#site_url
-#site_url = "https://www.example.com/"
+site_url = "https://navidsharifi.github.io/optora/"
+
+# The repository is rendered next to the search bar, together with the latest
+# release tag and the number of stars and forks.
+#
+# Read more: https://zensical.org/docs/setup/repository/
+repo_url = "https://github.com/navidsharifi/optora"
+repo_name = "navidsharifi/optora"
+edit_uri = "edit/main/docs/"
 
 # The copyright notice appears in the page footer and can contain an HTML
 # fragment.
@@ -36,6 +44,10 @@ site_author = "Optora contributors"
 copyright = """
 Copyright &copy; 2026 The authors
 """
+
+# Reload the served site when the documented Python sources change, so local
+# previews stay in sync with `optora/`.
+watch = ["optora"]
 
 # Zensical supports both implicit navigation and explicitly defined navigation.
 # If you decide not to define a navigation here then Zensical will simply
@@ -51,12 +63,35 @@ Copyright &copy; 2026 The authors
 nav = [
   { "Get started" = "index.md" },
   { "Mathematical formulations" = "formulations.md" },
-  { "Release workflow" = "release.md" },
+  # BEGIN GENERATED API NAVIGATION
   { "API reference" = [
     { "Overview" = "api/index.md" },
-    { "Core components" = "api/core.md" },
-    { "Deterministic solvers" = "api/deterministic-solvers.md" },
+    { "Core" = [
+      { "Overview" = "api/core/index.md" },
+      { "Divergence Base" = "api/core/divergence_base.md" },
+      { "DRO Base" = "api/core/dro_base.md" },
+      { "Solver Base" = "api/core/solver_base.md" },
+    ] },
+    { "Divergences" = [
+      { "Overview" = "api/divergences/index.md" },
+      { "f-Divergence" = "api/divergences/f_divergence.md" },
+      { "KL" = "api/divergences/kl.md" },
+      { "Wasserstein" = "api/divergences/wasserstein.md" },
+    ] },
+    { "DRO" = [
+      { "Overview" = "api/dro/index.md" },
+      { "KL-DRO" = "api/dro/kl_dro.md" },
+      { "Minimax Solver" = "api/dro/minimax_solver.md" },
+      { "Phi-DRO" = "api/dro/phi_dro.md" },
+      { "Wasserstein DRO" = "api/dro/wasserstein_dro.md" },
+    ] },
+    { "Solvers" = [
+      { "Overview" = "api/solvers/index.md" },
+      { "Gradient Descent" = "api/solvers/gradient_descent.md" },
+      { "Saddle Point" = "api/solvers/saddle_point.md" },
+    ] },
   ] },
+  # END GENERATED API NAVIGATION
 ]
 
 # With the "extra_css" option you can add your own CSS styling to customize
@@ -67,7 +102,7 @@ nav = [
 #
 # Read more: https://zensical.org/docs/customization/#additional-css
 #
-#extra_css = ["stylesheets/extra.css"]
+extra_css = ["https://cdn.jsdelivr.net/npm/katex@0/dist/katex.min.css"]
 
 # With the `extra_javascript` option you can add your own JavaScript to your
 # project to customize the behavior according to your needs.
@@ -75,7 +110,11 @@ nav = [
 # The path provided should be relative to the "docs_dir".
 #
 # Read more: https://zensical.org/docs/customization/#additional-javascript
-#extra_javascript = ["javascripts/extra.js"]
+extra_javascript = [
+  "javascripts/katex.js",
+  "https://cdn.jsdelivr.net/npm/katex@0/dist/katex.min.js",
+  "https://cdn.jsdelivr.net/npm/katex@0/dist/contrib/auto-render.min.js",
+]
 
 # ----------------------------------------------------------------------------
 # Section for configuring theme options
@@ -132,13 +171,13 @@ features = [
     # will generate an edit button for the page. This works for common
     # repository hosting services.
     # https://zensical.org/docs/setup/repository/#content-actions
-    #"content.action.edit",
+    "content.action.edit",
 
     # If you have a repository configured and turn on this feature, Zensical
     # will generate a button that allows the user to view the Markdown
     # code for the current page.
     # https://zensical.org/docs/setup/repository/#content-actions
-    #"content.action.view",
+    "content.action.view",
 
     # Code annotations allow you to add an icon with a tooltip to your
     # code blocks to provide explanations at crucial points.
@@ -205,7 +244,7 @@ features = [
     # In order to provide a better user experience on slow connections when
     # using instant navigation, a progress indicator can be enabled.
     # https://zensical.org/docs/setup/navigation/#progress-indicator
-    #"navigation.instant.progress",
+    "navigation.instant.progress",
 
     # When navigation paths are activated, a breadcrumb navigation is rendered
     # above the title of each page
@@ -225,12 +264,12 @@ features = [
     # When tabs are enabled, top-level sections are rendered in a menu layer
     # below the header for viewports above 1220px, but remain as-is on mobile.
     # https://zensical.org/docs/setup/navigation/#navigation-tabs
-    #"navigation.tabs",
+    "navigation.tabs",
 
     # When sticky tabs are enabled, navigation tabs will lock below the header
     # and always remain visible when scrolling down.
     # https://zensical.org/docs/setup/navigation/#sticky-navigation-tabs
-    #"navigation.tabs.sticky",
+    "navigation.tabs.sticky",
 
     # A back-to-top button can be shown when the user, after scrolling down,
     # starts to scroll up again.
@@ -251,7 +290,7 @@ features = [
     # When anchor following for the table of contents is enabled, the sidebar
     # is automatically scrolled so that the active anchor is always visible.
     # https://zensical.org/docs/setup/navigation/#anchor-following
-    # "toc.follow",
+    "toc.follow",
 
     # When navigation integration for the table of contents is enabled, it is
     # always rendered as part of the navigation sidebar on the left.
@@ -277,6 +316,9 @@ features = [
 # ----------------------------------------------------------------------------
 #[project.theme.icon]
 #logo = "lucide/smile"
+[project.theme.icon]
+logo = "lucide/sigma"
+repo = "fontawesome/brands/github"
 
 # ----------------------------------------------------------------------------
 # In the "font" subsection you can configure the fonts used. By default, fonts
@@ -287,6 +329,9 @@ features = [
 #[project.theme.font]
 #text = "Inter"
 #code = "Jetbrains Mono"
+[project.theme.font]
+text = "Inter"
+code = "JetBrains Mono"
 
 # ----------------------------------------------------------------------------
 # In the "palette" subsection you can configure options for the color scheme.
@@ -298,12 +343,18 @@ features = [
 # - https://zensical.org/docs/setup/colors/
 # ----------------------------------------------------------------------------
 [[project.theme.palette]]
+media = "(prefers-color-scheme: light)"
 scheme = "default"
+primary = "indigo"
+accent = "deep purple"
 toggle.icon = "lucide/sun"
 toggle.name = "Switch to dark mode"
 
 [[project.theme.palette]]
+media = "(prefers-color-scheme: dark)"
 scheme = "slate"
+primary = "indigo"
+accent = "deep purple"
 toggle.icon = "lucide/moon"
 toggle.name = "Switch to light mode"
 
@@ -313,6 +364,13 @@ toggle.name = "Switch to light mode"
 #[[project.extra.social]]
 #icon = "fontawesome/brands/github"
 #link = "https://github.com/user/repo"
+[[project.extra.social]]
+icon = "fontawesome/brands/github"
+link = "https://github.com/navidsharifi/optora"
+
+[[project.extra.social]]
+icon = "fontawesome/brands/python"
+link = "https://pypi.org/project/optora/"
 
 # ----------------------------------------------------------------------------
 # In this section you can configure the Markdown extensions that are used when
