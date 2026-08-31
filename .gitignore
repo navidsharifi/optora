@@ -240,5 +240,6 @@ examples/**/*.log
 
 progress/
 
-# Local copilot instructions (not shared via version control)
+# Agent/AI instruction files (private, never public-facing)
+AGENTS.md
 .github/copilot-instructions.md
