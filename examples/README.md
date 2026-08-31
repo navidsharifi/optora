@@ -26,6 +26,10 @@ Each script prints its key numerical checks to stdout and saves any
 figure it produces under `examples/outputs/` (git-ignored — see
 `.gitignore`). Nothing under `examples/outputs/` is meant to be committed.
 
+Every script below also has a walkthrough page on the documentation site
+under [Examples](https://navidsharifi.github.io/optora/examples/), which
+embeds the same source and explains what each experiment is checking.
+
 ## What is here
 
 | Script | Demonstrates |
