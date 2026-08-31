@@ -17,33 +17,47 @@ class WassersteinAmbiguitySet(AmbiguitySet):
 
     Bounds every candidate distribution `q`, sharing `nominal`'s finite
     support with pairwise ground cost `cost`, by the type-1 Wasserstein
-    distance `W_c(q, nominal) <= radius`, where `W_c` is the optimal-
-    transport cost of moving `nominal` to `q` under `cost`. The worst-case
-    expected loss over this set admits an exact strong-duality
+    distance $W_c(q, \mathrm{nominal}) \le \mathrm{radius}$, where $W_c$ is
+    the optimal-transport cost of moving `nominal` to `q` under `cost`. The
+    worst-case expected loss over this set admits an exact strong-duality
     reformulation (Mohajerin Esfahani and Kuhn 2018; Blanchet and Murthy
     2019; Gao and Kleywegt 2022), specialized to a finite shared support:
 
-        sup_{q: W_c(q, nominal) <= radius} E_q[loss]
-            = inf_{gamma >= 0}
-                gamma * radius + E_nominal[max_j (loss_j - gamma * cost(., j))]
+    $$
+    \sup_{q:\, W_c(q, \mathrm{nominal}) \,\le\, \mathrm{radius}}
+        \mathbb{E}_q[\mathrm{loss}]
+    = \inf_{\gamma \ge 0} \;
+        \gamma \cdot \mathrm{radius}
+        + \mathbb{E}_{\mathrm{nominal}}\!\left[
+            \max_j \big(\mathrm{loss}_j - \gamma \cdot \mathrm{cost}(\cdot, j)\big)
+        \right]
+    $$
 
     This follows from LP duality on the transportation polytope: the
-    primal is `max_{pi >= 0} sum_ij pi_ij * loss_j` subject to the row-
-    marginal constraint `sum_j pi_ij = nominal_i` and the transport-budget
-    constraint `sum_ij pi_ij * cost_ij <= radius` (the column marginal,
-    which defines the candidate `q`, is left free). Dualizing the budget
-    constraint with multiplier `gamma >= 0` and the row constraints with
-    free multipliers, and maximizing out `pi` pointwise, yields exactly the
-    one-dimensional convex dual above. `dual_solver` minimizes this
-    objective over an unconstrained `gamma_raw`, reparameterized as
-    `gamma = clamp(gamma_raw, min=0)` rather than `exp(log_eta)` (the
-    reparameterization used by `KLAmbiguitySet` and `PhiAmbiguitySet`):
-    unlike those formulations' dual variable, which must stay strictly
-    positive, `gamma` ranges over the closed half-line `[0, inf)` and its
-    optimum is genuinely attained at `gamma = 0` once `radius` is large
-    enough to move all nominal mass onto the single highest-loss support
-    point (`clamp` lets unconstrained `GradientDescent` reach that boundary
-    exactly, rather than only approach it asymptotically).
+    primal is
+
+    $$
+    \max_{\pi \ge 0} \sum_{ij} \pi_{ij}\, \mathrm{loss}_j
+    \quad \text{s.t.} \quad
+    \sum_j \pi_{ij} = \mathrm{nominal}_i, \qquad
+    \sum_{ij} \pi_{ij}\, \mathrm{cost}_{ij} \le \mathrm{radius}
+    $$
+
+    (the column marginal, which defines the candidate `q`, is left free).
+    Dualizing the budget constraint with multiplier $\gamma \ge 0$ and the
+    row constraints with free multipliers, and maximizing out $\pi$
+    pointwise, yields exactly the one-dimensional convex dual above.
+    `dual_solver` minimizes this objective over an unconstrained
+    `gamma_raw`, reparameterized as
+    $\gamma = \mathrm{clamp}(\mathrm{gamma\_raw}, \min=0)$
+    rather than $\exp(\log(\eta))$ (the reparameterization used by
+    `KLAmbiguitySet` and `PhiAmbiguitySet`): unlike those formulations' dual
+    variable, which must stay strictly positive, $\gamma$ ranges over the
+    closed half-line $[0, \infty)$ and its optimum is genuinely attained at
+    $\gamma = 0$ once `radius` is large enough to move all nominal mass onto
+    the single highest-loss support point (`clamp` lets unconstrained
+    `GradientDescent` reach that boundary exactly, rather than only approach
+    it asymptotically).
 
     `divergence` is fixed to a `SinkhornDivergence` over `cost` (the only
     Wasserstein-type divergence implemented in `optora.divergences`), so

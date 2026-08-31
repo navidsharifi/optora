@@ -10,10 +10,10 @@ from optora.core.solver_base import Solver
 
 @dataclass(frozen=True)
 class SaddlePointProblem:
-    """Minimax problem solved by `SaddlePointSolver`.
+    r"""Minimax problem solved by `SaddlePointSolver`.
 
-    Represents `min_x max_y objective(x, y)`, the shape of the DRO minimax
-    problem once a decision variable `x` and an ambiguity set over
+    Represents $\min_x \max_y \mathrm{objective}(x, y)$, the shape of the DRO
+    minimax problem once a decision variable `x` and an ambiguity set over
     distributions `y` are both in play.
 
     Attributes:
@@ -61,12 +61,19 @@ class SaddlePointResult:
 class SaddlePointSolver(Solver[SaddlePointProblem, SaddlePointResult]):
     r"""Primal-dual gradient ascent-descent for a minimax problem.
 
-    Solves `min_x max_y objective(x, y)` by alternating, at every
-    iteration, a gradient descent step on the primal variable `x` and a
-    gradient ascent step on the dual variable `y`:
+    Solves $\min_x \max_y \mathrm{objective}(x, y)$ by alternating, at every
+    iteration, a gradient descent step on the primal variable $x$ and a
+    gradient ascent step on the dual variable $y$:
 
-        x <- x - primal_step_size * grad_x objective(x, y)
-        y <- dual_projection(y + dual_step_size * grad_y objective(x, y))
+    $$
+    x \leftarrow x - \mathrm{primal\_step\_size} \cdot \nabla_x \mathrm{objective}(x, y)
+    $$
+
+    $$
+    y \leftarrow \mathrm{dual\_projection}\big(
+        y + \mathrm{dual\_step\_size} \cdot \nabla_y \mathrm{objective}(x, y)
+    \big)
+    $$
 
     `dual_projection` keeps `y` feasible after each ascent step. This is
     the generic minimax solve `optora.dro.minimax_solver` uses to train a

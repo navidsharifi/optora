@@ -19,20 +19,21 @@ from optora.solvers.gradient_descent import (
 
 
 def _chi_square_conjugate(scaled_shift: torch.Tensor) -> torch.Tensor:
-    r"""Convex conjugate of the chi-square generator `phi(t) = (t - 1)^2`, `t >= 0`.
+    r"""Convex conjugate of the chi-square generator $\phi(t) = (t-1)^2$, $t \ge 0$.
 
-    `phi*(s) = sup_{t >= 0} (s * t - phi(t))`. The unconstrained maximizer
-    `t = s / 2 + 1` is nonnegative whenever `s >= -2`, giving the interior
-    branch `s + s^2 / 4`; otherwise the constrained maximizer sits at the
-    boundary `t = 0`, giving the constant `-1`. The two branches agree at
-    `s = -2`, and both have zero derivative there, so `phi*` is continuously
-    differentiable everywhere on the real line.
+    $\phi^*(s) = \sup_{t \ge 0} \big(s\,t - \phi(t)\big)$. The unconstrained
+    maximizer $t = s/2 + 1$ is nonnegative whenever $s \ge -2$, giving the
+    interior branch $s + s^2/4$; otherwise the constrained maximizer sits at
+    the boundary $t = 0$, giving the constant $-1$. The two branches agree
+    at $s = -2$, and both have zero derivative there, so $\phi^*$ is
+    continuously differentiable everywhere on the real line.
 
     Args:
-        scaled_shift: Elementwise dual argument `s = (loss - lam) / eta`.
+        scaled_shift: Elementwise dual argument
+            $s = (\mathrm{loss} - \lambda) / \eta$.
 
     Returns:
-        `phi*` evaluated elementwise on `scaled_shift`.
+        $\phi^*$ evaluated elementwise on `scaled_shift`.
     """
     interior = scaled_shift + scaled_shift**2 / 4.0
     boundary = torch.full_like(scaled_shift, -1.0)
@@ -42,24 +43,32 @@ def _chi_square_conjugate(scaled_shift: torch.Tensor) -> torch.Tensor:
 class PhiAmbiguitySet(AmbiguitySet):
     r"""Phi-divergence-constrained ambiguity set solved via its convex dual.
 
-    Bounds every candidate distribution `q` by `D_phi(q || nominal) <=
-    radius` for a general convex generator `phi` (see
+    Bounds every candidate distribution `q` by
+    $D_\phi(q \,\|\, \mathrm{nominal}) \le \mathrm{radius}$ for a general
+    convex generator $\phi$ (see
     `optora.divergences.f_divergence.PhiDivergence`). The worst-case expected
     loss over this set admits a convex dual (Ben-Tal et al. 2013; Duchi,
     Glynn, and Namkoong 2021; Duchi and Namkoong 2021):
 
-        sup_{q: D_phi(q||nominal) <= radius} E_q[loss]
-            = inf_{eta > 0, lam in R}
-                eta * radius + lam + eta * E_nominal[phi*((loss - lam) / eta)]
+    $$
+    \sup_{q:\, D_\phi(q \,\|\, \mathrm{nominal}) \,\le\, \mathrm{radius}}
+        \mathbb{E}_q[\mathrm{loss}]
+    = \inf_{\substack{\eta > 0 \\ \lambda \in \mathbb{R}}}
+        \eta \cdot \mathrm{radius} + \lambda
+        + \eta \, \mathbb{E}_{\mathrm{nominal}}\!\left[
+            \phi^*\!\left(\frac{\mathrm{loss} - \lambda}{\eta}\right)
+        \right]
+    $$
 
-    where `phi*` is the convex (Legendre-Fenchel) conjugate of `phi`
-    restricted to its effective domain `t >= 0`. This generalizes the
+    where $\phi^*$ is the convex (Legendre-Fenchel) conjugate of $\phi$
+    restricted to its effective domain $t \ge 0$. This generalizes the
     `KLAmbiguitySet` dual to an arbitrary phi-divergence at the cost of a
-    second dual variable `lam`; setting `phi(t) = t * log(t) - t + 1` (whose
-    conjugate is `phi*(s) = exp(s) - 1`) recovers the KL-DRO dual exactly.
-    `dual_solver` minimizes this joint objective over `(log(eta), lam)`
-    rather than `(eta, lam)` directly, so the unconstrained `GradientDescent`
-    solver keeps `eta` strictly positive throughout the iteration.
+    second dual variable $\lambda$; setting $\phi(t) = t \log t - t + 1$
+    (whose conjugate is $\phi^*(s) = \exp(s) - 1$) recovers the KL-DRO dual
+    exactly. `dual_solver` minimizes this joint objective over
+    $(\log(\eta), \lambda)$ rather than $(\eta, \lambda)$ directly, so the
+    unconstrained `GradientDescent` solver keeps $\eta$ strictly positive
+    throughout the iteration.
 
     This base class assumes `phi_conjugate` is finite everywhere on the real
     line (true for, for example, the chi-square generator's conjugate used
@@ -184,19 +193,25 @@ class ChiSquareAmbiguitySet(PhiAmbiguitySet):
     r"""Chi-square-divergence-constrained ambiguity set for chi-square-DRO.
 
     Fixes `divergence` to a `ChiSquareDivergence` and `phi_conjugate` to the
-    closed-form conjugate of `phi(t) = (t - 1)^2`, which is finite and
+    closed-form conjugate of $\phi(t) = (t-1)^2$, which is finite and
     continuously differentiable everywhere on the real line (see
     `_chi_square_conjugate`), making the joint `PhiAmbiguitySet` dual solve
-    over `(log(eta), lam)` numerically well-behaved.
+    over $(\log(\eta), \lambda)$ numerically well-behaved.
 
     In the interior regime where no candidate distribution is pushed to the
-    boundary `q_i = 0`, the dual optimum over `lam` reduces to
-    `lam = E_nominal[loss]`, and the dual optimum over `eta` reduces to
-    `eta = sqrt(Var_nominal(loss) / (4 * radius))`, giving the well-known
-    closed form (Duchi and Namkoong 2021):
+    boundary $q_i = 0$, the dual optimum over $\lambda$ reduces to
+    $\lambda = \mathbb{E}_{\mathrm{nominal}}[\mathrm{loss}]$, and the dual
+    optimum over $\eta$ reduces to
+    $\eta = \sqrt{\mathrm{Var}_{\mathrm{nominal}}(\mathrm{loss})
+        / (4\,\mathrm{radius})}$,
+    giving the well-known closed form (Duchi and Namkoong 2021):
 
-        sup_{q: D_chi2(q||nominal) <= radius} E_q[loss]
-            = E_nominal[loss] + sqrt(radius * Var_nominal(loss))
+    $$
+    \sup_{q:\, D_{\chi^2}(q \,\|\, \mathrm{nominal}) \,\le\, \mathrm{radius}}
+        \mathbb{E}_q[\mathrm{loss}]
+    = \mathbb{E}_{\mathrm{nominal}}[\mathrm{loss}]
+        + \sqrt{\mathrm{radius} \cdot \mathrm{Var}_{\mathrm{nominal}}(\mathrm{loss})}
+    $$
 
     `worst_case_expectation` still solves the general dual rather than this
     closed form directly, since the closed form only holds away from the
@@ -250,7 +265,13 @@ class TotalVariationAmbiguitySet(AmbiguitySet):
     r"""Total-variation-constrained ambiguity set for total-variation-DRO.
 
     Bounds every candidate distribution `q` by
-    `D_TV(q || nominal) = 0.5 * sum_i |q_i - nominal_i| <= radius`. Unlike
+
+    $$
+    D_{\mathrm{TV}}(q \,\|\, \mathrm{nominal})
+        = \frac{1}{2} \sum_i |q_i - \mathrm{nominal}_i| \le \mathrm{radius}.
+    $$
+
+    Unlike
     `PhiAmbiguitySet`, `worst_case_expectation` is computed from a direct
     closed form rather than the general convex dual, because total
     variation's conjugate has a hard finite feasibility boundary that is
