@@ -74,6 +74,28 @@ ruff format --check .
 mypy
 ```
 
+Generate the hierarchical API reference, preview it, or build the complete
+documentation site without maintaining API pages or navigation by hand:
+
+```powershell
+python -m tools.docs generate
+python -m tools.docs check
+python -m tools.docs serve
+python -m tools.docs build
+```
+
+`generate` writes one page per public module (with its classes and functions)
+plus a matching index for every subpackage, and rewrites the API navigation in
+`zensical.toml`. Because the generated pages are committed, plain
+`zensical serve` and `zensical build` also work from a fresh clone; run
+`python -m tools.docs serve` whenever `optora/` changes so the pages are
+regenerated first. `check` fails when the committed pages drift from the
+sources, and runs in CI.
+
+Every push to `main` publishes the site to GitHub Pages through
+`.github/workflows/docs.yml`, which enables Pages automatically and deploys the
+freshly generated build.
+
 ## License
 
 Optora is distributed under the MIT License; see [`LICENSE`](../LICENSE)
