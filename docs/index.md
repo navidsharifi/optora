@@ -13,6 +13,7 @@ Latest release: `v0.0.5`
 <!-- optora-version-end -->
 
 [Get started :octicons-arrow-right-24:](#install){ .md-button .md-button--primary }
+[Examples](examples/index.md){ .md-button }
 [API reference](api/index.md){ .md-button }
 
 ## Why Optora
@@ -50,6 +51,8 @@ Latest release: `v0.0.5`
 
     Each formulation is checked against closed forms, independent grid
     searches, and convergence limits under mypy's strict mode.
+
+    [:octicons-arrow-right-24: Examples](examples/index.md)
 
 </div>
 

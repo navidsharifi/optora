@@ -63,6 +63,13 @@ watch = ["optora"]
 nav = [
   { "Get started" = "index.md" },
   { "Mathematical formulations" = "formulations.md" },
+  { "Examples" = [
+    { "Overview" = "examples/index.md" },
+    { "KL-DRO radius sweep" = "examples/kl_dro_radius_sweep.md" },
+    { "Worst-case distribution shift" = "examples/worst_case_distribution_shift.md" },
+    { "Robust decisions across geometries" = "examples/robust_decision_across_ambiguity_sets.md" },
+    { "Convergence diagnostics" = "examples/convergence_diagnostics.md" },
+  ] },
   # BEGIN GENERATED API NAVIGATION
   { "API reference" = [
     { "Overview" = "api/index.md" },
@@ -405,6 +412,8 @@ pygments_lang_class = true
 [project.markdown_extensions.pymdownx.magiclink]
 [project.markdown_extensions.pymdownx.mark]
 [project.markdown_extensions.pymdownx.smartsymbols]
+[project.markdown_extensions.pymdownx.snippets]
+base_path = ["."]
 [project.markdown_extensions.pymdownx.superfences]
 custom_fences = [
   { name = "mermaid", class = "mermaid", format = "pymdownx.superfences.fence_code_format" }
