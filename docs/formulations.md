@@ -24,17 +24,17 @@ to fool your model. DRO's answer to this is refreshingly blunt: instead of
 optimizing against your best guess at the distribution, optimize against
 the *worst* distribution within some plausible neighborhood of it.
 
-```text
-minimize_x   sup_{q in ambiguity_set(nominal, radius)}  E_q[ loss(x, xi) ]
-```
+$$
+\min_x \; \sup_{q \in \mathrm{ambiguity\_set}(\mathrm{nominal}, \mathrm{radius})} \mathbb{E}_q[\ell(x, \xi)]
+$$
 
 That neighborhood — the *ambiguity set* — is defined by capping some
-statistical divergence `D` between a candidate distribution `q` and your
+statistical divergence $D$ between a candidate distribution $q$ and your
 nominal (reference) distribution at a radius you choose:
 
-```text
-ambiguity_set(nominal, radius) = { q : D(q || nominal) <= radius }
-```
+$$
+\mathrm{ambiguity\_set}(\mathrm{nominal}, \mathrm{radius}) = \{\, q : D(q \,\|\, \mathrm{nominal}) \le \mathrm{radius} \,\}
+$$
 
 Optora's whole architecture is basically this formula, typed out as code: a
 `Divergence` is `D`, an `AmbiguitySet` bundles a `Divergence` with a
@@ -57,71 +57,81 @@ distributions `q` to a tractable convex dual or an exact closed form, so
 none of them needs to search over the full space of candidate
 distributions directly.
 
-- **`KLAmbiguitySet`** — the KL-ball. The inner supremum has a classic
-  one-dimensional convex dual (Hu and Hong, 2013; Ben-Tal et al., 2013):
+### `KLAmbiguitySet`
 
-  ```text
-  sup_{q: D_KL(q || nominal) <= radius} E_q[loss]
-      = inf_{eta > 0} eta * radius + eta * log E_nominal[exp(loss / eta)]
-  ```
+The KL-ball. The inner supremum has a classic one-dimensional convex dual
+(Hu and Hong, 2013; Ben-Tal et al., 2013):
 
-  Solved over `log(eta)` rather than `eta` itself, so the unconstrained
-  `GradientDescent` solver can't wander into `eta <= 0`. `radius == 0`
-  returns `E_nominal[loss]` exactly, skipping the numerical solve.
+$$
+\sup_{q:\, D_{\mathrm{KL}}(q \,\|\, \mathrm{nominal}) \,\le\, \mathrm{radius}} \mathbb{E}_q[\mathrm{loss}]
+= \inf_{\eta > 0} \; \eta \cdot \mathrm{radius}
+    + \eta \log \mathbb{E}_{\mathrm{nominal}}\!\left[\exp\!\left(\frac{\mathrm{loss}}{\eta}\right)\right]
+$$
 
-- **`PhiAmbiguitySet`, `ChiSquareAmbiguitySet`, `TotalVariationAmbiguitySet`**
-  — the general phi-divergence-ball case, plus two named instances.
-  `PhiAmbiguitySet` generalizes the KL-DRO dual above to any phi-divergence
-  (Ben-Tal et al., 2013; Duchi, Glynn, and Namkoong, 2021; Duchi and
-  Namkoong, 2021), at the cost of a second dual variable `lam`:
+Solved over `log(eta)` rather than `eta` itself, so the unconstrained
+`GradientDescent` solver can't wander into `eta <= 0`. `radius == 0`
+returns `E_nominal[loss]` exactly, skipping the numerical solve.
 
-  ```text
-  sup_{q: D_phi(q||nominal) <= radius} E_q[loss]
-      = inf_{eta > 0, lam} eta * radius + lam + eta * E_nominal[phi*((loss - lam) / eta)]
-  ```
+### `PhiAmbiguitySet`, `ChiSquareAmbiguitySet`, `TotalVariationAmbiguitySet`
 
-  where `phi*` is `phi`'s convex conjugate. `ChiSquareAmbiguitySet` plugs in
-  the closed-form chi-square conjugate, smooth everywhere. Total
-  variation's conjugate is *not* smooth everywhere (it has a hard
-  boundary), so `TotalVariationAmbiguitySet` skips the dual entirely and
-  computes the worst case directly from a closed-form combinatorial
-  solution: sort the scenarios by loss and shift probability mass, from
-  the cheapest ones, onto the single worst-case scenario until the
-  total-variation budget is used up.
+The general phi-divergence-ball case, plus two named instances.
+`PhiAmbiguitySet` generalizes the KL-DRO dual above to any phi-divergence
+(Ben-Tal et al., 2013; Duchi, Glynn, and Namkoong, 2021; Duchi and
+Namkoong, 2021), at the cost of a second dual variable `lam`:
 
-- **`WassersteinAmbiguitySet`** — the Wasserstein-ball case, for candidates
-  sharing the nominal distribution's support with a given pairwise ground
-  cost. This also reduces to a clean one-dimensional dual (Mohajerin
-  Esfahani and Kuhn, 2018; Blanchet and Murthy, 2019; Gao and Kleywegt,
-  2022):
+$$
+\sup_{q:\, D_\phi(q \,\|\, \mathrm{nominal}) \,\le\, \mathrm{radius}} \mathbb{E}_q[\mathrm{loss}]
+= \inf_{\substack{\eta > 0 \\ \lambda}} \;
+    \eta \cdot \mathrm{radius} + \lambda
+    + \eta \, \mathbb{E}_{\mathrm{nominal}}\!\left[\phi^*\!\left(\frac{\mathrm{loss} - \lambda}{\eta}\right)\right]
+$$
 
-  ```text
-  sup_{q: W_c(q, nominal) <= radius} E_q[loss]
-      = inf_{gamma >= 0} gamma * radius + E_nominal[max_j (loss_j - gamma * cost(., j))]
-  ```
+where `phi*` is `phi`'s convex conjugate. `ChiSquareAmbiguitySet` plugs in
+the closed-form chi-square conjugate, smooth everywhere. Total
+variation's conjugate is *not* smooth everywhere (it has a hard
+boundary), so `TotalVariationAmbiguitySet` skips the dual entirely and
+computes the worst case directly from a closed-form combinatorial
+solution: sort the scenarios by loss and shift probability mass, from
+the cheapest ones, onto the single worst-case scenario until the
+total-variation budget is used up.
 
-  `gamma`'s optimum can sit exactly at the boundary `gamma = 0` (once the
-  radius is generous enough to move all the mass to the worst scenario),
-  so this one is reparameterized with a `clamp` instead of an exponential.
-  It uses a `SinkhornDivergence` internally only as an approximate
-  `contains(...)` membership check; the worst-case expectation itself is
-  solved exactly, not through the entropic approximation.
+### `WassersteinAmbiguitySet`
 
-- **`MinimaxSolver`** — wires any of the ambiguity sets above together with
-  an outer solver (`GradientDescent` by default) to solve the *full* DRO
-  problem, decision variable and all:
+The Wasserstein-ball case, for candidates sharing the nominal
+distribution's support with a given pairwise ground cost. This also
+reduces to a clean one-dimensional dual (Mohajerin Esfahani and Kuhn,
+2018; Blanchet and Murthy, 2019; Gao and Kleywegt, 2022):
 
-  ```text
-  min_x sup_{q: divergence(q, nominal) <= radius} E_q[loss_fn(x)]
-  ```
+$$
+\sup_{q:\, W_c(q, \mathrm{nominal}) \,\le\, \mathrm{radius}} \mathbb{E}_q[\mathrm{loss}]
+= \inf_{\gamma \ge 0} \; \gamma \cdot \mathrm{radius}
+    + \mathbb{E}_{\mathrm{nominal}}\!\left[\max_j \big(\mathrm{loss}_j - \gamma \cdot \mathrm{cost}(\cdot, j)\big)\right]
+$$
 
-  Every ambiguity set above already turns the inner "sup over q" into
-  something differentiable in `x` (a dual objective, or an exact closed
-  form), so `MinimaxSolver` only has to minimize
-  `x -> ambiguity_set.worst_case_expectation(loss_fn(x))` — an ordinary
-  scalar objective. Gradients still flow correctly through `x` even though
-  each ambiguity set solves its own dual variable "under the hood," which
-  follows from the envelope theorem.
+`gamma`'s optimum can sit exactly at the boundary `gamma = 0` (once the
+radius is generous enough to move all the mass to the worst scenario),
+so this one is reparameterized with a `clamp` instead of an exponential.
+It uses a `SinkhornDivergence` internally only as an approximate
+`contains(...)` membership check; the worst-case expectation itself is
+solved exactly, not through the entropic approximation.
+
+### `MinimaxSolver`
+
+Wires any of the ambiguity sets above together with an outer solver
+(`GradientDescent` by default) to solve the *full* DRO problem, decision
+variable and all:
+
+$$
+\min_x \; \sup_{q:\, \mathrm{divergence}(q, \mathrm{nominal}) \,\le\, \mathrm{radius}} \mathbb{E}_q[\mathrm{loss\_fn}(x)]
+$$
+
+Every ambiguity set above already turns the inner "sup over q" into
+something differentiable in `x` (a dual objective, or an exact closed
+form), so `MinimaxSolver` only has to minimize
+`x -> ambiguity_set.worst_case_expectation(loss_fn(x))` — an ordinary
+scalar objective. Gradients still flow correctly through `x` even though
+each ambiguity set solves its own dual variable "under the hood," which
+follows from the envelope theorem.
 
 Every piece above is covered by pytest tests checked against known
 closed-form results, independent grid-search cross-checks, convergence
