@@ -1,10 +1,6 @@
 """Solver interfaces and implementations."""
 
-from optora.solvers.gradient_descent import (
-    GradientDescent,
-    GradientDescentProblem,
-    GradientDescentResult,
-)
+from optora.solvers.gradient_descent import GradientDescent
 from optora.solvers.saddle_point import (
     SaddlePointProblem,
     SaddlePointResult,
@@ -13,8 +9,6 @@ from optora.solvers.saddle_point import (
 
 __all__ = [
     "GradientDescent",
-    "GradientDescentProblem",
-    "GradientDescentResult",
     "SaddlePointProblem",
     "SaddlePointResult",
     "SaddlePointSolver",

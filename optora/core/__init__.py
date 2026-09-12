@@ -2,6 +2,16 @@
 
 from optora.core.divergence_base import Divergence
 from optora.core.dro_base import AmbiguitySet
-from optora.core.solver_base import Solver
+from optora.core.solver_base import (
+    MinimizationProblem,
+    MinimizationResult,
+    Solver,
+)
 
-__all__ = ["AmbiguitySet", "Divergence", "Solver"]
+__all__ = [
+    "AmbiguitySet",
+    "Divergence",
+    "MinimizationProblem",
+    "MinimizationResult",
+    "Solver",
+]
