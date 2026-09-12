@@ -3,6 +3,9 @@
 # `optora.core`
 
 ## Modules
+- [`optora.core.convergence`](convergence.md)
+    - [`ConvergenceTracker`](convergence.md#optora.core.convergence.ConvergenceTracker)
+    - [`validate_check_interval`](convergence.md#optora.core.convergence.validate_check_interval)
 - [`optora.core.divergence_base`](divergence_base.md)
     - [`Divergence`](divergence_base.md#optora.core.divergence_base.Divergence)
 - [`optora.core.dro_base`](dro_base.md)
