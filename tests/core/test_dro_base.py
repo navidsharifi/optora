@@ -1,5 +1,8 @@
 """Tests for the `AmbiguitySet` ABC contract."""
 
+from collections.abc import Callable
+from typing import Any
+
 import pytest
 import torch
 from torch import nn
@@ -46,6 +49,24 @@ def test_contains_uses_divergence_and_radius(nominal: torch.Tensor) -> None:
 
     assert ambiguity_set.contains(torch.tensor([0.6, 0.4]))
     assert not ambiguity_set.contains(torch.tensor([0.9, 0.1]))
+
+
+def test_contains_returns_a_tensor_without_synchronizing(
+    nominal: torch.Tensor,
+    host_sync_counter: Callable[[], Any],
+) -> None:
+    # `contains` must not bake a device-to-host copy into the ABC: callers
+    # that only need a mask should not be forced to stall the accelerator.
+    ambiguity_set = _MaxLossAmbiguitySet(
+        nominal, _AbsoluteDifferenceDivergence(), radius=0.5
+    )
+
+    with host_sync_counter() as syncs:
+        membership = ambiguity_set.contains(torch.tensor([0.6, 0.4]))
+
+    assert syncs == []
+    assert isinstance(membership, torch.Tensor)
+    assert membership.dtype == torch.bool
 
 
 def test_worst_case_expectation_is_delegated_to_subclass(

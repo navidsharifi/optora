@@ -1,5 +1,8 @@
 """Tests for `GradientDescent`."""
 
+from collections.abc import Callable
+from typing import Any
+
 import pytest
 import torch
 
@@ -54,6 +57,52 @@ def test_stops_at_max_iter_when_not_converged() -> None:
 
     assert not result.converged
     assert result.num_iterations == 1
+
+
+def test_invalid_check_interval_raises_value_error() -> None:
+    with pytest.raises(ValueError, match="check_interval must be positive"):
+        GradientDescent(check_interval=0)
+
+
+@pytest.mark.parametrize("check_interval", [1, 7, 1000])
+def test_check_interval_does_not_change_the_result(check_interval: int) -> None:
+    minimizer = torch.tensor([3.0, -2.0], dtype=torch.float64)
+    objective = lambda x: torch.sum((x - minimizer) ** 2)  # noqa: E731
+    problem = MinimizationProblem(
+        objective=objective, initial_point=torch.zeros(2, dtype=torch.float64)
+    )
+    reference = GradientDescent(
+        step_size=0.1, max_iter=500, tol=1e-8, check_interval=1
+    ).solve(problem)
+
+    result = GradientDescent(
+        step_size=0.1, max_iter=500, tol=1e-8, check_interval=check_interval
+    ).solve(problem)
+
+    assert torch.equal(result.point, reference.point)
+    assert result.converged == reference.converged
+    assert result.num_iterations == reference.num_iterations
+
+
+def test_does_not_synchronize_on_every_step(
+    host_sync_counter: Callable[[], Any],
+) -> None:
+    # Regression test: the gradient-norm stopping rule used to be a Python
+    # `if` on a device tensor, stalling the accelerator on every step of
+    # every nested solve.
+    solver = GradientDescent(step_size=0.1, max_iter=50, tol=1e-30, check_interval=10)
+    minimizer = torch.tensor([3.0, -2.0])
+    problem = MinimizationProblem(
+        objective=lambda x: torch.sum((x - minimizer) ** 2),
+        initial_point=torch.zeros(2),
+    )
+
+    with host_sync_counter() as syncs:
+        solver.solve(problem)
+
+    # At most five checkpoints across 50 steps, plus the single final
+    # read-back, rather than one stall per step.
+    assert len(syncs) <= 50 // 10 + 1
 
 
 def test_objective_running_a_nested_inner_solve_does_not_raise() -> None:
