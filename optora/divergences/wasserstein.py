@@ -2,6 +2,11 @@
 
 import torch
 
+from optora.core.convergence import (
+    DEFAULT_CHECK_INTERVAL,
+    ConvergenceTracker,
+    validate_check_interval,
+)
 from optora.core.divergence_base import Divergence
 
 
@@ -60,6 +65,9 @@ class SinkhornDivergence(Divergence):
         eps: Small positive constant used to clamp `p` and `q` away from
             zero before taking the logarithm, avoiding `log(0)` without
             branching.
+        check_interval: Number of Sinkhorn iterations between host reads of
+            the convergence flag. The potentials are frozen once converged,
+            so the divergence does not depend on this interval.
     """
 
     cost: torch.Tensor
@@ -71,6 +79,7 @@ class SinkhornDivergence(Divergence):
         max_iter: int = 100,
         tol: float = 1e-6,
         eps: float = 1e-12,
+        check_interval: int = DEFAULT_CHECK_INTERVAL,
     ) -> None:
         """Initialize the Sinkhorn divergence.
 
@@ -83,11 +92,14 @@ class SinkhornDivergence(Divergence):
                 potential between iterations.
             eps: Small positive constant used to clamp `p` and `q` away
                 from zero before taking the logarithm.
+            check_interval: Number of Sinkhorn iterations between host
+                reads of the convergence flag. Raise it to trade redundant
+                frozen iterations for fewer device synchronizations.
 
         Raises:
             ValueError: If `cost` is not a square 2D tensor, contains
-                negative entries, or if `epsilon`, `max_iter`, `tol`, or
-                `eps` are not positive.
+                negative entries, or if `epsilon`, `max_iter`, `tol`,
+                `eps`, or `check_interval` are not positive.
         """
         super().__init__()
         if cost.ndim != 2 or cost.shape[0] != cost.shape[1]:
@@ -109,6 +121,7 @@ class SinkhornDivergence(Divergence):
         self.max_iter = max_iter
         self.tol = tol
         self.eps = eps
+        self.check_interval = validate_check_interval(check_interval)
 
     def forward(self, p: torch.Tensor, q: torch.Tensor) -> torch.Tensor:
         r"""Compute the debiased Sinkhorn divergence of `p` from `q`.
@@ -171,6 +184,11 @@ class SinkhornDivergence(Divergence):
         for small $\epsilon$ or large `cost`, while `logsumexp` stays
         accurate in that regime by construction.
 
+        The stopping test on `f` runs on the potentials' device and is read
+        back to the host only every `check_interval` iterations; the
+        potentials are frozen once converged, so the returned plan is the
+        same one a per-iteration test would produce.
+
         Args:
             p: Row marginal, a nonnegative tensor of shape `(n,)` that sums
                 to one.
@@ -188,16 +206,32 @@ class SinkhornDivergence(Divergence):
         log_q = torch.log(torch.clamp(q, min=self.eps))
         f = torch.zeros_like(p)
         g = torch.zeros_like(q)
-        for _ in range(self.max_iter):
+        tracker = ConvergenceTracker(self.tol, self.check_interval, f)
+        for iteration in range(self.max_iter):
             f_prev = f
-            f = self.epsilon * (
-                log_p
-                - torch.logsumexp((g.unsqueeze(-2) - self.cost) / self.epsilon, dim=-1)
+            f = torch.where(
+                tracker.converged,
+                f,
+                self.epsilon
+                * (
+                    log_p
+                    - torch.logsumexp(
+                        (g.unsqueeze(-2) - self.cost) / self.epsilon, dim=-1
+                    )
+                ),
             )
-            g = self.epsilon * (
-                log_q
-                - torch.logsumexp((f.unsqueeze(-1) - self.cost) / self.epsilon, dim=-2)
+            g = torch.where(
+                tracker.converged,
+                g,
+                self.epsilon
+                * (
+                    log_q
+                    - torch.logsumexp(
+                        (f.unsqueeze(-1) - self.cost) / self.epsilon, dim=-2
+                    )
+                ),
             )
-            if torch.max(torch.abs(f - f_prev)) < self.tol:
+            tracker.update(torch.max(torch.abs(f - f_prev)))
+            if tracker.should_stop(iteration):
                 break
         return torch.exp((f.unsqueeze(-1) + g.unsqueeze(-2) - self.cost) / self.epsilon)

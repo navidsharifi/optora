@@ -5,6 +5,11 @@ from dataclasses import dataclass
 
 import torch
 
+from optora.core.convergence import (
+    DEFAULT_CHECK_INTERVAL,
+    ConvergenceTracker,
+    validate_check_interval,
+)
 from optora.core.solver_base import Solver, require_gradient
 
 
@@ -85,6 +90,11 @@ class SaddlePointSolver(Solver[SaddlePointProblem, SaddlePointResult]):
     `dual_projection` enforces that constraint (for example simplex
     projection or an `AmbiguitySet`-specific projection).
 
+    The gradient-norm test is evaluated on the iterates' device and read
+    back to the host only every `check_interval` iterations; iterations
+    taken after convergence are frozen, so the solution does not depend on
+    that interval. See `optora.core.convergence.ConvergenceTracker`.
+
     Attributes:
         primal_step_size: Positive learning rate for the descent step on
             the primal variable.
@@ -93,6 +103,8 @@ class SaddlePointSolver(Solver[SaddlePointProblem, SaddlePointResult]):
         max_iter: Maximum number of ascent-descent iterations.
         tol: Convergence tolerance on the combined primal/dual gradient
             norm.
+        check_interval: Number of iterations between host reads of the
+            convergence flag.
     """
 
     def __init__(
@@ -101,6 +113,7 @@ class SaddlePointSolver(Solver[SaddlePointProblem, SaddlePointResult]):
         dual_step_size: float = 1e-2,
         max_iter: int = 1000,
         tol: float = 1e-6,
+        check_interval: int = DEFAULT_CHECK_INTERVAL,
     ) -> None:
         """Initialize the saddle-point solver.
 
@@ -112,10 +125,13 @@ class SaddlePointSolver(Solver[SaddlePointProblem, SaddlePointResult]):
             max_iter: Maximum number of ascent-descent iterations.
             tol: Convergence tolerance on the combined primal/dual gradient
                 norm.
+            check_interval: Number of iterations between host reads of the
+                convergence flag. Raise it to trade redundant frozen
+                iterations for fewer device synchronizations.
 
         Raises:
             ValueError: If `primal_step_size`, `dual_step_size`,
-                `max_iter`, or `tol` are not positive.
+                `max_iter`, `tol`, or `check_interval` are not positive.
         """
         if primal_step_size <= 0:
             raise ValueError(
@@ -131,6 +147,7 @@ class SaddlePointSolver(Solver[SaddlePointProblem, SaddlePointResult]):
         self.dual_step_size = dual_step_size
         self.max_iter = max_iter
         self.tol = tol
+        self.check_interval = validate_check_interval(check_interval)
 
     def solve(self, problem: SaddlePointProblem) -> SaddlePointResult:
         """Find a saddle point of `problem.objective`.
@@ -150,10 +167,8 @@ class SaddlePointSolver(Solver[SaddlePointProblem, SaddlePointResult]):
         dual_projection = problem.dual_projection or (lambda point: point)
         primal_point = problem.primal_initial_point.detach().clone()
         dual_point = dual_projection(problem.dual_initial_point.detach().clone())
-        converged = False
-        num_iterations = 0
+        tracker = ConvergenceTracker(self.tol, self.check_interval, primal_point)
         for iteration in range(self.max_iter):
-            num_iterations = iteration + 1
             primal_point = primal_point.detach().requires_grad_(True)
             dual_point = dual_point.detach().requires_grad_(True)
             value = problem.objective(primal_point, dual_point)
@@ -165,18 +180,25 @@ class SaddlePointSolver(Solver[SaddlePointProblem, SaddlePointResult]):
             grad_norm = torch.linalg.vector_norm(
                 primal_grad
             ) + torch.linalg.vector_norm(dual_grad)
-            if grad_norm < self.tol:
-                converged = True
-                break
             with torch.no_grad():
-                primal_point = primal_point - self.primal_step_size * primal_grad
-                dual_point = dual_projection(
-                    dual_point + self.dual_step_size * dual_grad
+                frozen = tracker.update(grad_norm)
+                primal_point = torch.where(
+                    frozen,
+                    primal_point,
+                    primal_point - self.primal_step_size * primal_grad,
                 )
+                dual_point = torch.where(
+                    frozen,
+                    dual_point,
+                    dual_projection(dual_point + self.dual_step_size * dual_grad),
+                )
+            if tracker.should_stop(iteration):
+                break
         # Not wrapped in `torch.no_grad()`: an objective composed from an
         # `AmbiguitySet.worst_case_expectation` runs its own inner
         # autograd-based dual solve, which needs autograd enabled here too.
         final_value = problem.objective(primal_point, dual_point).detach()
+        converged, num_iterations = tracker.to_host()
         return SaddlePointResult(
             primal_point=primal_point.detach(),
             dual_point=dual_point.detach(),

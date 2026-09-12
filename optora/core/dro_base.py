@@ -58,18 +58,25 @@ class AmbiguitySet(nn.Module, ABC):
         self.divergence = divergence
         self.radius = radius
 
-    def contains(self, candidate: torch.Tensor) -> bool:
+    def contains(self, candidate: torch.Tensor) -> torch.Tensor:
         """Check whether a candidate distribution lies inside the ambiguity set.
+
+        The answer is returned as a boolean tensor on `candidate`'s device
+        rather than as a Python `bool`, so membership can be used as a mask
+        or composed with further tensor work without forcing a
+        device-to-host synchronization. Call `bool(...)` on the result only
+        where a host-side branch is genuinely needed.
 
         Args:
             candidate: Candidate distribution with the same shape as
                 `nominal`.
 
         Returns:
-            `True` if the divergence of `candidate` from `nominal` does not
-            exceed `radius`, `False` otherwise.
+            A boolean tensor that is `True` where the divergence of
+            `candidate` from `nominal` does not exceed `radius`.
         """
-        return bool(self.divergence(candidate, self.nominal) <= self.radius)
+        divergence: torch.Tensor = self.divergence(candidate, self.nominal)
+        return divergence <= self.radius
 
     @abstractmethod
     def worst_case_expectation(self, loss: torch.Tensor) -> torch.Tensor:
