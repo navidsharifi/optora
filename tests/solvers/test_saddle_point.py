@@ -1,5 +1,8 @@
 """Tests for `SaddlePointSolver`."""
 
+from collections.abc import Callable
+from typing import Any
+
 import pytest
 import torch
 
@@ -56,6 +59,60 @@ def test_stops_at_max_iter_when_not_converged() -> None:
     assert result.num_iterations == 1
 
 
+def test_invalid_check_interval_raises_value_error() -> None:
+    with pytest.raises(ValueError, match="check_interval must be positive"):
+        SaddlePointSolver(check_interval=0)
+
+
+@pytest.mark.parametrize("check_interval", [1, 7, 1000])
+def test_check_interval_does_not_change_the_result(check_interval: int) -> None:
+    problem = SaddlePointProblem(
+        objective=lambda x, y: torch.sum((x - 1.0) ** 2) - torch.sum((y - 5.0) ** 2),
+        primal_initial_point=torch.zeros(1, dtype=torch.float64),
+        dual_initial_point=torch.zeros(1, dtype=torch.float64),
+    )
+    reference = SaddlePointSolver(
+        primal_step_size=0.1, dual_step_size=0.1, max_iter=500, tol=1e-8
+    ).solve(problem)
+
+    result = SaddlePointSolver(
+        primal_step_size=0.1,
+        dual_step_size=0.1,
+        max_iter=500,
+        tol=1e-8,
+        check_interval=check_interval,
+    ).solve(problem)
+
+    assert torch.equal(result.primal_point, reference.primal_point)
+    assert torch.equal(result.dual_point, reference.dual_point)
+    assert result.converged == reference.converged
+    assert result.num_iterations == reference.num_iterations
+
+
+def test_does_not_synchronize_on_every_iteration(
+    host_sync_counter: Callable[[], Any],
+) -> None:
+    # Regression test: see the matching test in `tests/solvers/
+    # test_gradient_descent.py`.
+    solver = SaddlePointSolver(
+        primal_step_size=0.1,
+        dual_step_size=0.1,
+        max_iter=50,
+        tol=1e-30,
+        check_interval=10,
+    )
+    problem = SaddlePointProblem(
+        objective=lambda x, y: torch.sum((x - 1.0) ** 2) - torch.sum((y - 5.0) ** 2),
+        primal_initial_point=torch.zeros(1),
+        dual_initial_point=torch.zeros(1),
+    )
+
+    with host_sync_counter() as syncs:
+        solver.solve(problem)
+
+    assert len(syncs) <= 50 // 10 + 1
+
+
 def test_objective_running_a_nested_inner_solve_does_not_raise() -> None:
     # Regression test: see the matching test in `tests/solvers/
     # test_gradient_descent.py` for why the post-loop final-value
@@ -86,6 +143,33 @@ def test_objective_running_a_nested_inner_solve_does_not_raise() -> None:
 
     assert torch.allclose(result.primal_point, torch.tensor([1.0]), atol=1e-3)
     assert torch.allclose(result.dual_point, torch.tensor([5.0]), atol=1e-3)
+
+
+def test_objective_independent_of_the_primal_point_raises_value_error() -> None:
+    # A missing gradient must never be silently replaced by zeros: that
+    # would report `converged=True` at iteration 1 on iterates the solver
+    # never optimized.
+    solver = SaddlePointSolver(primal_step_size=0.1, dual_step_size=0.1, max_iter=10)
+    problem = SaddlePointProblem(
+        objective=lambda x, y: -torch.sum((y - 5.0) ** 2),
+        primal_initial_point=torch.zeros(1),
+        dual_initial_point=torch.zeros(1),
+    )
+
+    with pytest.raises(ValueError, match="does not depend on the primal point"):
+        solver.solve(problem)
+
+
+def test_objective_independent_of_the_dual_point_raises_value_error() -> None:
+    solver = SaddlePointSolver(primal_step_size=0.1, dual_step_size=0.1, max_iter=10)
+    problem = SaddlePointProblem(
+        objective=lambda x, y: torch.sum((x - 1.0) ** 2),
+        primal_initial_point=torch.zeros(1),
+        dual_initial_point=torch.zeros(1),
+    )
+
+    with pytest.raises(ValueError, match="does not depend on the dual point"):
+        solver.solve(problem)
 
 
 def test_invalid_primal_step_size_raises_value_error() -> None:

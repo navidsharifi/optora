@@ -3,7 +3,7 @@
 import pytest
 import torch
 
-from optora.core.solver_base import Solver
+from optora.core.solver_base import Solver, require_gradient
 
 
 class _EchoResult:
@@ -40,3 +40,14 @@ def test_concrete_solver_solve_is_delegated_to_subclass() -> None:
     result = solver.solve(problem)
 
     assert torch.equal(result.point, problem)
+
+
+def test_require_gradient_returns_a_present_gradient_unchanged() -> None:
+    gradient = torch.tensor([1.0, -2.0])
+
+    assert require_gradient(gradient, "the point") is gradient
+
+
+def test_require_gradient_rejects_a_missing_gradient() -> None:
+    with pytest.raises(ValueError, match="does not depend on the point"):
+        require_gradient(None, "the point")

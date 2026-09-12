@@ -1,5 +1,8 @@
 """Tests for `SinkhornDivergence`."""
 
+from collections.abc import Callable
+from typing import Any
+
 import pytest
 import torch
 
@@ -90,6 +93,41 @@ def test_invalid_tol_raises_value_error() -> None:
 def test_invalid_eps_raises_value_error() -> None:
     with pytest.raises(ValueError):
         SinkhornDivergence(cost=TWO_POINT_COST, eps=0.0)
+
+
+def test_invalid_check_interval_raises_value_error() -> None:
+    with pytest.raises(ValueError, match="check_interval must be positive"):
+        SinkhornDivergence(cost=TWO_POINT_COST, check_interval=0)
+
+
+@pytest.mark.parametrize("check_interval", [1, 7, 1000])
+def test_check_interval_does_not_change_the_divergence(check_interval: int) -> None:
+    p = torch.tensor([0.1, 0.9], dtype=torch.float64)
+    q = torch.tensor([0.7, 0.3], dtype=torch.float64)
+    cost = TWO_POINT_COST.to(torch.float64)
+    reference = SinkhornDivergence(cost=cost, max_iter=200, check_interval=1)
+    divergence = SinkhornDivergence(
+        cost=cost, max_iter=200, check_interval=check_interval
+    )
+
+    assert torch.equal(divergence(p, q), reference(p, q))
+
+
+def test_sinkhorn_loop_does_not_synchronize_on_every_iteration(
+    host_sync_counter: Callable[[], Any],
+) -> None:
+    divergence = SinkhornDivergence(
+        cost=TWO_POINT_COST, tol=1e-30, max_iter=60, check_interval=20
+    )
+    p = torch.tensor([0.1, 0.9])
+    q = torch.tensor([0.7, 0.3])
+
+    with host_sync_counter() as syncs:
+        divergence(p, q)
+
+    # Three `_entropic_transport_cost` calls, each checking convergence at
+    # most every 20 of its 60 iterations, instead of once per iteration.
+    assert len(syncs) <= 3 * (60 // 20)
 
 
 def test_mismatched_shape_raises_value_error() -> None:

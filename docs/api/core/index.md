@@ -3,6 +3,9 @@
 # `optora.core`
 
 ## Modules
+- [`optora.core.convergence`](convergence.md)
+    - [`ConvergenceTracker`](convergence.md#optora.core.convergence.ConvergenceTracker)
+    - [`validate_check_interval`](convergence.md#optora.core.convergence.validate_check_interval)
 - [`optora.core.divergence_base`](divergence_base.md)
     - [`Divergence`](divergence_base.md#optora.core.divergence_base.Divergence)
 - [`optora.core.dro_base`](dro_base.md)
@@ -11,3 +14,4 @@
     - [`Solver`](solver_base.md#optora.core.solver_base.Solver)
     - [`MinimizationProblem`](solver_base.md#optora.core.solver_base.MinimizationProblem)
     - [`MinimizationResult`](solver_base.md#optora.core.solver_base.MinimizationResult)
+    - [`require_gradient`](solver_base.md#optora.core.solver_base.require_gradient)

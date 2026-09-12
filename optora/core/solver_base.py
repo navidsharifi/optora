@@ -49,7 +49,9 @@ class MinimizationProblem:
 
     Attributes:
         objective: Differentiable scalar-valued function of a single tensor
-            argument.
+            argument. It must depend on that argument through autograd;
+            solvers reject an objective whose value is disconnected from
+            the point rather than treating it as stationary.
         initial_point: Starting point for the iteration. Passing a previous
             solve's `MinimizationResult.point` here warm-starts the solver
             from that solution instead of from scratch, which is useful for
@@ -77,3 +79,32 @@ class MinimizationResult:
     value: torch.Tensor
     converged: bool
     num_iterations: int
+
+
+def require_gradient(gradient: torch.Tensor | None, variable: str) -> torch.Tensor:
+    """Return a gradient produced with `allow_unused=True`, rejecting `None`.
+
+    `torch.autograd.grad(..., allow_unused=True)` returns `None` when the
+    objective's value is disconnected from the differentiated variable.
+    Substituting a zero gradient there would make a solver report immediate
+    convergence at a point it never optimized, so Optora treats a missing
+    gradient as a violated problem contract instead of a stationary point.
+
+    Args:
+        gradient: Gradient returned by `torch.autograd.grad` for `variable`.
+        variable: Human-readable name of the differentiated variable, used
+            in the error message.
+
+    Returns:
+        `gradient`, guaranteed not to be `None`.
+
+    Raises:
+        ValueError: If `gradient` is `None`.
+    """
+    if gradient is None:
+        raise ValueError(
+            f"objective does not depend on {variable} through autograd, so no "
+            "gradient is available; pass an objective that is a differentiable "
+            "function of it."
+        )
+    return gradient

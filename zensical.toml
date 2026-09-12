@@ -75,6 +75,7 @@ nav = [
     { "Overview" = "api/index.md" },
     { "Core" = [
       { "Overview" = "api/core/index.md" },
+      { "Convergence" = "api/core/convergence.md" },
       { "Divergence Base" = "api/core/divergence_base.md" },
       { "DRO Base" = "api/core/dro_base.md" },
       { "Solver Base" = "api/core/solver_base.md" },

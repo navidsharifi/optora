@@ -16,7 +16,7 @@ defines.
 
     ---
 
-    `divergence_base`, `dro_base`, `solver_base`
+    `convergence`, `divergence_base`, `dro_base`, `solver_base`
 
     [:octicons-arrow-right-24: Browse](core/index.md)
 
