@@ -4,14 +4,14 @@ import pytest
 import torch
 
 from optora.core.dro_base import AmbiguitySet
-from optora.core.solver_base import Solver
+from optora.core.solver_base import (
+    MinimizationProblem,
+    MinimizationResult,
+    Solver,
+)
 from optora.divergences.wasserstein import SinkhornDivergence
 from optora.dro.wasserstein_dro import WassersteinAmbiguitySet
-from optora.solvers.gradient_descent import (
-    GradientDescent,
-    GradientDescentProblem,
-    GradientDescentResult,
-)
+from optora.solvers.gradient_descent import GradientDescent
 
 TWO_POINT_COST = torch.tensor([[0.0, 2.0], [2.0, 0.0]], dtype=torch.float64)
 
@@ -26,17 +26,17 @@ FOUR_POINT_COST = torch.tensor(
 )
 
 
-class _RecordingSolver(Solver[GradientDescentProblem, GradientDescentResult]):
+class _RecordingSolver(Solver[MinimizationProblem, MinimizationResult]):
     """Fake dual solver returning a fixed `gamma_raw` for deterministic checks."""
 
     def __init__(self, gamma_raw: float) -> None:
         self.gamma_raw = gamma_raw
-        self.received_problem: GradientDescentProblem | None = None
+        self.received_problem: MinimizationProblem | None = None
 
-    def solve(self, problem: GradientDescentProblem) -> GradientDescentResult:
+    def solve(self, problem: MinimizationProblem) -> MinimizationResult:
         self.received_problem = problem
         point = torch.tensor(self.gamma_raw, dtype=problem.initial_point.dtype)
-        return GradientDescentResult(
+        return MinimizationResult(
             point=point,
             value=problem.objective(point),
             converged=True,
@@ -91,6 +91,17 @@ def test_worst_case_expectation_uses_custom_dual_solver() -> None:
     assert torch.allclose(result, expected, atol=1e-6)
 
 
+def test_positive_radius_requires_an_explicit_dual_solver() -> None:
+    ambiguity_set = WassersteinAmbiguitySet(
+        torch.tensor([0.5, 0.5]), cost=TWO_POINT_COST, radius=0.1
+    )
+
+    with pytest.raises(RuntimeError, match="dual_solver is required"):
+        ambiguity_set.worst_case_expectation(
+            torch.tensor([0.0, 1.0], dtype=torch.float64)
+        )
+
+
 def test_dual_reparameterization_clamps_negative_gamma_to_zero() -> None:
     nominal = torch.tensor([0.5, 0.5], dtype=torch.float64)
     loss = torch.tensor([0.0, 1.0], dtype=torch.float64)
@@ -102,6 +113,28 @@ def test_dual_reparameterization_clamps_negative_gamma_to_zero() -> None:
     result = ambiguity_set.worst_case_expectation(loss)
 
     assert torch.allclose(result, loss.max(), atol=1e-6)
+
+
+def test_dual_objective_keeps_one_sided_gradient_at_the_zero_boundary() -> None:
+    # The nonnegativity projection must expose the right derivative of the dual
+    # at gamma = 0, the default starting point: `torch.clamp` reports a zero
+    # subgradient there, which would stall gradient descent immediately.
+    nominal = torch.tensor([0.5, 0.5], dtype=torch.float64)
+    loss = torch.tensor([0.0, 1.0], dtype=torch.float64)
+    fake_solver = _RecordingSolver(gamma_raw=0.0)
+    ambiguity_set = WassersteinAmbiguitySet(
+        nominal, cost=TWO_POINT_COST, radius=0.3, dual_solver=fake_solver
+    )
+
+    ambiguity_set.worst_case_expectation(loss)
+
+    assert fake_solver.received_problem is not None
+    gamma_raw = torch.tensor(0.0, dtype=torch.float64, requires_grad=True)
+    (gradient,) = torch.autograd.grad(
+        fake_solver.received_problem.objective(gamma_raw), gamma_raw
+    )
+    expected = 0.3 - torch.sum(nominal * TWO_POINT_COST[:, 1])
+    assert torch.allclose(gradient, expected, atol=1e-12)
 
 
 def test_worst_case_expectation_matches_grid_search_over_dual_variable() -> None:

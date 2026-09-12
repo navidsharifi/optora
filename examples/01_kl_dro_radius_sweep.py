@@ -24,14 +24,18 @@ import torch
 from _plotting import save_figure
 
 from optora.dro import KLAmbiguitySet
+from optora.solvers import GradientDescent
 
 NOMINAL = torch.tensor([0.4, 0.3, 0.2, 0.1], dtype=torch.float64)
 LOSS = torch.tensor([0.5, 1.5, 3.0, 8.0], dtype=torch.float64)
+DUAL_SOLVER = GradientDescent(step_size=0.1, max_iter=2000, tol=1e-9)
 
 
 def main() -> None:
     nominal_expectation = torch.sum(NOMINAL * LOSS).item()
-    exact_zero_radius = KLAmbiguitySet(nominal=NOMINAL, radius=0.0)
+    exact_zero_radius = KLAmbiguitySet(
+        nominal=NOMINAL, radius=0.0, dual_solver=DUAL_SOLVER
+    )
     zero_radius_value = exact_zero_radius.worst_case_expectation(LOSS).item()
     print(f"E_nominal[loss]                    = {nominal_expectation:.6f}")
     print(f"worst_case_expectation(radius=0.0) = {zero_radius_value:.6f}")
@@ -39,7 +43,7 @@ def main() -> None:
 
     radii = torch.logspace(-3, 1, steps=25, dtype=torch.float64)
     worst_case = [
-        KLAmbiguitySet(nominal=NOMINAL, radius=radius.item())
+        KLAmbiguitySet(nominal=NOMINAL, radius=radius.item(), dual_solver=DUAL_SOLVER)
         .worst_case_expectation(LOSS)
         .item()
         for radius in radii

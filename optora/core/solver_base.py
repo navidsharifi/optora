@@ -1,7 +1,11 @@
-"""Shared contract for numerical solvers used across optora."""
+"""Shared contracts for numerical solvers and the problems they solve."""
 
 from abc import ABC, abstractmethod
+from collections.abc import Callable
+from dataclasses import dataclass
 from typing import Generic, TypeVar
+
+import torch
 
 ProblemT = TypeVar("ProblemT")
 ResultT = TypeVar("ResultT")
@@ -17,6 +21,13 @@ class Solver(ABC, Generic[ProblemT, ResultT]):
     problem description its algorithm needs (an objective and an initial
     point, a primal-dual pair of objectives, and so on) instead of forcing
     every algorithm through one fixed set of arguments.
+
+    Problem and result types are keyed to the *mathematical problem class*,
+    not to the algorithm: every solver of unconstrained differentiable
+    minimization consumes `MinimizationProblem` and returns
+    `MinimizationResult`, so callers such as `optora.dro` ambiguity sets can
+    depend on `Solver[MinimizationProblem, MinimizationResult]` and accept
+    any solver of that problem class.
     """
 
     @abstractmethod
@@ -30,3 +41,39 @@ class Solver(ABC, Generic[ProblemT, ResultT]):
             The result of running this solver on `problem`.
         """
         raise NotImplementedError
+
+
+@dataclass(frozen=True)
+class MinimizationProblem:
+    """Unconstrained minimization of a differentiable scalar objective.
+
+    Attributes:
+        objective: Differentiable scalar-valued function of a single tensor
+            argument.
+        initial_point: Starting point for the iteration. Passing a previous
+            solve's `MinimizationResult.point` here warm-starts the solver
+            from that solution instead of from scratch, which is useful for
+            the repeated inner-loop solves a DRO ambiguity set or minimax
+            solver runs as its outer state changes slightly between calls.
+    """
+
+    objective: Callable[[torch.Tensor], torch.Tensor]
+    initial_point: torch.Tensor
+
+
+@dataclass(frozen=True)
+class MinimizationResult:
+    """Outcome of solving a `MinimizationProblem`.
+
+    Attributes:
+        point: Final iterate.
+        value: Objective value at `point`.
+        converged: Whether the solver's convergence criterion was met before
+            its iteration budget was exhausted.
+        num_iterations: Number of iterations actually performed.
+    """
+
+    point: torch.Tensor
+    value: torch.Tensor
+    converged: bool
+    num_iterations: int

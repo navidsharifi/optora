@@ -6,11 +6,10 @@ from dataclasses import dataclass
 import torch
 
 from optora.core.dro_base import AmbiguitySet
-from optora.core.solver_base import Solver
-from optora.solvers.gradient_descent import (
-    GradientDescent,
-    GradientDescentProblem,
-    GradientDescentResult,
+from optora.core.solver_base import (
+    MinimizationProblem,
+    MinimizationResult,
+    Solver,
 )
 
 
@@ -98,8 +97,8 @@ class MinimaxSolver(Solver[MinimaxProblem, MinimaxResult]):
     without actually needing to do so.
 
     `MinimaxSolver` therefore reduces to wiring that composed objective into
-    `solver`, the outer solver minimizing over `x` (defaults to a
-    `GradientDescent` instance). This deliberately does not reimplement a
+    `solver`, the outer solver minimizing over `x`. This deliberately does not
+    reimplement a
     primal-dual ascent-descent directly over the full candidate
     distribution `q` (as `SaddlePointSolver` does generically): every
     concrete `AmbiguitySet` already reduces that potentially high-
@@ -114,18 +113,15 @@ class MinimaxSolver(Solver[MinimaxProblem, MinimaxResult]):
 
     def __init__(
         self,
-        solver: Solver[GradientDescentProblem, GradientDescentResult] | None = None,
+        solver: Solver[MinimizationProblem, MinimizationResult],
     ) -> None:
         """Initialize the minimax solver.
 
         Args:
             solver: Solver minimizing the composed worst-case-expectation
-                objective over the decision variable. Defaults to a
-                `GradientDescent` instance.
+                objective over the decision variable.
         """
-        self.solver: Solver[GradientDescentProblem, GradientDescentResult] = (
-            solver if solver is not None else GradientDescent()
-        )
+        self.solver = solver
 
     def solve(self, problem: MinimaxProblem) -> MinimaxResult:
         """Solve the DRO minimax problem described by `problem`.
@@ -142,7 +138,7 @@ class MinimaxSolver(Solver[MinimaxProblem, MinimaxResult]):
         def objective(point: torch.Tensor) -> torch.Tensor:
             return problem.ambiguity_set.worst_case_expectation(problem.loss_fn(point))
 
-        inner_problem = GradientDescentProblem(
+        inner_problem = MinimizationProblem(
             objective=objective, initial_point=problem.initial_point
         )
         result = self.solver.solve(inner_problem)

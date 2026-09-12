@@ -3,13 +3,12 @@
 import torch
 
 from optora.core.dro_base import AmbiguitySet
-from optora.core.solver_base import Solver
-from optora.divergences.kl import KLDivergence
-from optora.solvers.gradient_descent import (
-    GradientDescent,
-    GradientDescentProblem,
-    GradientDescentResult,
+from optora.core.solver_base import (
+    MinimizationProblem,
+    MinimizationResult,
+    Solver,
 )
+from optora.divergences.kl import KLDivergence
 
 
 class KLAmbiguitySet(AmbiguitySet):
@@ -54,8 +53,7 @@ class KLAmbiguitySet(AmbiguitySet):
         nominal: torch.Tensor,
         radius: float,
         eps: float = 1e-12,
-        dual_solver: Solver[GradientDescentProblem, GradientDescentResult]
-        | None = None,
+        dual_solver: Solver[MinimizationProblem, MinimizationResult] | None = None,
         initial_log_eta: float = 0.0,
     ) -> None:
         """Initialize the KL-DRO ambiguity set.
@@ -70,8 +68,7 @@ class KLAmbiguitySet(AmbiguitySet):
                 zero before taking the logarithm inside the dual objective,
                 and passed through to the underlying `KLDivergence`.
             dual_solver: Solver minimizing the dual objective over
-                `log(eta)`. Defaults to a `GradientDescent` instance tuned
-                for this reparameterization.
+                `log(eta)`. Required when evaluating a positive-radius set.
             initial_log_eta: Initial value of `log(eta)` passed to
                 `dual_solver` for each `worst_case_expectation` call.
 
@@ -82,11 +79,7 @@ class KLAmbiguitySet(AmbiguitySet):
             nominal=nominal, divergence=KLDivergence(eps=eps), radius=radius
         )
         self.eps = eps
-        self.dual_solver: Solver[GradientDescentProblem, GradientDescentResult] = (
-            dual_solver
-            if dual_solver is not None
-            else GradientDescent(step_size=0.1, max_iter=2000, tol=1e-9)
-        )
+        self.dual_solver = dual_solver
         self.initial_log_eta = initial_log_eta
 
     def worst_case_expectation(self, loss: torch.Tensor) -> torch.Tensor:
@@ -121,11 +114,15 @@ class KLAmbiguitySet(AmbiguitySet):
             log_mgf = torch.logsumexp(log_nominal + loss / eta, dim=-1)
             return eta * self.radius + eta * log_mgf
 
-        problem = GradientDescentProblem(
+        problem = MinimizationProblem(
             objective=dual_objective,
             initial_point=torch.tensor(
                 self.initial_log_eta, dtype=loss.dtype, device=loss.device
             ),
         )
+        if self.dual_solver is None:
+            raise RuntimeError(
+                "dual_solver is required to evaluate a positive-radius KLAmbiguitySet."
+            )
         result = self.dual_solver.solve(problem)
         return dual_objective(result.point)

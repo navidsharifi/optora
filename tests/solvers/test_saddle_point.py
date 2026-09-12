@@ -3,8 +3,8 @@
 import pytest
 import torch
 
-from optora.core.solver_base import Solver
-from optora.solvers.gradient_descent import GradientDescent, GradientDescentProblem
+from optora.core.solver_base import MinimizationProblem, Solver
+from optora.solvers.gradient_descent import GradientDescent
 from optora.solvers.saddle_point import SaddlePointProblem, SaddlePointSolver
 
 
@@ -64,7 +64,7 @@ def test_objective_running_a_nested_inner_solve_does_not_raise() -> None:
 
     def objective(x: torch.Tensor, y: torch.Tensor) -> torch.Tensor:
         inner_result = inner_solver.solve(
-            GradientDescentProblem(
+            MinimizationProblem(
                 objective=lambda z: (z - 1.0) ** 2,
                 initial_point=torch.zeros(()),
             )

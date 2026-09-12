@@ -5,16 +5,15 @@ from collections.abc import Callable
 import torch
 
 from optora.core.dro_base import AmbiguitySet
-from optora.core.solver_base import Solver
+from optora.core.solver_base import (
+    MinimizationProblem,
+    MinimizationResult,
+    Solver,
+)
 from optora.divergences.f_divergence import (
     ChiSquareDivergence,
     PhiDivergence,
     TotalVariationDivergence,
-)
-from optora.solvers.gradient_descent import (
-    GradientDescent,
-    GradientDescentProblem,
-    GradientDescentResult,
 )
 
 
@@ -102,8 +101,7 @@ class PhiAmbiguitySet(AmbiguitySet):
         divergence: PhiDivergence,
         radius: float,
         phi_conjugate: Callable[[torch.Tensor], torch.Tensor],
-        dual_solver: Solver[GradientDescentProblem, GradientDescentResult]
-        | None = None,
+        dual_solver: Solver[MinimizationProblem, MinimizationResult] | None = None,
         initial_log_eta: float = 0.0,
         initial_lam: float = 0.0,
     ) -> None:
@@ -120,8 +118,8 @@ class PhiAmbiguitySet(AmbiguitySet):
             phi_conjugate: Convex conjugate of `divergence.phi`, finite
                 everywhere on the real line.
             dual_solver: Solver minimizing the dual objective over
-                `(log(eta), lam)`. Defaults to a `GradientDescent` instance
-                tuned for this reparameterization.
+                `(log(eta), lam)`. Required when evaluating a positive-radius
+                set.
             initial_log_eta: Initial value of `log(eta)` passed to
                 `dual_solver` for each `worst_case_expectation` call.
             initial_lam: Initial value of `lam` passed to `dual_solver` for
@@ -132,11 +130,7 @@ class PhiAmbiguitySet(AmbiguitySet):
         """
         super().__init__(nominal=nominal, divergence=divergence, radius=radius)
         self.phi_conjugate = phi_conjugate
-        self.dual_solver: Solver[GradientDescentProblem, GradientDescentResult] = (
-            dual_solver
-            if dual_solver is not None
-            else GradientDescent(step_size=0.05, max_iter=5000, tol=1e-9)
-        )
+        self.dual_solver = dual_solver
         self.initial_log_eta = initial_log_eta
         self.initial_lam = initial_lam
 
@@ -182,9 +176,13 @@ class PhiAmbiguitySet(AmbiguitySet):
                 torch.tensor(self.initial_lam, dtype=loss.dtype, device=loss.device),
             ]
         )
-        problem = GradientDescentProblem(
+        problem = MinimizationProblem(
             objective=dual_objective, initial_point=initial_point
         )
+        if self.dual_solver is None:
+            raise RuntimeError(
+                "dual_solver is required to evaluate a positive-radius PhiAmbiguitySet."
+            )
         result = self.dual_solver.solve(problem)
         return dual_objective(result.point)
 
@@ -223,8 +221,7 @@ class ChiSquareAmbiguitySet(PhiAmbiguitySet):
         nominal: torch.Tensor,
         radius: float,
         eps: float = 1e-12,
-        dual_solver: Solver[GradientDescentProblem, GradientDescentResult]
-        | None = None,
+        dual_solver: Solver[MinimizationProblem, MinimizationResult] | None = None,
         initial_log_eta: float = 0.0,
         initial_lam: float = 0.0,
     ) -> None:
@@ -240,8 +237,8 @@ class ChiSquareAmbiguitySet(PhiAmbiguitySet):
                 zero before dividing, passed through to the underlying
                 `ChiSquareDivergence`.
             dual_solver: Solver minimizing the dual objective over
-                `(log(eta), lam)`. Defaults to a `GradientDescent` instance
-                tuned for this reparameterization.
+                `(log(eta), lam)`. Required when evaluating a positive-radius
+                set.
             initial_log_eta: Initial value of `log(eta)` passed to
                 `dual_solver` for each `worst_case_expectation` call.
             initial_lam: Initial value of `lam` passed to `dual_solver` for

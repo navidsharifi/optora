@@ -4,7 +4,11 @@ import pytest
 import torch
 
 from optora.core.dro_base import AmbiguitySet
-from optora.core.solver_base import Solver
+from optora.core.solver_base import (
+    MinimizationProblem,
+    MinimizationResult,
+    Solver,
+)
 from optora.divergences.f_divergence import PhiDivergence
 from optora.dro.kl_dro import KLAmbiguitySet
 from optora.dro.phi_dro import (
@@ -13,25 +17,21 @@ from optora.dro.phi_dro import (
     TotalVariationAmbiguitySet,
     _chi_square_conjugate,
 )
-from optora.solvers.gradient_descent import (
-    GradientDescent,
-    GradientDescentProblem,
-    GradientDescentResult,
-)
+from optora.solvers.gradient_descent import GradientDescent
 
 
-class _RecordingSolver(Solver[GradientDescentProblem, GradientDescentResult]):
+class _RecordingSolver(Solver[MinimizationProblem, MinimizationResult]):
     """Fake dual solver returning a fixed `(log(eta), lam)` for deterministic checks."""
 
     def __init__(self, log_eta: float, lam: float) -> None:
         self.log_eta = log_eta
         self.lam = lam
-        self.received_problem: GradientDescentProblem | None = None
+        self.received_problem: MinimizationProblem | None = None
 
-    def solve(self, problem: GradientDescentProblem) -> GradientDescentResult:
+    def solve(self, problem: MinimizationProblem) -> MinimizationResult:
         self.received_problem = problem
         point = torch.tensor([self.log_eta, self.lam], dtype=torch.float64)
-        return GradientDescentResult(
+        return MinimizationResult(
             point=point,
             value=problem.objective(point),
             converged=True,
@@ -111,6 +111,18 @@ def test_worst_case_expectation_uses_custom_dual_solver() -> None:
         eta * 0.3 + lam + eta * torch.sum(nominal * _kl_conjugate((loss - lam) / eta))
     )
     assert torch.allclose(result, expected, atol=1e-6)
+
+
+def test_positive_radius_requires_an_explicit_dual_solver() -> None:
+    ambiguity_set = PhiAmbiguitySet(
+        torch.tensor([0.5, 0.5]),
+        divergence=PhiDivergence(phi=_kl_generator),
+        radius=0.1,
+        phi_conjugate=_kl_conjugate,
+    )
+
+    with pytest.raises(RuntimeError, match="dual_solver is required"):
+        ambiguity_set.worst_case_expectation(torch.tensor([0.0, 1.0]))
 
 
 def test_matches_kl_ambiguity_set_when_using_kl_generator_and_conjugate() -> None:

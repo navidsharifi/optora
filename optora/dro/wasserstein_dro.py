@@ -3,13 +3,12 @@
 import torch
 
 from optora.core.dro_base import AmbiguitySet
-from optora.core.solver_base import Solver
-from optora.divergences.wasserstein import SinkhornDivergence
-from optora.solvers.gradient_descent import (
-    GradientDescent,
-    GradientDescentProblem,
-    GradientDescentResult,
+from optora.core.solver_base import (
+    MinimizationProblem,
+    MinimizationResult,
+    Solver,
 )
+from optora.divergences.wasserstein import SinkhornDivergence
 
 
 class WassersteinAmbiguitySet(AmbiguitySet):
@@ -49,15 +48,20 @@ class WassersteinAmbiguitySet(AmbiguitySet):
     pointwise, yields exactly the one-dimensional convex dual above.
     `dual_solver` minimizes this objective over an unconstrained
     `gamma_raw`, reparameterized as
-    $\gamma = \mathrm{clamp}(\mathrm{gamma\_raw}, \min=0)$
+    $\gamma = \max(\mathrm{gamma\_raw}, 0)$
     rather than $\exp(\log(\eta))$ (the reparameterization used by
     `KLAmbiguitySet` and `PhiAmbiguitySet`): unlike those formulations' dual
     variable, which must stay strictly positive, $\gamma$ ranges over the
     closed half-line $[0, \infty)$ and its optimum is genuinely attained at
     $\gamma = 0$ once `radius` is large enough to move all nominal mass onto
-    the single highest-loss support point (`clamp` lets unconstrained
+    the single highest-loss support point (projection lets unconstrained
     `GradientDescent` reach that boundary exactly, rather than only approach
-    it asymptotically).
+    it asymptotically). The projection is written as a `torch.where` on
+    `gamma_raw >= 0` rather than as `torch.clamp`, so that the default
+    starting point $\mathrm{gamma\_raw} = 0$ carries the one-sided
+    derivative of the dual at $\gamma = 0^+$: `torch.clamp` returns a zero
+    subgradient on its boundary, which would stall gradient descent at the
+    initial point.
 
     `divergence` is fixed to a `SinkhornDivergence` over `cost` (the only
     Wasserstein-type divergence implemented in `optora.divergences`), so
@@ -93,8 +97,7 @@ class WassersteinAmbiguitySet(AmbiguitySet):
         sinkhorn_max_iter: int = 100,
         sinkhorn_tol: float = 1e-6,
         eps: float = 1e-12,
-        dual_solver: Solver[GradientDescentProblem, GradientDescentResult]
-        | None = None,
+        dual_solver: Solver[MinimizationProblem, MinimizationResult] | None = None,
         initial_gamma: float = 0.0,
     ) -> None:
         """Initialize the Wasserstein-DRO ambiguity set.
@@ -118,8 +121,7 @@ class WassersteinAmbiguitySet(AmbiguitySet):
                 denominators away from zero, passed through to
                 `SinkhornDivergence`.
             dual_solver: Solver minimizing the dual objective over
-                `gamma_raw`. Defaults to a `GradientDescent` instance tuned
-                for this reparameterization.
+                `gamma_raw`. Required when evaluating a positive-radius set.
             initial_gamma: Initial value of `gamma_raw` passed to
                 `dual_solver` for each `worst_case_expectation` call.
 
@@ -145,11 +147,7 @@ class WassersteinAmbiguitySet(AmbiguitySet):
             radius=radius,
         )
         self.register_buffer("cost", cost)
-        self.dual_solver: Solver[GradientDescentProblem, GradientDescentResult] = (
-            dual_solver
-            if dual_solver is not None
-            else GradientDescent(step_size=0.05, max_iter=5000, tol=1e-9)
-        )
+        self.dual_solver = dual_solver
         self.initial_gamma = initial_gamma
 
     def worst_case_expectation(self, loss: torch.Tensor) -> torch.Tensor:
@@ -178,16 +176,25 @@ class WassersteinAmbiguitySet(AmbiguitySet):
             return torch.sum(self.nominal * loss)
 
         def dual_objective(gamma_raw: torch.Tensor) -> torch.Tensor:
-            gamma = torch.clamp(gamma_raw, min=0.0)
+            # `where` keeps the one-sided derivative at gamma_raw = 0, where
+            # `clamp` reports a zero subgradient and stalls gradient descent.
+            gamma = torch.where(
+                gamma_raw >= 0.0, gamma_raw, torch.zeros_like(gamma_raw)
+            )
             shifted = loss.unsqueeze(-2) - gamma * self.cost
             row_max = torch.amax(shifted, dim=-1)
             return gamma * self.radius + torch.sum(self.nominal * row_max)
 
-        problem = GradientDescentProblem(
+        problem = MinimizationProblem(
             objective=dual_objective,
             initial_point=torch.tensor(
                 self.initial_gamma, dtype=loss.dtype, device=loss.device
             ),
         )
+        if self.dual_solver is None:
+            raise RuntimeError(
+                "dual_solver is required to evaluate a positive-radius "
+                "WassersteinAmbiguitySet."
+            )
         result = self.dual_solver.solve(problem)
         return dual_objective(result.point)
