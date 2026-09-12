@@ -27,16 +27,22 @@ a KL-ball of plausible distributions over four observed outcomes:
 ```python
 import torch
 from optora.dro import KLAmbiguitySet, MinimaxProblem, MinimaxSolver
+from optora.solvers import GradientDescent
 
 nominal = torch.tensor([0.25, 0.25, 0.25, 0.25])
 outcomes = torch.tensor([1.0, 2.0, 3.0, 10.0])
 
 problem = MinimaxProblem(
-    ambiguity_set=KLAmbiguitySet(nominal=nominal, radius=0.1),
+  ambiguity_set=KLAmbiguitySet(
+    nominal=nominal,
+    radius=0.1,
+    dual_solver=GradientDescent(step_size=0.1, max_iter=300, tol=1e-7),
+  ),
     loss_fn=lambda x: (outcomes - x) ** 2,
     initial_point=torch.tensor(0.0),
 )
-robust_decision = MinimaxSolver().solve(problem).point
+outer_solver = GradientDescent(step_size=0.01, max_iter=200, tol=1e-6)
+robust_decision = MinimaxSolver(solver=outer_solver).solve(problem).point
 ```
 
 ## What is implemented today
