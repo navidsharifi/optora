@@ -4,8 +4,6 @@
 
 ## Modules
 - [`optora.solvers.gradient_descent`](gradient_descent.md)
-    - [`GradientDescentProblem`](gradient_descent.md#optora.solvers.gradient_descent.GradientDescentProblem)
-    - [`GradientDescentResult`](gradient_descent.md#optora.solvers.gradient_descent.GradientDescentResult)
     - [`GradientDescent`](gradient_descent.md#optora.solvers.gradient_descent.GradientDescent)
 - [`optora.solvers.saddle_point`](saddle_point.md)
     - [`SaddlePointProblem`](saddle_point.md#optora.solvers.saddle_point.SaddlePointProblem)

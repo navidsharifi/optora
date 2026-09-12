@@ -9,3 +9,5 @@
     - [`AmbiguitySet`](dro_base.md#optora.core.dro_base.AmbiguitySet)
 - [`optora.core.solver_base`](solver_base.md)
     - [`Solver`](solver_base.md#optora.core.solver_base.Solver)
+    - [`MinimizationProblem`](solver_base.md#optora.core.solver_base.MinimizationProblem)
+    - [`MinimizationResult`](solver_base.md#optora.core.solver_base.MinimizationResult)
