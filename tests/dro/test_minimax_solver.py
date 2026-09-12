@@ -3,19 +3,19 @@
 import pytest
 import torch
 
-from optora.core.solver_base import Solver
+from optora.core.solver_base import (
+    MinimizationProblem,
+    MinimizationResult,
+    Solver,
+)
 from optora.dro.kl_dro import KLAmbiguitySet
 from optora.dro.minimax_solver import MinimaxProblem, MinimaxResult, MinimaxSolver
 from optora.dro.phi_dro import ChiSquareAmbiguitySet, TotalVariationAmbiguitySet
 from optora.dro.wasserstein_dro import WassersteinAmbiguitySet
-from optora.solvers.gradient_descent import (
-    GradientDescent,
-    GradientDescentProblem,
-    GradientDescentResult,
-)
+from optora.solvers.gradient_descent import GradientDescent
 
 
-class _RecordingSolver(Solver[GradientDescentProblem, GradientDescentResult]):
+class _RecordingSolver(Solver[MinimizationProblem, MinimizationResult]):
     """Fake outer solver returning fixed results for deterministic checks."""
 
     def __init__(
@@ -25,12 +25,12 @@ class _RecordingSolver(Solver[GradientDescentProblem, GradientDescentResult]):
         self.value = value
         self.converged = converged
         self.num_iterations = num_iterations
-        self.received_problem: GradientDescentProblem | None = None
+        self.received_problem: MinimizationProblem | None = None
 
-    def solve(self, problem: GradientDescentProblem) -> GradientDescentResult:
+    def solve(self, problem: MinimizationProblem) -> MinimizationResult:
         self.received_problem = problem
         dtype = problem.initial_point.dtype
-        return GradientDescentResult(
+        return MinimizationResult(
             point=torch.tensor(self.point, dtype=dtype),
             value=torch.tensor(self.value, dtype=dtype),
             converged=self.converged,
@@ -71,12 +71,13 @@ def test_solve_delegates_to_the_injected_outer_solver() -> None:
     assert result.num_iterations == 7
 
 
-def test_default_solver_is_gradient_descent() -> None:
-    assert isinstance(MinimaxSolver().solver, GradientDescent)
+def test_solver_is_required() -> None:
+    with pytest.raises(TypeError):
+        MinimaxSolver()  # type: ignore[call-arg]
 
 
 def test_is_a_solver_instance() -> None:
-    assert isinstance(MinimaxSolver(), Solver)
+    assert isinstance(MinimaxSolver(GradientDescent()), Solver)
 
 
 def test_mismatched_loss_fn_shape_raises_value_error() -> None:
@@ -93,7 +94,7 @@ def test_mismatched_loss_fn_shape_raises_value_error() -> None:
     )
 
     with pytest.raises(ValueError):
-        MinimaxSolver().solve(problem)
+        MinimaxSolver(GradientDescent()).solve(problem)
 
 
 # --- Differentiability of the composed objective (envelope theorem) --------
@@ -320,7 +321,7 @@ def test_minimax_result_is_a_plain_dataclass_of_the_expected_shape() -> None:
         initial_point=torch.tensor(0.0),
     )
 
-    result = MinimaxSolver().solve(problem)
+    result = MinimaxSolver(GradientDescent()).solve(problem)
 
     assert isinstance(result, MinimaxResult)
     assert isinstance(result.point, torch.Tensor)

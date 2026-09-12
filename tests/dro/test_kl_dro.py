@@ -4,26 +4,26 @@ import pytest
 import torch
 
 from optora.core.dro_base import AmbiguitySet
-from optora.core.solver_base import Solver
-from optora.dro.kl_dro import KLAmbiguitySet
-from optora.solvers.gradient_descent import (
-    GradientDescent,
-    GradientDescentProblem,
-    GradientDescentResult,
+from optora.core.solver_base import (
+    MinimizationProblem,
+    MinimizationResult,
+    Solver,
 )
+from optora.dro.kl_dro import KLAmbiguitySet
+from optora.solvers.gradient_descent import GradientDescent
 
 
-class _RecordingSolver(Solver[GradientDescentProblem, GradientDescentResult]):
+class _RecordingSolver(Solver[MinimizationProblem, MinimizationResult]):
     """Fake dual solver returning a fixed `log(eta)` for deterministic checks."""
 
     def __init__(self, log_eta: float) -> None:
         self.log_eta = log_eta
-        self.received_problem: GradientDescentProblem | None = None
+        self.received_problem: MinimizationProblem | None = None
 
-    def solve(self, problem: GradientDescentProblem) -> GradientDescentResult:
+    def solve(self, problem: MinimizationProblem) -> MinimizationResult:
         self.received_problem = problem
         point = torch.tensor(self.log_eta, dtype=torch.float32)
-        return GradientDescentResult(
+        return MinimizationResult(
             point=point,
             value=problem.objective(point),
             converged=True,
@@ -69,6 +69,13 @@ def test_worst_case_expectation_uses_custom_dual_solver() -> None:
         torch.log(nominal) + loss / eta, dim=-1
     )
     assert torch.allclose(result, expected, atol=1e-6)
+
+
+def test_positive_radius_requires_an_explicit_dual_solver() -> None:
+    ambiguity_set = KLAmbiguitySet(torch.tensor([0.5, 0.5]), radius=0.1)
+
+    with pytest.raises(RuntimeError, match="dual_solver is required"):
+        ambiguity_set.worst_case_expectation(torch.tensor([0.0, 1.0]))
 
 
 def test_worst_case_expectation_matches_grid_search_over_dual_variable() -> None:
