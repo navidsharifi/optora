@@ -6,6 +6,7 @@ from optora.core.solver_base import (
     MinimizationProblem,
     MinimizationResult,
     Solver,
+    require_gradient,
 )
 
 
@@ -69,6 +70,10 @@ class GradientDescent(Solver[MinimizationProblem, MinimizationResult]):
         Returns:
             A `MinimizationResult` holding the final iterate and
             convergence diagnostics.
+
+        Raises:
+            ValueError: If `problem.objective` does not depend on its
+                argument through autograd.
         """
         point = problem.initial_point.detach().clone().requires_grad_(True)
         converged = False
@@ -76,9 +81,8 @@ class GradientDescent(Solver[MinimizationProblem, MinimizationResult]):
         for iteration in range(self.max_iter):
             num_iterations = iteration + 1
             value = problem.objective(point)
-            (grad,) = torch.autograd.grad(value, point, allow_unused=True)
-            if grad is None:
-                grad = torch.zeros_like(point)
+            (raw_grad,) = torch.autograd.grad(value, point, allow_unused=True)
+            grad = require_gradient(raw_grad, "the point")
             if torch.linalg.vector_norm(grad) < self.tol:
                 converged = True
                 break

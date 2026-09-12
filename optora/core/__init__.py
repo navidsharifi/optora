@@ -6,6 +6,7 @@ from optora.core.solver_base import (
     MinimizationProblem,
     MinimizationResult,
     Solver,
+    require_gradient,
 )
 
 __all__ = [
@@ -14,4 +15,5 @@ __all__ = [
     "MinimizationProblem",
     "MinimizationResult",
     "Solver",
+    "require_gradient",
 ]

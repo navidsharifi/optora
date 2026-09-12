@@ -5,7 +5,7 @@ from dataclasses import dataclass
 
 import torch
 
-from optora.core.solver_base import Solver
+from optora.core.solver_base import Solver, require_gradient
 
 
 @dataclass(frozen=True)
@@ -19,7 +19,10 @@ class SaddlePointProblem:
     Attributes:
         objective: Differentiable scalar-valued function
             `objective(primal_point, dual_point)`, minimized over its first
-            argument and maximized over its second.
+            argument and maximized over its second. It must depend on both
+            arguments through autograd; the solver rejects an objective
+            whose value is disconnected from either iterate rather than
+            treating it as stationary in that variable.
         primal_initial_point: Starting point for the primal (minimizing)
             variable.
         dual_initial_point: Starting point for the dual (maximizing)
@@ -139,6 +142,10 @@ class SaddlePointSolver(Solver[SaddlePointProblem, SaddlePointResult]):
         Returns:
             A `SaddlePointResult` holding the final primal/dual iterates
             and convergence diagnostics.
+
+        Raises:
+            ValueError: If `problem.objective` does not depend on both of
+                its arguments through autograd.
         """
         dual_projection = problem.dual_projection or (lambda point: point)
         primal_point = problem.primal_initial_point.detach().clone()
@@ -150,13 +157,11 @@ class SaddlePointSolver(Solver[SaddlePointProblem, SaddlePointResult]):
             primal_point = primal_point.detach().requires_grad_(True)
             dual_point = dual_point.detach().requires_grad_(True)
             value = problem.objective(primal_point, dual_point)
-            primal_grad, dual_grad = torch.autograd.grad(
+            raw_primal_grad, raw_dual_grad = torch.autograd.grad(
                 value, (primal_point, dual_point), allow_unused=True
             )
-            if primal_grad is None:
-                primal_grad = torch.zeros_like(primal_point)
-            if dual_grad is None:
-                dual_grad = torch.zeros_like(dual_point)
+            primal_grad = require_gradient(raw_primal_grad, "the primal point")
+            dual_grad = require_gradient(raw_dual_grad, "the dual point")
             grad_norm = torch.linalg.vector_norm(
                 primal_grad
             ) + torch.linalg.vector_norm(dual_grad)

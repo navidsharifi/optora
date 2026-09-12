@@ -83,6 +83,21 @@ def test_objective_running_a_nested_inner_solve_does_not_raise() -> None:
     assert torch.allclose(result.point, torch.zeros(()), atol=1e-3)
 
 
+def test_objective_independent_of_the_point_raises_value_error() -> None:
+    # A missing gradient must never be silently replaced by zeros: that
+    # would report `converged=True` at iteration 1 on a point the solver
+    # never optimized.
+    unrelated = torch.tensor(2.0, requires_grad=True)
+    solver = GradientDescent(step_size=0.1, max_iter=10, tol=1e-8)
+    problem = MinimizationProblem(
+        objective=lambda x: unrelated * 3.0,
+        initial_point=torch.zeros(2),
+    )
+
+    with pytest.raises(ValueError, match="does not depend on the point"):
+        solver.solve(problem)
+
+
 def test_invalid_step_size_raises_value_error() -> None:
     with pytest.raises(ValueError):
         GradientDescent(step_size=0.0)

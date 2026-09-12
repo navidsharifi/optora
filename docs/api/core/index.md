@@ -11,3 +11,4 @@
     - [`Solver`](solver_base.md#optora.core.solver_base.Solver)
     - [`MinimizationProblem`](solver_base.md#optora.core.solver_base.MinimizationProblem)
     - [`MinimizationResult`](solver_base.md#optora.core.solver_base.MinimizationResult)
+    - [`require_gradient`](solver_base.md#optora.core.solver_base.require_gradient)
