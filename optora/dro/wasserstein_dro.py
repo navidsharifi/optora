@@ -48,15 +48,20 @@ class WassersteinAmbiguitySet(AmbiguitySet):
     pointwise, yields exactly the one-dimensional convex dual above.
     `dual_solver` minimizes this objective over an unconstrained
     `gamma_raw`, reparameterized as
-    $\gamma = \mathrm{clamp}(\mathrm{gamma\_raw}, \min=0)$
+    $\gamma = \max(\mathrm{gamma\_raw}, 0)$
     rather than $\exp(\log(\eta))$ (the reparameterization used by
     `KLAmbiguitySet` and `PhiAmbiguitySet`): unlike those formulations' dual
     variable, which must stay strictly positive, $\gamma$ ranges over the
     closed half-line $[0, \infty)$ and its optimum is genuinely attained at
     $\gamma = 0$ once `radius` is large enough to move all nominal mass onto
-    the single highest-loss support point (`clamp` lets unconstrained
+    the single highest-loss support point (projection lets unconstrained
     `GradientDescent` reach that boundary exactly, rather than only approach
-    it asymptotically).
+    it asymptotically). The projection is written as a `torch.where` on
+    `gamma_raw >= 0` rather than as `torch.clamp`, so that the default
+    starting point $\mathrm{gamma\_raw} = 0$ carries the one-sided
+    derivative of the dual at $\gamma = 0^+$: `torch.clamp` returns a zero
+    subgradient on its boundary, which would stall gradient descent at the
+    initial point.
 
     `divergence` is fixed to a `SinkhornDivergence` over `cost` (the only
     Wasserstein-type divergence implemented in `optora.divergences`), so
@@ -171,7 +176,11 @@ class WassersteinAmbiguitySet(AmbiguitySet):
             return torch.sum(self.nominal * loss)
 
         def dual_objective(gamma_raw: torch.Tensor) -> torch.Tensor:
-            gamma = torch.clamp(gamma_raw, min=0.0)
+            # `where` keeps the one-sided derivative at gamma_raw = 0, where
+            # `clamp` reports a zero subgradient and stalls gradient descent.
+            gamma = torch.where(
+                gamma_raw >= 0.0, gamma_raw, torch.zeros_like(gamma_raw)
+            )
             shifted = loss.unsqueeze(-2) - gamma * self.cost
             row_max = torch.amax(shifted, dim=-1)
             return gamma * self.radius + torch.sum(self.nominal * row_max)

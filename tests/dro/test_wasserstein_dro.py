@@ -115,6 +115,28 @@ def test_dual_reparameterization_clamps_negative_gamma_to_zero() -> None:
     assert torch.allclose(result, loss.max(), atol=1e-6)
 
 
+def test_dual_objective_keeps_one_sided_gradient_at_the_zero_boundary() -> None:
+    # The nonnegativity projection must expose the right derivative of the dual
+    # at gamma = 0, the default starting point: `torch.clamp` reports a zero
+    # subgradient there, which would stall gradient descent immediately.
+    nominal = torch.tensor([0.5, 0.5], dtype=torch.float64)
+    loss = torch.tensor([0.0, 1.0], dtype=torch.float64)
+    fake_solver = _RecordingSolver(gamma_raw=0.0)
+    ambiguity_set = WassersteinAmbiguitySet(
+        nominal, cost=TWO_POINT_COST, radius=0.3, dual_solver=fake_solver
+    )
+
+    ambiguity_set.worst_case_expectation(loss)
+
+    assert fake_solver.received_problem is not None
+    gamma_raw = torch.tensor(0.0, dtype=torch.float64, requires_grad=True)
+    (gradient,) = torch.autograd.grad(
+        fake_solver.received_problem.objective(gamma_raw), gamma_raw
+    )
+    expected = 0.3 - torch.sum(nominal * TWO_POINT_COST[:, 1])
+    assert torch.allclose(gradient, expected, atol=1e-12)
+
+
 def test_worst_case_expectation_matches_grid_search_over_dual_variable() -> None:
     nominal = torch.tensor([0.1, 0.2, 0.3, 0.4], dtype=torch.float64)
     loss = torch.tensor([0.0, 1.0, 2.0, 5.0], dtype=torch.float64)
