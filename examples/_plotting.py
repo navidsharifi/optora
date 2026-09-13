@@ -1,12 +1,3 @@
-"""Shared plotting helper for the scripts in this folder.
-
-Figures are written under ``examples/outputs/``, which is git-ignored (see
-``.gitignore``) -- nothing produced here is meant to be committed. Any
-figure worth publishing in documentation should be re-hosted externally
-(CDN / image host) and linked from ``examples/README.md`` instead of
-committed as a binary blob; see the "Media asset policy" section there.
-"""
-
 import os
 
 from matplotlib.figure import Figure
