@@ -99,6 +99,7 @@ class WassersteinAmbiguitySet(AmbiguitySet):
         eps: float = 1e-12,
         dual_solver: Solver[MinimizationProblem, MinimizationResult] | None = None,
         initial_gamma: float = 0.0,
+        validate: bool = False,
     ) -> None:
         """Initialize the Wasserstein-DRO ambiguity set.
 
@@ -124,11 +125,17 @@ class WassersteinAmbiguitySet(AmbiguitySet):
                 `gamma_raw`. Required when evaluating a positive-radius set.
             initial_gamma: Initial value of `gamma_raw` passed to
                 `dual_solver` for each `worst_case_expectation` call.
+            validate: Whether to check that `cost` is nonnegative, passed
+                through to `SinkhornDivergence`. The check reads a
+                reduction over `cost` on the host, which blocks until the
+                device has produced it, so it is opt-in and off by default
+                to keep construction asynchronous.
 
         Raises:
             ValueError: If `radius` is negative, if `cost` is not a square
-                2D tensor, if `cost` contains negative entries, or if
-                `cost`'s size does not match `nominal`'s support size.
+                2D tensor, if `validate` is set and `cost` contains
+                negative entries, or if `cost`'s size does not match
+                `nominal`'s support size.
         """
         if cost.shape[-1] != nominal.shape[-1]:
             raise ValueError(
@@ -143,6 +150,7 @@ class WassersteinAmbiguitySet(AmbiguitySet):
                 max_iter=sinkhorn_max_iter,
                 tol=sinkhorn_tol,
                 eps=eps,
+                validate=validate,
             ),
             radius=radius,
         )

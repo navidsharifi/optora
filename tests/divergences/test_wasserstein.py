@@ -68,9 +68,22 @@ def test_non_2d_cost_raises_value_error() -> None:
         SinkhornDivergence(cost=torch.zeros(3))
 
 
-def test_negative_cost_raises_value_error() -> None:
-    with pytest.raises(ValueError):
-        SinkhornDivergence(cost=torch.tensor([[0.0, -1.0], [-1.0, 0.0]]))
+def test_negative_cost_raises_value_error_when_validation_is_requested() -> None:
+    with pytest.raises(ValueError, match="cost must be nonnegative"):
+        SinkhornDivergence(cost=torch.tensor([[0.0, -1.0], [-1.0, 0.0]]), validate=True)
+
+
+def test_negative_cost_is_not_inspected_by_default() -> None:
+    SinkhornDivergence(cost=torch.tensor([[0.0, -1.0], [-1.0, 0.0]]))
+
+
+def test_construction_does_not_synchronize_by_default(
+    host_sync_counter: Callable[[], Any],
+) -> None:
+    with host_sync_counter() as syncs:
+        SinkhornDivergence(cost=TWO_POINT_COST)
+
+    assert len(syncs) == 0
 
 
 def test_invalid_epsilon_raises_value_error() -> None:

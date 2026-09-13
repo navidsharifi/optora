@@ -1,5 +1,8 @@
 """Tests for `WassersteinAmbiguitySet`."""
 
+from collections.abc import Callable
+from typing import Any
+
 import pytest
 import torch
 
@@ -317,13 +320,35 @@ def test_non_square_cost_raises_value_error() -> None:
         WassersteinAmbiguitySet(nominal, cost=torch.zeros(2, 3), radius=0.1)
 
 
-def test_negative_cost_raises_value_error() -> None:
+def test_negative_cost_raises_value_error_when_validation_is_requested() -> None:
     nominal = torch.tensor([0.5, 0.5])
 
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="cost must be nonnegative"):
         WassersteinAmbiguitySet(
-            nominal, cost=torch.tensor([[0.0, -1.0], [-1.0, 0.0]]), radius=0.1
+            nominal,
+            cost=torch.tensor([[0.0, -1.0], [-1.0, 0.0]]),
+            radius=0.1,
+            validate=True,
         )
+
+
+def test_negative_cost_is_not_inspected_by_default() -> None:
+    nominal = torch.tensor([0.5, 0.5])
+
+    WassersteinAmbiguitySet(
+        nominal, cost=torch.tensor([[0.0, -1.0], [-1.0, 0.0]]), radius=0.1
+    )
+
+
+def test_construction_does_not_synchronize_by_default(
+    host_sync_counter: Callable[[], Any],
+) -> None:
+    nominal = torch.tensor([0.5, 0.5])
+
+    with host_sync_counter() as syncs:
+        WassersteinAmbiguitySet(nominal, cost=TWO_POINT_COST, radius=0.1)
+
+    assert len(syncs) == 0
 
 
 def test_sinkhorn_parameters_are_passed_through_to_divergence() -> None:

@@ -80,6 +80,7 @@ class SinkhornDivergence(Divergence):
         tol: float = 1e-6,
         eps: float = 1e-12,
         check_interval: int = DEFAULT_CHECK_INTERVAL,
+        validate: bool = False,
     ) -> None:
         """Initialize the Sinkhorn divergence.
 
@@ -95,18 +96,25 @@ class SinkhornDivergence(Divergence):
             check_interval: Number of Sinkhorn iterations between host
                 reads of the convergence flag. Raise it to trade redundant
                 frozen iterations for fewer device synchronizations.
+            validate: Whether to check that `cost` is nonnegative. The
+                check reads a reduction over `cost` on the host, which
+                blocks until the device has produced it, so it is opt-in
+                and off by default to keep construction asynchronous. The
+                shape and hyperparameter checks are metadata-only and
+                always run.
 
         Raises:
-            ValueError: If `cost` is not a square 2D tensor, contains
-                negative entries, or if `epsilon`, `max_iter`, `tol`,
-                `eps`, or `check_interval` are not positive.
+            ValueError: If `cost` is not a square 2D tensor, if `validate`
+                is set and `cost` contains negative entries, or if
+                `epsilon`, `max_iter`, `tol`, `eps`, or `check_interval`
+                are not positive.
         """
         super().__init__()
         if cost.ndim != 2 or cost.shape[0] != cost.shape[1]:
             raise ValueError(
                 f"cost must be a square 2D tensor, got shape {tuple(cost.shape)}."
             )
-        if torch.any(cost < 0):
+        if validate and bool(torch.amin(cost) < 0):
             raise ValueError("cost must be nonnegative.")
         if epsilon <= 0:
             raise ValueError(f"epsilon must be positive, got {epsilon}.")
