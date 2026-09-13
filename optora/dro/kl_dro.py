@@ -55,13 +55,14 @@ class KLAmbiguitySet(AmbiguitySet):
         eps: float = 1e-12,
         dual_solver: Solver[MinimizationProblem, MinimizationResult] | None = None,
         initial_log_eta: float = 0.0,
+        validate: bool = False,
     ) -> None:
         """Initialize the KL-DRO ambiguity set.
 
         Args:
             nominal: Reference distribution the ambiguity set is centered
-                on, a nonnegative tensor that sums to one along its last
-                dimension.
+                on, a finite, nonnegative tensor that sums to one along its
+                last dimension within an absolute tolerance of `1e-6`.
             radius: Nonnegative scalar bounding the KL divergence of any
                 distribution inside the ambiguity set from `nominal`.
             eps: Small positive constant used to clamp `nominal` away from
@@ -71,12 +72,18 @@ class KLAmbiguitySet(AmbiguitySet):
                 `log(eta)`. Required when evaluating a positive-radius set.
             initial_log_eta: Initial value of `log(eta)` passed to
                 `dual_solver` for each `worst_case_expectation` call.
+            validate: Whether to check the nominal probability values.
+                The check may synchronize the device and is off by default.
 
         Raises:
-            ValueError: If `radius` is negative or `eps` is not positive.
+            ValueError: If `radius` is negative, `eps` is not positive, or
+                `validate` is set and `nominal` is invalid.
         """
         super().__init__(
-            nominal=nominal, divergence=KLDivergence(eps=eps), radius=radius
+            nominal=nominal,
+            divergence=KLDivergence(eps=eps),
+            radius=radius,
+            validate=validate,
         )
         self.eps = eps
         self.dual_solver = dual_solver

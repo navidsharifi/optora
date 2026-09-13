@@ -25,7 +25,8 @@ class AmbiguitySet(nn.Module, ABC):
 
     Attributes:
         nominal: Reference distribution the ambiguity set is centered on, a
-            nonnegative tensor that sums to one along its last dimension.
+            finite, nonnegative tensor that sums to one along its last
+            dimension within an absolute tolerance of `1e-6`.
         divergence: Divergence used to measure distance from `nominal`.
         radius: Nonnegative scalar bounding the divergence of any
             distribution inside the ambiguity set from `nominal`.
@@ -38,22 +39,43 @@ class AmbiguitySet(nn.Module, ABC):
         nominal: torch.Tensor,
         divergence: Divergence,
         radius: float,
+        validate: bool = False,
     ) -> None:
         """Initialize the ambiguity set.
 
+        With `validate=True`, the nominal tensor is checked without
+        normalizing or detaching it. Validation reads tensor values on the
+        host and may synchronize the device, so it is off by default.
+
         Args:
             nominal: Reference distribution the ambiguity set is centered
-                on.
+                on. Entries must be finite and nonnegative, and each sum
+                along the last dimension must be within `1e-6` of one
+                (absolute tolerance only).
             divergence: Divergence used to measure distance from `nominal`.
             radius: Nonnegative scalar bounding the divergence of any
                 distribution inside the ambiguity set from `nominal`.
+            validate: Whether to check the nominal probability values.
+                Defaults to `False` to keep construction asynchronous.
 
         Raises:
-            ValueError: If `radius` is negative.
+            ValueError: If `radius` is negative, or if `validate` is set and
+                `nominal` is invalid within the stated tolerance.
         """
         super().__init__()
         if radius < 0:
             raise ValueError(f"radius must be nonnegative, got {radius}.")
+        if validate:
+            if not torch.all(torch.isfinite(nominal) & (nominal >= 0)):
+                raise ValueError(
+                    "nominal must contain only finite, nonnegative entries."
+                )
+            mass = nominal.sum(dim=-1)
+            if not torch.allclose(mass, torch.ones_like(mass), atol=1e-6, rtol=0.0):
+                raise ValueError(
+                    "nominal must sum to one along its last dimension "
+                    "within an absolute tolerance of 1e-6."
+                )
         self.register_buffer("nominal", nominal)
         self.divergence = divergence
         self.radius = radius
