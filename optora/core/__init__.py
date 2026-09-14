@@ -2,7 +2,7 @@
 
 from optora.core.convergence import ConvergenceTracker, validate_check_interval
 from optora.core.divergence_base import Divergence
-from optora.core.dro_base import AmbiguitySet
+from optora.core.dro_base import AmbiguitySet, DualAmbiguitySet
 from optora.core.solver_base import (
     MinimizationProblem,
     MinimizationResult,
@@ -14,6 +14,7 @@ __all__ = [
     "AmbiguitySet",
     "ConvergenceTracker",
     "Divergence",
+    "DualAmbiguitySet",
     "MinimizationProblem",
     "MinimizationResult",
     "Solver",

@@ -2,7 +2,7 @@
 
 import torch
 
-from optora.core.dro_base import AmbiguitySet
+from optora.core.dro_base import DualAmbiguitySet
 from optora.core.solver_base import (
     MinimizationProblem,
     MinimizationResult,
@@ -11,7 +11,7 @@ from optora.core.solver_base import (
 from optora.divergences.kl import KLDivergence
 
 
-class KLAmbiguitySet(AmbiguitySet):
+class KLAmbiguitySet(DualAmbiguitySet):
     r"""KL-divergence-constrained ambiguity set for KL-DRO.
 
     Bounds every candidate distribution `q` by
@@ -44,9 +44,15 @@ class KLAmbiguitySet(AmbiguitySet):
         eps: Small positive constant used to clamp `nominal` away from zero
             before taking the logarithm inside the dual objective.
         dual_solver: Solver minimizing the dual objective over `log(eta)`.
-        initial_log_eta: Initial value of `log(eta)` passed to
-            `dual_solver` for each `worst_case_expectation` call.
+        initial_dual_point: Value of `log(eta)` the first dual solve starts
+            from; later solves warm-start from the previous optimum (see
+            `optora.core.dro_base.DualAmbiguitySet`).
+        log_nominal: Elementwise logarithm of the clamped `nominal`, a
+            constant of the dual objective cached once rather than
+            recomputed on every call.
     """
+
+    log_nominal: torch.Tensor
 
     def __init__(
         self,
@@ -69,18 +75,28 @@ class KLAmbiguitySet(AmbiguitySet):
                 and passed through to the underlying `KLDivergence`.
             dual_solver: Solver minimizing the dual objective over
                 `log(eta)`. Required when evaluating a positive-radius set.
-            initial_log_eta: Initial value of `log(eta)` passed to
-                `dual_solver` for each `worst_case_expectation` call.
+            initial_log_eta: Value of `log(eta)` the first dual solve starts
+                from. Later calls warm-start from the previous solve's
+                optimum unless `reset_warm_start()` is called.
 
         Raises:
             ValueError: If `radius` is negative or `eps` is not positive.
         """
         super().__init__(
-            nominal=nominal, divergence=KLDivergence(eps=eps), radius=radius
+            nominal=nominal,
+            divergence=KLDivergence(eps=eps),
+            radius=radius,
+            dual_solver=dual_solver,
+            initial_dual_point=torch.tensor(
+                initial_log_eta, dtype=nominal.dtype, device=nominal.device
+            ),
         )
         self.eps = eps
-        self.dual_solver = dual_solver
-        self.initial_log_eta = initial_log_eta
+        self.register_buffer(
+            "log_nominal",
+            torch.log(torch.clamp(nominal, min=eps)),
+            persistent=False,
+        )
 
     def worst_case_expectation(self, loss: torch.Tensor) -> torch.Tensor:
         """Compute the worst-case expected loss over the KL ambiguity set.
@@ -98,6 +114,8 @@ class KLAmbiguitySet(AmbiguitySet):
         Raises:
             ValueError: If `loss` does not have the same shape as
                 `nominal`.
+            RuntimeError: If `radius` is positive and `dual_solver` is
+                `None`.
         """
         if loss.shape != self.nominal.shape:
             raise ValueError(
@@ -107,22 +125,9 @@ class KLAmbiguitySet(AmbiguitySet):
         if self.radius == 0.0:
             return torch.sum(self.nominal * loss)
 
-        log_nominal = torch.log(torch.clamp(self.nominal, min=self.eps))
-
         def dual_objective(log_eta: torch.Tensor) -> torch.Tensor:
             eta = torch.exp(log_eta)
-            log_mgf = torch.logsumexp(log_nominal + loss / eta, dim=-1)
+            log_mgf = torch.logsumexp(self.log_nominal + loss / eta, dim=-1)
             return eta * self.radius + eta * log_mgf
 
-        problem = MinimizationProblem(
-            objective=dual_objective,
-            initial_point=torch.tensor(
-                self.initial_log_eta, dtype=loss.dtype, device=loss.device
-            ),
-        )
-        if self.dual_solver is None:
-            raise RuntimeError(
-                "dual_solver is required to evaluate a positive-radius KLAmbiguitySet."
-            )
-        result = self.dual_solver.solve(problem)
-        return dual_objective(result.point)
+        return self._solve_dual(dual_objective)

@@ -157,6 +157,57 @@ def test_worst_case_expectation_matches_grid_search_over_dual_variable() -> None
     assert torch.allclose(result, reference, atol=1e-3)
 
 
+def test_initial_dual_point_is_built_once_from_the_configured_gamma() -> None:
+    nominal = torch.tensor([0.5, 0.5], dtype=torch.float64)
+    loss = torch.tensor([0.0, 1.0], dtype=torch.float64)
+    fake_solver = _RecordingSolver(gamma_raw=0.5)
+    ambiguity_set = WassersteinAmbiguitySet(
+        nominal,
+        cost=TWO_POINT_COST,
+        radius=0.3,
+        dual_solver=fake_solver,
+        initial_gamma=0.25,
+    )
+
+    ambiguity_set.worst_case_expectation(loss)
+
+    assert fake_solver.received_problem is not None
+    assert torch.equal(
+        fake_solver.received_problem.initial_point,
+        torch.tensor(0.25, dtype=torch.float64),
+    )
+
+
+def test_repeated_calls_warm_start_from_the_previous_dual_optimum() -> None:
+    nominal = torch.tensor([0.5, 0.5], dtype=torch.float64)
+    loss = torch.tensor([0.0, 1.0], dtype=torch.float64)
+    fake_solver = _RecordingSolver(gamma_raw=0.5)
+    ambiguity_set = WassersteinAmbiguitySet(
+        nominal,
+        cost=TWO_POINT_COST,
+        radius=0.3,
+        dual_solver=fake_solver,
+        initial_gamma=0.25,
+    )
+
+    ambiguity_set.worst_case_expectation(loss)
+    ambiguity_set.worst_case_expectation(loss)
+
+    assert fake_solver.received_problem is not None
+    assert torch.equal(
+        fake_solver.received_problem.initial_point,
+        torch.tensor(0.5, dtype=torch.float64),
+    )
+
+    ambiguity_set.reset_warm_start()
+    ambiguity_set.worst_case_expectation(loss)
+
+    assert torch.equal(
+        fake_solver.received_problem.initial_point,
+        torch.tensor(0.25, dtype=torch.float64),
+    )
+
+
 # --- Hand-computed closed-form examples -------------------------------------
 
 

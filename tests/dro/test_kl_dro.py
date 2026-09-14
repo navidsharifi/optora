@@ -31,6 +31,21 @@ class _RecordingSolver(Solver[MinimizationProblem, MinimizationResult]):
         )
 
 
+class _CountingSolver(Solver[MinimizationProblem, MinimizationResult]):
+    """Gradient descent recording the iteration count of every dual solve."""
+
+    def __init__(self) -> None:
+        self.solver = GradientDescent(
+            step_size=0.1, max_iter=5000, tol=1e-10, check_interval=1
+        )
+        self.iterations: list[int] = []
+
+    def solve(self, problem: MinimizationProblem) -> MinimizationResult:
+        result = self.solver.solve(problem)
+        self.iterations.append(result.num_iterations)
+        return result
+
+
 def _grid_search_dual_minimum(
     nominal: torch.Tensor, loss: torch.Tensor, radius: float
 ) -> torch.Tensor:
@@ -179,3 +194,85 @@ def test_is_an_ambiguity_set_instance() -> None:
     nominal = torch.tensor([0.5, 0.5])
 
     assert isinstance(KLAmbiguitySet(nominal, radius=0.1), AmbiguitySet)
+
+
+# --- Cached constants and warm starts ---------------------------------------
+
+
+def test_log_nominal_is_cached_as_a_clamped_non_persistent_buffer() -> None:
+    nominal = torch.tensor([0.5, 0.5, 0.0])
+    ambiguity_set = KLAmbiguitySet(nominal, radius=0.1, eps=1e-10)
+
+    log_nominal = dict(ambiguity_set.named_buffers())["log_nominal"]
+
+    expected = torch.log(torch.tensor([0.5, 0.5, 1e-10]))
+    assert torch.allclose(log_nominal, expected)
+    assert "log_nominal" not in ambiguity_set.state_dict()
+
+
+def test_log_nominal_buffer_moves_with_the_module() -> None:
+    ambiguity_set = KLAmbiguitySet(torch.tensor([0.5, 0.5]), radius=0.1)
+
+    ambiguity_set = ambiguity_set.to(dtype=torch.float64)
+
+    assert ambiguity_set.log_nominal.dtype == torch.float64
+
+
+def test_initial_dual_point_is_built_once_from_the_configured_log_eta() -> None:
+    nominal = torch.tensor([0.5, 0.5], dtype=torch.float64)
+    fake_solver = _RecordingSolver(log_eta=1.0)
+    ambiguity_set = KLAmbiguitySet(
+        nominal, radius=0.3, dual_solver=fake_solver, initial_log_eta=-0.75
+    )
+
+    ambiguity_set.worst_case_expectation(torch.tensor([0.0, 2.0], dtype=torch.float64))
+
+    assert fake_solver.received_problem is not None
+    assert torch.equal(
+        fake_solver.received_problem.initial_point,
+        torch.tensor(-0.75, dtype=torch.float64),
+    )
+
+
+def test_repeated_calls_warm_start_and_need_fewer_inner_iterations() -> None:
+    # A `MinimaxSolver` outer step perturbs the loss slightly and asks for
+    # the worst case again; the dual optimum barely moves, so restarting
+    # from it must cost less than restarting from `initial_log_eta`.
+    nominal = torch.tensor([0.25, 0.5, 0.25], dtype=torch.float64)
+    base = torch.tensor([0.0, 1.0, 2.0], dtype=torch.float64)
+    losses = [base * (1.0 + 0.05 * step) for step in range(3)]
+
+    warm_solver = _CountingSolver()
+    warm_set = KLAmbiguitySet(nominal, radius=0.2, dual_solver=warm_solver)
+    warm_values = [warm_set.worst_case_expectation(loss) for loss in losses]
+
+    cold_values = []
+    cold_iterations = []
+    for loss in losses:
+        cold_solver = _CountingSolver()
+        cold_set = KLAmbiguitySet(nominal, radius=0.2, dual_solver=cold_solver)
+        cold_values.append(cold_set.worst_case_expectation(loss))
+        cold_iterations.extend(cold_solver.iterations)
+
+    assert warm_solver.iterations[0] == cold_iterations[0]
+    assert all(
+        warm < cold
+        for warm, cold in zip(
+            warm_solver.iterations[1:], cold_iterations[1:], strict=True
+        )
+    )
+    for warm, cold in zip(warm_values, cold_values, strict=True):
+        assert torch.allclose(warm, cold, atol=1e-9)
+
+
+def test_reset_warm_start_restores_the_cold_iteration_count() -> None:
+    nominal = torch.tensor([0.25, 0.5, 0.25], dtype=torch.float64)
+    loss = torch.tensor([0.0, 1.0, 2.0], dtype=torch.float64)
+    solver = _CountingSolver()
+    ambiguity_set = KLAmbiguitySet(nominal, radius=0.2, dual_solver=solver)
+
+    ambiguity_set.worst_case_expectation(loss)
+    ambiguity_set.reset_warm_start()
+    ambiguity_set.worst_case_expectation(loss)
+
+    assert solver.iterations[1] == solver.iterations[0]
