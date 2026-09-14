@@ -104,13 +104,14 @@ class PhiAmbiguitySet(AmbiguitySet):
         dual_solver: Solver[MinimizationProblem, MinimizationResult] | None = None,
         initial_log_eta: float = 0.0,
         initial_lam: float = 0.0,
+        validate: bool = False,
     ) -> None:
         """Initialize the phi-divergence ambiguity set.
 
         Args:
             nominal: Reference distribution the ambiguity set is centered
-                on, a nonnegative tensor that sums to one along its last
-                dimension.
+                on, a finite, nonnegative tensor that sums to one along its
+                last dimension within an absolute tolerance of `1e-6`.
             divergence: `PhiDivergence` instance measuring distance from
                 `nominal`.
             radius: Nonnegative scalar bounding the phi-divergence of any
@@ -124,11 +125,16 @@ class PhiAmbiguitySet(AmbiguitySet):
                 `dual_solver` for each `worst_case_expectation` call.
             initial_lam: Initial value of `lam` passed to `dual_solver` for
                 each `worst_case_expectation` call.
+            validate: Whether to check the nominal probability values.
+                The check may synchronize the device and is off by default.
 
         Raises:
-            ValueError: If `radius` is negative.
+            ValueError: If `radius` is negative, or if `validate` is set and
+                `nominal` is invalid.
         """
-        super().__init__(nominal=nominal, divergence=divergence, radius=radius)
+        super().__init__(
+            nominal=nominal, divergence=divergence, radius=radius, validate=validate
+        )
         self.phi_conjugate = phi_conjugate
         self.dual_solver = dual_solver
         self.initial_log_eta = initial_log_eta
@@ -224,13 +230,14 @@ class ChiSquareAmbiguitySet(PhiAmbiguitySet):
         dual_solver: Solver[MinimizationProblem, MinimizationResult] | None = None,
         initial_log_eta: float = 0.0,
         initial_lam: float = 0.0,
+        validate: bool = False,
     ) -> None:
         """Initialize the chi-square ambiguity set.
 
         Args:
             nominal: Reference distribution the ambiguity set is centered
-                on, a nonnegative tensor that sums to one along its last
-                dimension.
+                on, a finite, nonnegative tensor that sums to one along its
+                last dimension within an absolute tolerance of `1e-6`.
             radius: Nonnegative scalar bounding the chi-square divergence of
                 any distribution inside the ambiguity set from `nominal`.
             eps: Small positive constant used to clamp `nominal` away from
@@ -243,9 +250,12 @@ class ChiSquareAmbiguitySet(PhiAmbiguitySet):
                 `dual_solver` for each `worst_case_expectation` call.
             initial_lam: Initial value of `lam` passed to `dual_solver` for
                 each `worst_case_expectation` call.
+            validate: Whether to check the nominal probability values.
+                The check may synchronize the device and is off by default.
 
         Raises:
-            ValueError: If `radius` is negative or `eps` is not positive.
+            ValueError: If `radius` is negative, `eps` is not positive, or
+                `validate` is set and `nominal` is invalid.
         """
         super().__init__(
             nominal=nominal,
@@ -255,6 +265,7 @@ class ChiSquareAmbiguitySet(PhiAmbiguitySet):
             dual_solver=dual_solver,
             initial_log_eta=initial_log_eta,
             initial_lam=initial_lam,
+            validate=validate,
         )
 
 
@@ -298,26 +309,31 @@ class TotalVariationAmbiguitySet(AmbiguitySet):
         nominal: torch.Tensor,
         radius: float,
         eps: float = 1e-12,
+        validate: bool = False,
     ) -> None:
         """Initialize the total variation ambiguity set.
 
         Args:
             nominal: Reference distribution the ambiguity set is centered
-                on, a nonnegative tensor that sums to one along its last
-                dimension.
+                on, a finite, nonnegative tensor that sums to one along its
+                last dimension within an absolute tolerance of `1e-6`.
             radius: Nonnegative scalar bounding the total variation distance
                 of any distribution inside the ambiguity set from `nominal`.
             eps: Small positive constant used to clamp the reference
                 distribution away from zero before dividing, passed through
                 to the underlying `TotalVariationDivergence`.
+            validate: Whether to check the nominal probability values.
+                The check may synchronize the device and is off by default.
 
         Raises:
-            ValueError: If `radius` is negative or `eps` is not positive.
+            ValueError: If `radius` is negative, `eps` is not positive, or
+                `validate` is set and `nominal` is invalid.
         """
         super().__init__(
             nominal=nominal,
             divergence=TotalVariationDivergence(eps=eps),
             radius=radius,
+            validate=validate,
         )
 
     def worst_case_expectation(self, loss: torch.Tensor) -> torch.Tensor:

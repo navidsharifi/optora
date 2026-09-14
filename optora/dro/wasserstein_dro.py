@@ -105,8 +105,8 @@ class WassersteinAmbiguitySet(AmbiguitySet):
 
         Args:
             nominal: Reference distribution the ambiguity set is centered
-                on, a nonnegative tensor that sums to one along its last
-                dimension.
+                on, a finite, nonnegative tensor that sums to one along its
+                last dimension within an absolute tolerance of `1e-6`.
             cost: Square, nonnegative pairwise ground cost matrix between
                 the shared support points of `nominal` and any candidate
                 distribution, shape `(n, n)` where `n = nominal.shape[-1]`.
@@ -125,17 +125,17 @@ class WassersteinAmbiguitySet(AmbiguitySet):
                 `gamma_raw`. Required when evaluating a positive-radius set.
             initial_gamma: Initial value of `gamma_raw` passed to
                 `dual_solver` for each `worst_case_expectation` call.
-            validate: Whether to check that `cost` is nonnegative, passed
-                through to `SinkhornDivergence`. The check reads a
-                reduction over `cost` on the host, which blocks until the
-                device has produced it, so it is opt-in and off by default
-                to keep construction asynchronous.
+            validate: Whether to check the nominal probability values and
+                nonnegative `cost`, also passed to `SinkhornDivergence`.
+                These checks read tensor values on the host and may
+                synchronize the device, so they are off by default to keep
+                construction asynchronous.
 
         Raises:
             ValueError: If `radius` is negative, if `cost` is not a square
-                2D tensor, if `validate` is set and `cost` contains
-                negative entries, or if `cost`'s size does not match
-                `nominal`'s support size.
+                2D tensor, if `cost`'s size does not match `nominal`'s support
+                size, or if `validate` is set and either `nominal` is invalid
+                or `cost` contains negative entries.
         """
         if cost.shape[-1] != nominal.shape[-1]:
             raise ValueError(
@@ -153,6 +153,7 @@ class WassersteinAmbiguitySet(AmbiguitySet):
                 validate=validate,
             ),
             radius=radius,
+            validate=validate,
         )
         self.register_buffer("cost", cost)
         self.dual_solver = dual_solver

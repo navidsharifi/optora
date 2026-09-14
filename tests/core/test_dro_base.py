@@ -42,6 +42,41 @@ def test_negative_radius_raises_value_error(nominal: torch.Tensor) -> None:
         _MaxLossAmbiguitySet(nominal, _AbsoluteDifferenceDivergence(), radius=-1.0)
 
 
+@pytest.mark.parametrize(
+    "values",
+    [
+        [-0.1, 1.1],
+        [0.4, 0.4],
+        [0.6, 0.6],
+        [float("nan"), 0.5],
+        [float("inf"), 0.5],
+        [float("-inf"), 0.5],
+    ],
+)
+def test_invalid_nominal_raises_value_error(values: list[float]) -> None:
+    with pytest.raises(ValueError, match="nominal"):
+        _MaxLossAmbiguitySet(
+            torch.tensor(values),
+            _AbsoluteDifferenceDivergence(),
+            radius=0.1,
+            validate=True,
+        )
+
+
+@pytest.mark.parametrize("kwargs", [{}, {"validate": False}])
+def test_unchecked_base_construction_does_not_read_nominal_values(
+    host_sync_counter: Callable[[], Any], kwargs: dict[str, bool]
+) -> None:
+    nominal = torch.tensor([-0.1, 0.2])
+    with host_sync_counter() as syncs:
+        ambiguity_set = _MaxLossAmbiguitySet(
+            nominal, _AbsoluteDifferenceDivergence(), radius=0.1, **kwargs
+        )
+
+    assert syncs == []
+    assert ambiguity_set.nominal is nominal
+
+
 def test_contains_uses_divergence_and_radius(nominal: torch.Tensor) -> None:
     ambiguity_set = _MaxLossAmbiguitySet(
         nominal, _AbsoluteDifferenceDivergence(), radius=0.5
