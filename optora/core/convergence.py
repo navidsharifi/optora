@@ -49,17 +49,21 @@ class ConvergenceTracker:
         check_interval: int,
         reference: torch.Tensor,
     ) -> None:
-        """Initialize the tracker on the device and dtype of `reference`.
+        """Initialize the tracker on the device of `reference`.
 
         Args:
-            tol: Positive tolerance the residual is compared against.
+            tol: Positive tolerance the residual is compared against. Kept
+                as a Python float: comparing a tensor against a Python
+                scalar passes it to the comparison kernel directly, whereas
+                materializing it as a tensor would copy it to the device on
+                every solve.
             check_interval: Number of iterations between host reads of the
                 convergence flag.
-            reference: Iterate whose dtype and device the residual
-                comparison is performed in.
+            reference: Iterate whose device the convergence state is held
+                on.
         """
         self.check_interval = check_interval
-        self._tol = torch.as_tensor(tol, dtype=reference.dtype, device=reference.device)
+        self._tol = tol
         self.converged = torch.zeros((), dtype=torch.bool, device=reference.device)
         self._num_iterations = torch.zeros(
             (), dtype=torch.long, device=reference.device

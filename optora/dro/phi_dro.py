@@ -4,7 +4,7 @@ from collections.abc import Callable
 
 import torch
 
-from optora.core.dro_base import AmbiguitySet
+from optora.core.dro_base import AmbiguitySet, DualAmbiguitySet
 from optora.core.solver_base import (
     MinimizationProblem,
     MinimizationResult,
@@ -39,7 +39,7 @@ def _chi_square_conjugate(scaled_shift: torch.Tensor) -> torch.Tensor:
     return torch.where(scaled_shift >= -2.0, interior, boundary)
 
 
-class PhiAmbiguitySet(AmbiguitySet):
+class PhiAmbiguitySet(DualAmbiguitySet):
     r"""Phi-divergence-constrained ambiguity set solved via its convex dual.
 
     Bounds every candidate distribution `q` by
@@ -89,10 +89,9 @@ class PhiAmbiguitySet(AmbiguitySet):
             `divergence.phi`, finite everywhere on the real line.
         dual_solver: Solver minimizing the dual objective over
             `(log(eta), lam)`.
-        initial_log_eta: Initial value of `log(eta)` passed to
-            `dual_solver` for each `worst_case_expectation` call.
-        initial_lam: Initial value of `lam` passed to `dual_solver` for
-            each `worst_case_expectation` call.
+        initial_dual_point: Values of `(log(eta), lam)` the first dual solve
+            starts from; later solves warm-start from the previous optimum
+            (see `optora.core.dro_base.DualAmbiguitySet`).
     """
 
     def __init__(
@@ -120,19 +119,27 @@ class PhiAmbiguitySet(AmbiguitySet):
             dual_solver: Solver minimizing the dual objective over
                 `(log(eta), lam)`. Required when evaluating a positive-radius
                 set.
-            initial_log_eta: Initial value of `log(eta)` passed to
-                `dual_solver` for each `worst_case_expectation` call.
-            initial_lam: Initial value of `lam` passed to `dual_solver` for
-                each `worst_case_expectation` call.
+            initial_log_eta: Value of `log(eta)` the first dual solve starts
+                from. Later calls warm-start from the previous solve's
+                optimum unless `reset_warm_start()` is called.
+            initial_lam: Value of `lam` the first dual solve starts from,
+                warm-started on later calls alongside `initial_log_eta`.
 
         Raises:
             ValueError: If `radius` is negative.
         """
-        super().__init__(nominal=nominal, divergence=divergence, radius=radius)
+        super().__init__(
+            nominal=nominal,
+            divergence=divergence,
+            radius=radius,
+            dual_solver=dual_solver,
+            initial_dual_point=torch.tensor(
+                [initial_log_eta, initial_lam],
+                dtype=nominal.dtype,
+                device=nominal.device,
+            ),
+        )
         self.phi_conjugate = phi_conjugate
-        self.dual_solver = dual_solver
-        self.initial_log_eta = initial_log_eta
-        self.initial_lam = initial_lam
 
     def worst_case_expectation(self, loss: torch.Tensor) -> torch.Tensor:
         """Compute the worst-case expected loss over the phi-divergence ambiguity set.
@@ -151,6 +158,8 @@ class PhiAmbiguitySet(AmbiguitySet):
         Raises:
             ValueError: If `loss` does not have the same shape as
                 `nominal`.
+            RuntimeError: If `radius` is positive and `dual_solver` is
+                `None`.
         """
         if loss.shape != self.nominal.shape:
             raise ValueError(
@@ -168,23 +177,7 @@ class PhiAmbiguitySet(AmbiguitySet):
             )
             return eta * self.radius + lam + eta * conjugate_term
 
-        initial_point = torch.stack(
-            [
-                torch.tensor(
-                    self.initial_log_eta, dtype=loss.dtype, device=loss.device
-                ),
-                torch.tensor(self.initial_lam, dtype=loss.dtype, device=loss.device),
-            ]
-        )
-        problem = MinimizationProblem(
-            objective=dual_objective, initial_point=initial_point
-        )
-        if self.dual_solver is None:
-            raise RuntimeError(
-                "dual_solver is required to evaluate a positive-radius PhiAmbiguitySet."
-            )
-        result = self.dual_solver.solve(problem)
-        return dual_objective(result.point)
+        return self._solve_dual(dual_objective)
 
 
 class ChiSquareAmbiguitySet(PhiAmbiguitySet):
@@ -239,10 +232,11 @@ class ChiSquareAmbiguitySet(PhiAmbiguitySet):
             dual_solver: Solver minimizing the dual objective over
                 `(log(eta), lam)`. Required when evaluating a positive-radius
                 set.
-            initial_log_eta: Initial value of `log(eta)` passed to
-                `dual_solver` for each `worst_case_expectation` call.
-            initial_lam: Initial value of `lam` passed to `dual_solver` for
-                each `worst_case_expectation` call.
+            initial_log_eta: Value of `log(eta)` the first dual solve starts
+                from. Later calls warm-start from the previous solve's
+                optimum unless `reset_warm_start()` is called.
+            initial_lam: Value of `lam` the first dual solve starts from,
+                warm-started on later calls alongside `initial_log_eta`.
 
         Raises:
             ValueError: If `radius` is negative or `eps` is not positive.

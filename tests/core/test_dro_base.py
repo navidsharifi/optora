@@ -8,7 +8,12 @@ import torch
 from torch import nn
 
 from optora.core.divergence_base import Divergence
-from optora.core.dro_base import AmbiguitySet
+from optora.core.dro_base import AmbiguitySet, DualAmbiguitySet
+from optora.core.solver_base import (
+    MinimizationProblem,
+    MinimizationResult,
+    Solver,
+)
 
 
 class _AbsoluteDifferenceDivergence(Divergence):
@@ -103,3 +108,139 @@ def test_to_moves_nominal_buffer_and_divergence_submodule_together(
     ambiguity_set = ambiguity_set.to(dtype=torch.float64)
 
     assert ambiguity_set.nominal.dtype == torch.float64
+
+
+# --- DualAmbiguitySet -------------------------------------------------------
+
+
+class _RecordingSolver(Solver[MinimizationProblem, MinimizationResult]):
+    """Fake dual solver recording every starting point it is handed."""
+
+    def __init__(self, point: float = 3.0) -> None:
+        self.point = point
+        self.initial_points: list[torch.Tensor] = []
+
+    def solve(self, problem: MinimizationProblem) -> MinimizationResult:
+        self.initial_points.append(problem.initial_point.clone())
+        point = torch.full_like(problem.initial_point, self.point)
+        return MinimizationResult(
+            point=point,
+            value=problem.objective(point),
+            converged=True,
+            num_iterations=0,
+        )
+
+
+class _QuadraticDualAmbiguitySet(DualAmbiguitySet):
+    """Dual-solved ambiguity set with a trivially convex scalar dual."""
+
+    def worst_case_expectation(self, loss: torch.Tensor) -> torch.Tensor:
+        def dual_objective(dual_point: torch.Tensor) -> torch.Tensor:
+            return torch.sum((dual_point - loss.sum()) ** 2)
+
+        return self._solve_dual(dual_objective)
+
+
+def _dual_ambiguity_set(
+    nominal: torch.Tensor,
+    dual_solver: Solver[MinimizationProblem, MinimizationResult] | None,
+    initial_dual_point: float = 0.0,
+) -> _QuadraticDualAmbiguitySet:
+    return _QuadraticDualAmbiguitySet(
+        nominal=nominal,
+        divergence=_AbsoluteDifferenceDivergence(),
+        radius=0.5,
+        dual_solver=dual_solver,
+        initial_dual_point=torch.tensor(initial_dual_point, dtype=nominal.dtype),
+    )
+
+
+def test_dual_solve_without_a_solver_names_the_concrete_subclass(
+    nominal: torch.Tensor,
+) -> None:
+    ambiguity_set = _dual_ambiguity_set(nominal, dual_solver=None)
+
+    with pytest.raises(RuntimeError, match="dual_solver is required"):
+        ambiguity_set.worst_case_expectation(torch.tensor([1.0, 2.0]))
+
+    with pytest.raises(RuntimeError, match="_QuadraticDualAmbiguitySet"):
+        ambiguity_set.worst_case_expectation(torch.tensor([1.0, 2.0]))
+
+
+def test_first_dual_solve_starts_from_the_initial_dual_point(
+    nominal: torch.Tensor,
+) -> None:
+    solver = _RecordingSolver()
+    ambiguity_set = _dual_ambiguity_set(nominal, solver, initial_dual_point=-1.5)
+
+    ambiguity_set.worst_case_expectation(torch.tensor([1.0, 2.0]))
+
+    assert torch.equal(solver.initial_points[0], torch.tensor(-1.5))
+
+
+def test_later_dual_solves_warm_start_from_the_previous_optimum(
+    nominal: torch.Tensor,
+) -> None:
+    # The dual optimum barely moves between consecutive calls on a slowly
+    # changing loss, so restarting from it is what removes the cold-start
+    # cost of an outer minimax iteration.
+    solver = _RecordingSolver(point=3.0)
+    ambiguity_set = _dual_ambiguity_set(nominal, solver, initial_dual_point=-1.5)
+
+    ambiguity_set.worst_case_expectation(torch.tensor([1.0, 2.0]))
+    ambiguity_set.worst_case_expectation(torch.tensor([1.0, 2.5]))
+    ambiguity_set.worst_case_expectation(torch.tensor([1.0, 3.0]))
+
+    assert torch.equal(solver.initial_points[1], torch.tensor(3.0))
+    assert torch.equal(solver.initial_points[2], torch.tensor(3.0))
+
+
+def test_reset_warm_start_returns_the_next_solve_to_the_initial_dual_point(
+    nominal: torch.Tensor,
+) -> None:
+    solver = _RecordingSolver(point=3.0)
+    ambiguity_set = _dual_ambiguity_set(nominal, solver, initial_dual_point=-1.5)
+
+    ambiguity_set.worst_case_expectation(torch.tensor([1.0, 2.0]))
+    ambiguity_set.reset_warm_start()
+    ambiguity_set.worst_case_expectation(torch.tensor([1.0, 2.0]))
+
+    assert torch.equal(solver.initial_points[1], torch.tensor(-1.5))
+
+
+def test_cached_warm_start_is_detached_from_the_previous_graph(
+    nominal: torch.Tensor,
+) -> None:
+    solver = _RecordingSolver()
+    ambiguity_set = _dual_ambiguity_set(nominal, solver)
+    loss = torch.tensor([1.0, 2.0], requires_grad=True)
+
+    ambiguity_set.worst_case_expectation(loss)
+
+    warm_start = dict(ambiguity_set.named_buffers())["_dual_warm_start"]
+    assert not warm_start.requires_grad
+
+
+def test_dual_point_buffers_move_with_the_module(nominal: torch.Tensor) -> None:
+    solver = _RecordingSolver()
+    ambiguity_set = _dual_ambiguity_set(nominal, solver)
+    ambiguity_set.worst_case_expectation(torch.tensor([1.0, 2.0]))
+
+    ambiguity_set = ambiguity_set.to(dtype=torch.float64)
+
+    buffers = dict(ambiguity_set.named_buffers())
+    assert buffers["initial_dual_point"].dtype == torch.float64
+    assert buffers["_dual_warm_start"].dtype == torch.float64
+
+
+def test_warm_start_cache_stays_out_of_the_state_dict(nominal: torch.Tensor) -> None:
+    # The cache is solver scratch space, not configuration: persisting it
+    # would make a checkpoint fail to load into a freshly built set.
+    solver = _RecordingSolver()
+    ambiguity_set = _dual_ambiguity_set(nominal, solver)
+    ambiguity_set.worst_case_expectation(torch.tensor([1.0, 2.0]))
+
+    state_dict = ambiguity_set.state_dict()
+
+    assert "initial_dual_point" in state_dict
+    assert "_dual_warm_start" not in state_dict

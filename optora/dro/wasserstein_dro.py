@@ -2,7 +2,7 @@
 
 import torch
 
-from optora.core.dro_base import AmbiguitySet
+from optora.core.dro_base import DualAmbiguitySet
 from optora.core.solver_base import (
     MinimizationProblem,
     MinimizationResult,
@@ -11,7 +11,7 @@ from optora.core.solver_base import (
 from optora.divergences.wasserstein import SinkhornDivergence
 
 
-class WassersteinAmbiguitySet(AmbiguitySet):
+class WassersteinAmbiguitySet(DualAmbiguitySet):
     r"""Wasserstein-distance-constrained ambiguity set for Wasserstein-DRO.
 
     Bounds every candidate distribution `q`, sharing `nominal`'s finite
@@ -82,8 +82,9 @@ class WassersteinAmbiguitySet(AmbiguitySet):
             shared support points of `nominal` and any candidate
             distribution.
         dual_solver: Solver minimizing the dual objective over `gamma_raw`.
-        initial_gamma: Initial value of `gamma_raw` passed to
-            `dual_solver` for each `worst_case_expectation` call.
+        initial_dual_point: Value of `gamma_raw` the first dual solve starts
+            from; later solves warm-start from the previous optimum (see
+            `optora.core.dro_base.DualAmbiguitySet`).
     """
 
     cost: torch.Tensor
@@ -123,8 +124,9 @@ class WassersteinAmbiguitySet(AmbiguitySet):
                 `SinkhornDivergence`.
             dual_solver: Solver minimizing the dual objective over
                 `gamma_raw`. Required when evaluating a positive-radius set.
-            initial_gamma: Initial value of `gamma_raw` passed to
-                `dual_solver` for each `worst_case_expectation` call.
+            initial_gamma: Value of `gamma_raw` the first dual solve starts
+                from. Later calls warm-start from the previous solve's
+                optimum unless `reset_warm_start()` is called.
             validate: Whether to check that `cost` is nonnegative, passed
                 through to `SinkhornDivergence`. The check reads a
                 reduction over `cost` on the host, which blocks until the
@@ -153,10 +155,12 @@ class WassersteinAmbiguitySet(AmbiguitySet):
                 validate=validate,
             ),
             radius=radius,
+            dual_solver=dual_solver,
+            initial_dual_point=torch.tensor(
+                initial_gamma, dtype=nominal.dtype, device=nominal.device
+            ),
         )
         self.register_buffer("cost", cost)
-        self.dual_solver = dual_solver
-        self.initial_gamma = initial_gamma
 
     def worst_case_expectation(self, loss: torch.Tensor) -> torch.Tensor:
         """Compute the worst-case expected loss over the Wasserstein ambiguity set.
@@ -174,6 +178,8 @@ class WassersteinAmbiguitySet(AmbiguitySet):
         Raises:
             ValueError: If `loss` does not have the same shape as
                 `nominal`.
+            RuntimeError: If `radius` is positive and `dual_solver` is
+                `None`.
         """
         if loss.shape != self.nominal.shape:
             raise ValueError(
@@ -193,16 +199,4 @@ class WassersteinAmbiguitySet(AmbiguitySet):
             row_max = torch.amax(shifted, dim=-1)
             return gamma * self.radius + torch.sum(self.nominal * row_max)
 
-        problem = MinimizationProblem(
-            objective=dual_objective,
-            initial_point=torch.tensor(
-                self.initial_gamma, dtype=loss.dtype, device=loss.device
-            ),
-        )
-        if self.dual_solver is None:
-            raise RuntimeError(
-                "dual_solver is required to evaluate a positive-radius "
-                "WassersteinAmbiguitySet."
-            )
-        result = self.dual_solver.solve(problem)
-        return dual_objective(result.point)
+        return self._solve_dual(dual_objective)

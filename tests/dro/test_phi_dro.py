@@ -188,6 +188,84 @@ def test_is_an_ambiguity_set_instance() -> None:
     assert isinstance(ambiguity_set, AmbiguitySet)
 
 
+def test_initial_dual_point_pairs_the_configured_log_eta_and_lam() -> None:
+    nominal = torch.tensor([0.5, 0.5], dtype=torch.float64)
+    loss = torch.tensor([0.0, 2.0], dtype=torch.float64)
+    fake_solver = _RecordingSolver(log_eta=0.5, lam=0.3)
+    ambiguity_set = PhiAmbiguitySet(
+        nominal,
+        divergence=PhiDivergence(phi=_kl_generator),
+        radius=0.3,
+        phi_conjugate=_kl_conjugate,
+        dual_solver=fake_solver,
+        initial_log_eta=-0.75,
+        initial_lam=1.5,
+    )
+
+    ambiguity_set.worst_case_expectation(loss)
+
+    assert fake_solver.received_problem is not None
+    assert torch.equal(
+        fake_solver.received_problem.initial_point,
+        torch.tensor([-0.75, 1.5], dtype=torch.float64),
+    )
+
+
+def test_repeated_calls_warm_start_from_the_previous_dual_optimum() -> None:
+    nominal = torch.tensor([0.5, 0.5], dtype=torch.float64)
+    loss = torch.tensor([0.0, 2.0], dtype=torch.float64)
+    fake_solver = _RecordingSolver(log_eta=0.5, lam=0.3)
+    ambiguity_set = PhiAmbiguitySet(
+        nominal,
+        divergence=PhiDivergence(phi=_kl_generator),
+        radius=0.3,
+        phi_conjugate=_kl_conjugate,
+        dual_solver=fake_solver,
+        initial_log_eta=-0.75,
+        initial_lam=1.5,
+    )
+
+    ambiguity_set.worst_case_expectation(loss)
+    ambiguity_set.worst_case_expectation(loss)
+
+    assert fake_solver.received_problem is not None
+    assert torch.equal(
+        fake_solver.received_problem.initial_point,
+        torch.tensor([0.5, 0.3], dtype=torch.float64),
+    )
+
+    ambiguity_set.reset_warm_start()
+    ambiguity_set.worst_case_expectation(loss)
+
+    assert torch.equal(
+        fake_solver.received_problem.initial_point,
+        torch.tensor([-0.75, 1.5], dtype=torch.float64),
+    )
+
+
+def test_warm_started_chi_square_values_match_cold_started_ones() -> None:
+    nominal = torch.tensor([0.25, 0.5, 0.25], dtype=torch.float64)
+    base = torch.tensor([0.0, 1.0, 2.0], dtype=torch.float64)
+    losses = [base * (1.0 + 0.05 * step) for step in range(3)]
+
+    def solver() -> GradientDescent:
+        return GradientDescent(
+            step_size=0.02, max_iter=4000, tol=1e-10, check_interval=1
+        )
+
+    warm_set = ChiSquareAmbiguitySet(nominal, radius=0.2, dual_solver=solver())
+    warm_values = [warm_set.worst_case_expectation(loss) for loss in losses]
+    cold_values = [
+        ChiSquareAmbiguitySet(
+            nominal, radius=0.2, dual_solver=solver()
+        ).worst_case_expectation(loss)
+        for loss in losses
+    ]
+
+    for warm, cold in zip(warm_values, cold_values, strict=True):
+        assert torch.allclose(warm, cold, atol=1e-9)
+
+
 # --- ChiSquareAmbiguitySet -------------------------------------------------
 
 

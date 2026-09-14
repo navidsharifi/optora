@@ -38,6 +38,7 @@ embeds the same source and explains what each experiment is checking.
 | [`02_worst_case_distribution_shift.py`](02_worst_case_distribution_shift.py) | Reconstructs the actual worst-case candidate distribution `q*` inside a total-variation ambiguity set (not just its expectation) and visualizes probability mass migrating toward the worst-case scenario as the radius grows — convergence *across probability space*, not just of a scalar. |
 | [`03_robust_decision_across_ambiguity_sets.py`](03_robust_decision_across_ambiguity_sets.py) | Solves the same robust decision problem with `MinimaxSolver` under all four ambiguity-set geometries (KL, chi-square, total variation, Wasserstein) and compares how the robust decision diverges from the empirical-risk baseline as radius grows. |
 | [`04_convergence_diagnostics.py`](04_convergence_diagnostics.py) | Manually unrolls the outer gradient trajectory of a robust decision problem, then independently verifies the inner KL-DRO dual solve against a fine grid search over the dual variable. |
+| [`05_wasserstein_lipschitz_equivalence.py`](05_wasserstein_lipschitz_equivalence.py) | Measures the Wasserstein-DRO / Lipschitz-regularization equivalence numerically: the exact dual value of `WassersteinAmbiguitySet` against the linear surrogate `E_nominal[loss] + radius * Lip(loss)`, as the radius shrinks and as the sample refines. |
 
 ## Media asset policy
 

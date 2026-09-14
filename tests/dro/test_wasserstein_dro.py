@@ -157,6 +157,57 @@ def test_worst_case_expectation_matches_grid_search_over_dual_variable() -> None
     assert torch.allclose(result, reference, atol=1e-3)
 
 
+def test_initial_dual_point_is_built_once_from_the_configured_gamma() -> None:
+    nominal = torch.tensor([0.5, 0.5], dtype=torch.float64)
+    loss = torch.tensor([0.0, 1.0], dtype=torch.float64)
+    fake_solver = _RecordingSolver(gamma_raw=0.5)
+    ambiguity_set = WassersteinAmbiguitySet(
+        nominal,
+        cost=TWO_POINT_COST,
+        radius=0.3,
+        dual_solver=fake_solver,
+        initial_gamma=0.25,
+    )
+
+    ambiguity_set.worst_case_expectation(loss)
+
+    assert fake_solver.received_problem is not None
+    assert torch.equal(
+        fake_solver.received_problem.initial_point,
+        torch.tensor(0.25, dtype=torch.float64),
+    )
+
+
+def test_repeated_calls_warm_start_from_the_previous_dual_optimum() -> None:
+    nominal = torch.tensor([0.5, 0.5], dtype=torch.float64)
+    loss = torch.tensor([0.0, 1.0], dtype=torch.float64)
+    fake_solver = _RecordingSolver(gamma_raw=0.5)
+    ambiguity_set = WassersteinAmbiguitySet(
+        nominal,
+        cost=TWO_POINT_COST,
+        radius=0.3,
+        dual_solver=fake_solver,
+        initial_gamma=0.25,
+    )
+
+    ambiguity_set.worst_case_expectation(loss)
+    ambiguity_set.worst_case_expectation(loss)
+
+    assert fake_solver.received_problem is not None
+    assert torch.equal(
+        fake_solver.received_problem.initial_point,
+        torch.tensor(0.5, dtype=torch.float64),
+    )
+
+    ambiguity_set.reset_warm_start()
+    ambiguity_set.worst_case_expectation(loss)
+
+    assert torch.equal(
+        fake_solver.received_problem.initial_point,
+        torch.tensor(0.25, dtype=torch.float64),
+    )
+
+
 # --- Hand-computed closed-form examples -------------------------------------
 
 
@@ -279,6 +330,98 @@ def test_worst_case_expectation_does_not_exceed_max_loss() -> None:
     result = ambiguity_set.worst_case_expectation(loss)
 
     assert result <= loss.max() + 1e-4
+
+
+# --- Lipschitz-regularization equivalence -----------------------------------
+
+
+def _metric_support(num_points: int) -> tuple[torch.Tensor, torch.Tensor]:
+    """Return midpoint normal quantiles and their Euclidean cost matrix."""
+    quantiles = (torch.arange(num_points, dtype=torch.float64) + 0.5) / num_points
+    support = torch.special.ndtri(quantiles)
+    return support, torch.abs(support.unsqueeze(-1) - support.unsqueeze(-2))
+
+
+def _empirical_lipschitz_constant(
+    loss: torch.Tensor, cost: torch.Tensor
+) -> torch.Tensor:
+    """Return the largest loss increment per unit of transport on the support."""
+    increments = torch.abs(loss.unsqueeze(-1) - loss.unsqueeze(-2))
+    separation = cost + torch.eye(cost.shape[-1], dtype=cost.dtype)
+    return torch.max(increments / separation)
+
+
+def test_small_radius_dual_equals_lipschitz_regularized_expectation() -> None:
+    # On a metric support the dual is minimized at gamma = Lip(loss) for every
+    # radius below the threshold at which some support point's maximizer stops
+    # being itself, so the dual value is exactly the linear surrogate
+    # E_nominal[loss] + radius * Lip(loss) (Wu, Li and Mao 2025). Here
+    # loss(z) = |z| attains its Lipschitz constant 1 between adjacent support
+    # points, and the threshold radius is 0.8.
+    support = torch.tensor([-2.0, -1.0, 0.0, 1.0, 2.0], dtype=torch.float64)
+    cost = torch.abs(support.unsqueeze(-1) - support.unsqueeze(-2))
+    loss = torch.abs(support)
+    nominal = torch.full_like(support, 0.2)
+    radius = 0.2
+    solver = GradientDescent(step_size=0.01, max_iter=2000, tol=1e-12)
+    ambiguity_set = WassersteinAmbiguitySet(
+        nominal, cost=cost, radius=radius, dual_solver=solver
+    )
+
+    result = ambiguity_set.worst_case_expectation(loss)
+
+    assert torch.allclose(
+        _empirical_lipschitz_constant(loss, cost),
+        torch.tensor(1.0, dtype=torch.float64),
+    )
+    expected = torch.sum(nominal * loss) + radius * 1.0
+    assert torch.allclose(result, expected, atol=5e-3)
+
+
+@pytest.mark.parametrize("radius", [0.01, 0.1, 1.0, 5.0])
+def test_lipschitz_surrogate_upper_bounds_the_dual(radius: float) -> None:
+    support, cost = _metric_support(24)
+    loss = torch.nn.functional.softplus(support)
+    nominal = torch.full_like(support, 1.0 / support.numel())
+    solver = GradientDescent(step_size=0.05, max_iter=600, tol=1e-12)
+    ambiguity_set = WassersteinAmbiguitySet(
+        nominal, cost=cost, radius=radius, dual_solver=solver
+    )
+
+    result = ambiguity_set.worst_case_expectation(loss)
+
+    # softplus is 1-Lipschitz: its derivative is the sigmoid.
+    surrogate = torch.sum(nominal * loss) + radius * 1.0
+    assert result <= surrogate + 1e-6
+
+
+def test_lipschitz_surrogate_gap_shrinks_as_the_sample_refines() -> None:
+    # The small-radius gap against the surrogate built from the true Lipschitz
+    # constant is radius * (Lip - L_n), where L_n is the loss's Lipschitz
+    # modulus restricted to the sample. softplus approaches slope 1 only
+    # asymptotically, so L_n increases -- and the gap shrinks -- as the sample
+    # refines.
+    radius = 1e-3
+    solver = GradientDescent(step_size=0.05, max_iter=600, tol=1e-12)
+    normalized_gaps = []
+    deficiencies = []
+    for num_points in (8, 32, 128):
+        support, cost = _metric_support(num_points)
+        loss = torch.nn.functional.softplus(support)
+        nominal = torch.full_like(support, 1.0 / num_points)
+        ambiguity_set = WassersteinAmbiguitySet(
+            nominal, cost=cost, radius=radius, dual_solver=solver
+        )
+
+        result = ambiguity_set.worst_case_expectation(loss)
+
+        surrogate = torch.sum(nominal * loss) + radius * 1.0
+        normalized_gaps.append(((surrogate - result) / radius).item())
+        deficiencies.append((1.0 - _empirical_lipschitz_constant(loss, cost)).item())
+
+    assert normalized_gaps == sorted(normalized_gaps, reverse=True)
+    for measured, predicted in zip(normalized_gaps, deficiencies, strict=True):
+        assert abs(measured - predicted) < 5e-3
 
 
 # --- Validation --------------------------------------------------------------
