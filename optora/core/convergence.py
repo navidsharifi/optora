@@ -25,6 +25,15 @@ class ConvergenceTracker:
     whatever `check_interval` is. Larger values trade those redundant
     frozen iterations for fewer synchronizations.
 
+    That trade is only favourable when an iteration is cheap relative to a
+    synchronization, which holds for the inner loops this was written for
+    (a few elementwise kernels per iteration against a host read costing
+    microseconds). Raise `check_interval` only in that regime. Loops whose
+    single iteration is expensive — notably an outer solve whose objective
+    is an `optora.dro` worst-case expectation, where one frozen iteration
+    is an entire inner dual solve — should use `check_interval=1` and pay
+    the synchronization instead.
+
     Attributes:
         converged: Zero-dimensional boolean tensor, `True` once the
             residual has fallen below the tolerance. Use it as the

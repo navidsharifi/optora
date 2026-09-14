@@ -113,6 +113,64 @@ def test_does_not_synchronize_on_every_iteration(
     assert len(syncs) <= 50 // 10 + 1
 
 
+def test_no_objective_evaluations_after_convergence() -> None:
+    # Regression test: see the matching test in `tests/solvers/
+    # test_gradient_descent.py`. The post-loop final-value computation used
+    # to re-evaluate the objective at iterates convergence had already
+    # frozen.
+    calls: list[None] = []
+
+    def objective(x: torch.Tensor, y: torch.Tensor) -> torch.Tensor:
+        calls.append(None)
+        return torch.sum((x - 1.0) ** 2) - torch.sum((y - 5.0) ** 2)
+
+    solver = SaddlePointSolver(
+        primal_step_size=0.1,
+        dual_step_size=0.1,
+        max_iter=500,
+        tol=1e-8,
+        check_interval=1,
+    )
+    problem = SaddlePointProblem(
+        objective=objective,
+        primal_initial_point=torch.zeros(1, dtype=torch.float64),
+        dual_initial_point=torch.zeros(1, dtype=torch.float64),
+    )
+
+    result = solver.solve(problem)
+
+    assert result.converged
+    assert len(calls) == result.num_iterations
+
+
+@pytest.mark.parametrize("tol", [1e-8, 1e-30])
+def test_value_is_the_objective_at_the_returned_iterates(tol: float) -> None:
+    # Covers both the converged path, where the value is reused from the
+    # last frozen iteration, and the unconverged path, where it is computed
+    # after the loop.
+    def objective(x: torch.Tensor, y: torch.Tensor) -> torch.Tensor:
+        return torch.sum((x - 1.0) ** 2) - torch.sum((y - 5.0) ** 2)
+
+    solver = SaddlePointSolver(
+        primal_step_size=0.1,
+        dual_step_size=0.1,
+        max_iter=60,
+        tol=tol,
+        check_interval=1,
+    )
+    problem = SaddlePointProblem(
+        objective=objective,
+        primal_initial_point=torch.zeros(1, dtype=torch.float64),
+        dual_initial_point=torch.zeros(1, dtype=torch.float64),
+    )
+
+    result = solver.solve(problem)
+
+    assert torch.allclose(
+        result.value, objective(result.primal_point, result.dual_point)
+    )
+
+
 def test_objective_running_a_nested_inner_solve_does_not_raise() -> None:
     # Regression test: see the matching test in `tests/solvers/
     # test_gradient_descent.py` for why the post-loop final-value
@@ -143,6 +201,37 @@ def test_objective_running_a_nested_inner_solve_does_not_raise() -> None:
 
     assert torch.allclose(result.primal_point, torch.tensor([1.0]), atol=1e-3)
     assert torch.allclose(result.dual_point, torch.tensor([5.0]), atol=1e-3)
+
+
+def test_unconverged_objective_running_a_nested_inner_solve_does_not_raise() -> None:
+    # The converged path reuses the last in-loop value, so only an
+    # unconverged solve still reaches the post-loop evaluation guarded by
+    # the regression test above. Keep that path covered.
+    inner_solver = GradientDescent(step_size=0.5, max_iter=20, tol=1e-10)
+
+    def objective(x: torch.Tensor, y: torch.Tensor) -> torch.Tensor:
+        inner_result = inner_solver.solve(
+            MinimizationProblem(
+                objective=lambda z: (z - 1.0) ** 2,
+                initial_point=torch.zeros(()),
+            )
+        )
+        return (
+            torch.sum((x - 1.0) ** 2) - torch.sum((y - 5.0) ** 2) + inner_result.value
+        )
+
+    solver = SaddlePointSolver(
+        primal_step_size=0.1, dual_step_size=0.1, max_iter=5, tol=1e-30
+    )
+    problem = SaddlePointProblem(
+        objective=objective,
+        primal_initial_point=torch.zeros(1),
+        dual_initial_point=torch.zeros(1),
+    )
+
+    result = solver.solve(problem)
+
+    assert not result.converged
 
 
 def test_objective_independent_of_the_primal_point_raises_value_error() -> None:

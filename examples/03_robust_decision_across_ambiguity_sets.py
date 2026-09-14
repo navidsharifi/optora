@@ -40,7 +40,9 @@ COST = (OUTCOMES.unsqueeze(0) - OUTCOMES.unsqueeze(1)) ** 2
 # `progress/decisions.md`), so both budgets below are tuned down
 # aggressively from each solver's own defaults; this is a demo of
 # qualitative behavior, not a tight-tolerance convergence test.
-OUTER_SOLVER = GradientDescent(step_size=0.01, max_iter=120, tol=1e-7)
+# The outer solver uses `check_interval=1` because one of its steps costs a
+# full inner dual solve, which dwarfs the synchronization a check costs.
+OUTER_SOLVER = GradientDescent(step_size=0.01, max_iter=120, tol=1e-7, check_interval=1)
 KL_DUAL_SOLVER = GradientDescent(step_size=0.1, max_iter=200, tol=1e-8)
 CHI_SQUARE_DUAL_SOLVER = GradientDescent(step_size=0.05, max_iter=300, tol=1e-8)
 WASSERSTEIN_DUAL_SOLVER = GradientDescent(step_size=0.02, max_iter=300, tol=1e-8)

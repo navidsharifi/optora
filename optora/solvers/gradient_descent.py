@@ -35,7 +35,10 @@ class GradientDescent(Solver[MinimizationProblem, MinimizationResult]):
     The gradient-norm test is evaluated on the iterate's device and read
     back to the host only every `check_interval` steps; steps taken after
     convergence are frozen, so the solution does not depend on that
-    interval. See `optora.core.convergence.ConvergenceTracker`.
+    interval. Keep `check_interval=1` when the objective is expensive, as
+    it is when this solver is the outer solver of an `optora.dro.MinimaxSolver`
+    and every step costs an inner dual solve. See
+    `optora.core.convergence.ConvergenceTracker`.
 
     Attributes:
         step_size: Positive learning rate applied to each gradient step.
@@ -61,7 +64,8 @@ class GradientDescent(Solver[MinimizationProblem, MinimizationResult]):
             tol: Convergence tolerance on the gradient norm.
             check_interval: Number of steps between host reads of the
                 convergence flag. Raise it to trade redundant frozen steps
-                for fewer device synchronizations.
+                for fewer device synchronizations, but only when a step is
+                cheap relative to a synchronization.
 
         Raises:
             ValueError: If `step_size`, `max_iter`, `tol`, or
@@ -104,11 +108,14 @@ class GradientDescent(Solver[MinimizationProblem, MinimizationResult]):
             point = point.detach().requires_grad_(True)
             if tracker.should_stop(iteration):
                 break
-        # Not wrapped in `torch.no_grad()`: an objective composed from an
-        # `AmbiguitySet.worst_case_expectation` runs its own inner
-        # autograd-based dual solve, which needs autograd enabled here too.
-        final_value = problem.objective(point).detach()
         converged, num_iterations = tracker.to_host()
+        # Once converged, the iterate has been frozen, so the last in-loop
+        # evaluation was already taken at `point`; re-evaluating would repeat
+        # the whole objective, which for a composed `optora.dro` objective is
+        # an entire inner dual solve. The fallback is deliberately not wrapped
+        # in `torch.no_grad()`: such an objective runs its own inner
+        # autograd-based dual solve, which needs autograd enabled here too.
+        final_value = value.detach() if converged else problem.objective(point).detach()
         return MinimizationResult(
             point=point.detach(),
             value=final_value,
