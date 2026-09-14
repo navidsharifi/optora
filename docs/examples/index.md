@@ -11,8 +11,8 @@ worst-case expectation really saturate at $\max_i \mathrm{loss}_i$, does the
 adversary really move mass the way the derivation claims, does the inner
 dual solve really land where a brute-force grid search says it should?
 
-So the four scripts under `examples/` are less "look how easy the API is"
-and more small numerical experiments. Each one runs end to end, prints the
+So the scripts under `examples/` are less "look how easy the API is" and
+more small numerical experiments. Each one runs end to end, prints the
 numbers it is checking, and draws a figure.
 
 ## Running them
@@ -38,7 +38,7 @@ python examples/01_kl_dro_radius_sweep.py
     linked by URL. The reasoning is in
     [`examples/README.md`](https://github.com/navidsharifi/optora/blob/main/examples/README.md).
 
-## The four experiments
+## The experiments
 
 | Example | Question it answers |
 | --- | --- |
@@ -46,10 +46,12 @@ python examples/01_kl_dro_radius_sweep.py
 | [Worst-case distribution shift](worst_case_distribution_shift.md) | Where does the adversary actually put the probability mass? |
 | [Robust decisions across geometries](robust_decision_across_ambiguity_sets.md) | How much does the choice of ambiguity set change the decision you end up making? |
 | [Convergence diagnostics](convergence_diagnostics.md) | Are the outer and the inner solve both genuinely converged, or only plausibly so? |
+| [Wasserstein-DRO and Lipschitz regularization](wasserstein_lipschitz_equivalence.md) | In what sense, exactly, is Wasserstein-DRO "the same as" a Lipschitz penalty? |
 
 They are ordered roughly by how much machinery they involve: the first one
-touches a single [`AmbiguitySet`](../api/core/dro_base.md), the last one
-pulls a solver apart to inspect its trajectory.
+touches a single [`AmbiguitySet`](../api/core/dro_base.md), the fourth
+pulls a solver apart to inspect its trajectory, and the last one turns the
+dual formula itself into the object under test.
 
 !!! warning "These scripts are tuned down on purpose"
 
