@@ -93,7 +93,9 @@ class SaddlePointSolver(Solver[SaddlePointProblem, SaddlePointResult]):
     The gradient-norm test is evaluated on the iterates' device and read
     back to the host only every `check_interval` iterations; iterations
     taken after convergence are frozen, so the solution does not depend on
-    that interval. See `optora.core.convergence.ConvergenceTracker`.
+    that interval. Keep `check_interval=1` when the objective is expensive,
+    for example when each iteration costs an `optora.dro` inner dual solve.
+    See `optora.core.convergence.ConvergenceTracker`.
 
     Attributes:
         primal_step_size: Positive learning rate for the descent step on
@@ -127,7 +129,8 @@ class SaddlePointSolver(Solver[SaddlePointProblem, SaddlePointResult]):
                 norm.
             check_interval: Number of iterations between host reads of the
                 convergence flag. Raise it to trade redundant frozen
-                iterations for fewer device synchronizations.
+                iterations for fewer device synchronizations, but only when
+                an iteration is cheap relative to a synchronization.
 
         Raises:
             ValueError: If `primal_step_size`, `dual_step_size`,
@@ -194,11 +197,18 @@ class SaddlePointSolver(Solver[SaddlePointProblem, SaddlePointResult]):
                 )
             if tracker.should_stop(iteration):
                 break
-        # Not wrapped in `torch.no_grad()`: an objective composed from an
-        # `AmbiguitySet.worst_case_expectation` runs its own inner
-        # autograd-based dual solve, which needs autograd enabled here too.
-        final_value = problem.objective(primal_point, dual_point).detach()
         converged, num_iterations = tracker.to_host()
+        if converged:
+            # Both iterates have been frozen since convergence, so the last
+            # in-loop evaluation was already taken at them. Re-evaluating
+            # would repeat the whole objective, which for a composed
+            # `optora.dro` objective is an entire inner dual solve.
+            final_value = value.detach()
+        else:
+            # Not wrapped in `torch.no_grad()`: an objective composed from an
+            # `AmbiguitySet.worst_case_expectation` runs its own inner
+            # autograd-based dual solve, which needs autograd enabled here too.
+            final_value = problem.objective(primal_point, dual_point).detach()
         return SaddlePointResult(
             primal_point=primal_point.detach(),
             dual_point=dual_point.detach(),

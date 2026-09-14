@@ -105,6 +105,47 @@ def test_does_not_synchronize_on_every_step(
     assert len(syncs) <= 50 // 10 + 1
 
 
+def test_no_objective_evaluations_after_convergence() -> None:
+    # Regression test: the post-loop final-value computation used to
+    # re-evaluate the objective at an iterate convergence had already
+    # frozen. With `check_interval=1` the objective must be evaluated
+    # exactly once per reported step, which is what makes an outer
+    # `MinimaxSolver` step cost exactly one inner dual solve.
+    calls: list[None] = []
+    minimizer = torch.tensor([3.0, -2.0], dtype=torch.float64)
+
+    def objective(x: torch.Tensor) -> torch.Tensor:
+        calls.append(None)
+        return torch.sum((x - minimizer) ** 2)
+
+    solver = GradientDescent(step_size=0.1, max_iter=500, tol=1e-8, check_interval=1)
+    problem = MinimizationProblem(
+        objective=objective, initial_point=torch.zeros(2, dtype=torch.float64)
+    )
+
+    result = solver.solve(problem)
+
+    assert result.converged
+    assert len(calls) == result.num_iterations
+
+
+@pytest.mark.parametrize("tol", [1e-8, 1e-30])
+def test_value_is_the_objective_at_the_returned_point(tol: float) -> None:
+    # Covers both the converged path, where the value is reused from the
+    # last frozen step, and the unconverged path, where it is computed
+    # after the loop.
+    minimizer = torch.tensor([3.0, -2.0], dtype=torch.float64)
+    objective = lambda x: torch.sum((x - minimizer) ** 2)  # noqa: E731
+    solver = GradientDescent(step_size=0.1, max_iter=60, tol=tol, check_interval=1)
+    problem = MinimizationProblem(
+        objective=objective, initial_point=torch.zeros(2, dtype=torch.float64)
+    )
+
+    result = solver.solve(problem)
+
+    assert torch.allclose(result.value, objective(result.point))
+
+
 def test_objective_running_a_nested_inner_solve_does_not_raise() -> None:
     # Regression test: an objective that itself runs another autograd-based
     # `GradientDescent` solve (as `AmbiguitySet.worst_case_expectation` does
@@ -130,6 +171,29 @@ def test_objective_running_a_nested_inner_solve_does_not_raise() -> None:
 
     assert result.converged
     assert torch.allclose(result.point, torch.zeros(()), atol=1e-3)
+
+
+def test_unconverged_objective_running_a_nested_inner_solve_does_not_raise() -> None:
+    # The converged path reuses the last in-loop value, so only an
+    # unconverged solve still reaches the post-loop evaluation guarded by
+    # the regression test above. Keep that path covered.
+    inner_solver = GradientDescent(step_size=0.5, max_iter=20, tol=1e-10)
+
+    def objective(x: torch.Tensor) -> torch.Tensor:
+        inner_result = inner_solver.solve(
+            MinimizationProblem(
+                objective=lambda y: (y - 1.0) ** 2,
+                initial_point=torch.zeros(()),
+            )
+        )
+        return x**2 + inner_result.value
+
+    solver = GradientDescent(step_size=0.1, max_iter=5, tol=1e-30)
+    problem = MinimizationProblem(objective=objective, initial_point=torch.tensor(5.0))
+
+    result = solver.solve(problem)
+
+    assert not result.converged
 
 
 def test_objective_independent_of_the_point_raises_value_error() -> None:

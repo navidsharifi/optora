@@ -106,9 +106,17 @@ class MinimaxSolver(Solver[MinimaxProblem, MinimaxResult]):
     exact closed form), which is more numerically direct than a generic
     ascent-descent over the simplex.
 
+    One outer iteration therefore costs an entire inner dual solve, which
+    is orders of magnitude more expensive than the host synchronization a
+    convergence check costs. Configure `solver` with `check_interval=1`:
+    the library-wide default `optora.core.convergence.DEFAULT_CHECK_INTERVAL`
+    is tuned for cheap inner loops and would keep running frozen — and
+    therefore wasted — inner solves after the outer loop has converged.
+
     Attributes:
         solver: Solver minimizing the composed worst-case-expectation
-            objective over the decision variable.
+            objective over the decision variable. Should use
+            `check_interval=1`.
     """
 
     def __init__(
@@ -119,7 +127,9 @@ class MinimaxSolver(Solver[MinimaxProblem, MinimaxResult]):
 
         Args:
             solver: Solver minimizing the composed worst-case-expectation
-                objective over the decision variable.
+                objective over the decision variable. Should use
+                `check_interval=1`, since one of its iterations costs a full
+                inner dual solve.
         """
         self.solver = solver
 

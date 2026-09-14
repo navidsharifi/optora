@@ -1,5 +1,7 @@
 """Tests for `MinimaxSolver`."""
 
+from unittest.mock import patch
+
 import pytest
 import torch
 
@@ -244,6 +246,47 @@ def test_kl_ambiguity_radius_improves_worst_case_over_naive_decision() -> None:
     naive_value = ambiguity_set.worst_case_expectation(loss_fn(naive_point))
     assert result.value <= naive_value + 1e-6
     assert not torch.allclose(result.point, initial_point)
+
+
+# --- Cost of the outer loop --------------------------------------------------
+
+
+def test_every_outer_iteration_costs_exactly_one_inner_dual_solve() -> None:
+    # Regression test: one outer iteration is an entire inner dual solve, so
+    # iterations run after convergence (under the default
+    # `check_interval`) and the post-loop final-value evaluation were pure
+    # waste. With `check_interval=1` and the value reused from the last
+    # frozen iteration, the inner dual must be solved exactly once per
+    # reported outer iteration.
+    nominal = torch.tensor([0.25, 0.5, 0.25], dtype=torch.float64)
+    targets = torch.tensor([0.0, 1.0, 2.0], dtype=torch.float64)
+    ambiguity_set = KLAmbiguitySet(
+        nominal,
+        radius=0.2,
+        dual_solver=GradientDescent(step_size=0.3, max_iter=200, tol=1e-10),
+    )
+
+    def loss_fn(x: torch.Tensor) -> torch.Tensor:
+        return (x - targets) ** 2
+
+    problem = MinimaxProblem(
+        ambiguity_set=ambiguity_set,
+        loss_fn=loss_fn,
+        initial_point=torch.tensor(0.0, dtype=torch.float64),
+    )
+    solver = MinimaxSolver(
+        solver=GradientDescent(step_size=0.1, max_iter=100, tol=1e-8, check_interval=1)
+    )
+
+    with patch.object(
+        ambiguity_set,
+        "worst_case_expectation",
+        wraps=ambiguity_set.worst_case_expectation,
+    ) as spy:
+        result = solver.solve(problem)
+
+    assert result.converged
+    assert spy.call_count == result.num_iterations
 
 
 # --- Generic wiring across ambiguity-set types -------------------------------
