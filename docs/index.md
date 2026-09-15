@@ -88,3 +88,8 @@ pip install -e ".[dev,docs]"
     `tools.docs` discovers every public module under `optora/`, writes one page
     per module, and rewrites the API navigation. Never edit the generated pages
     by hand.
+
+## Contributing
+
+Development workflow, coding style, and the pull request checklist live in
+[`CONTRIBUTING.md`](https://github.com/navidsharifi/optora/blob/main/CONTRIBUTING.md).
