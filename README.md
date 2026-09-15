@@ -66,6 +66,8 @@ mypy's strict mode.
   `examples` extra (`pip install -e ".[examples]"`).
 - **API reference:** built with Zensical from source docstrings, see
   [`docs/`](docs/index.md).
+- **Contributing:** development workflow, coding style, and the PR
+  checklist live in [`CONTRIBUTING.md`](CONTRIBUTING.md).
 
 ## Development
 
