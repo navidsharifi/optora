@@ -83,8 +83,9 @@ class PhiAmbiguitySet(DualAmbiguitySet):
         nominal: Reference distribution the ambiguity set is centered on.
         divergence: `PhiDivergence` instance measuring distance from
             `nominal`.
-        radius: Nonnegative scalar bounding the phi-divergence of any
-            distribution inside the ambiguity set from `nominal`.
+        radius: Nonnegative bound on the phi-divergence of any distribution
+            inside the ambiguity set from `nominal`, either a float or a
+            tensor of radii evaluated as one batch.
         phi_conjugate: Convex (Legendre-Fenchel) conjugate of
             `divergence.phi`, finite everywhere on the real line.
         dual_solver: Solver minimizing the dual objective over
@@ -98,7 +99,7 @@ class PhiAmbiguitySet(DualAmbiguitySet):
         self,
         nominal: torch.Tensor,
         divergence: PhiDivergence,
-        radius: float,
+        radius: float | torch.Tensor,
         phi_conjugate: Callable[[torch.Tensor], torch.Tensor],
         dual_solver: Solver[MinimizationProblem, MinimizationResult] | None = None,
         initial_log_eta: float = 0.0,
@@ -112,8 +113,10 @@ class PhiAmbiguitySet(DualAmbiguitySet):
                 dimension.
             divergence: `PhiDivergence` instance measuring distance from
                 `nominal`.
-            radius: Nonnegative scalar bounding the phi-divergence of any
-                distribution inside the ambiguity set from `nominal`.
+            radius: Nonnegative bound on the phi-divergence of any
+                distribution inside the ambiguity set from `nominal`. A
+                tensor radius is broadcast against the batch shape of
+                `worst_case_expectation`'s `loss`.
             phi_conjugate: Convex conjugate of `divergence.phi`, finite
                 everywhere on the real line.
             dual_solver: Solver minimizing the dual objective over
@@ -126,7 +129,7 @@ class PhiAmbiguitySet(DualAmbiguitySet):
                 warm-started on later calls alongside `initial_log_eta`.
 
         Raises:
-            ValueError: If `radius` is negative.
+            ValueError: If `radius` is a negative float.
         """
         super().__init__(
             nominal=nominal,
@@ -145,39 +148,39 @@ class PhiAmbiguitySet(DualAmbiguitySet):
         """Compute the worst-case expected loss over the phi-divergence ambiguity set.
 
         Args:
-            loss: Per-scenario loss values, one entry per element of
-                `nominal`'s support.
+            loss: Per-scenario loss values of shape `(..., n)`, one trailing
+                entry per element of `nominal`'s support. Leading dimensions
+                are a batch of independent loss vectors, each solved with
+                its own dual pair `(log(eta), lam)` in a single joint solve.
 
         Returns:
-            A scalar tensor holding the worst-case expected loss: the exact
-            `sum(nominal * loss)` when `radius` is zero (the ambiguity set
-            then contains only `nominal`), otherwise the convex dual
-            objective evaluated at the `(log(eta), lam)` found by
-            `dual_solver`.
+            A tensor of shape `(...)` holding the worst-case expected loss:
+            the exact `sum(nominal * loss)` when `radius` is zero (the
+            ambiguity set then contains only `nominal`), otherwise the
+            convex dual objective evaluated at the `(log(eta), lam)` found
+            by `dual_solver`.
 
         Raises:
-            ValueError: If `loss` does not have the same shape as
-                `nominal`.
+            ValueError: If `loss`'s trailing dimension does not match
+                `nominal`'s support size, or its batch shape does not
+                broadcast against `nominal` and `radius`.
             RuntimeError: If `radius` is positive and `dual_solver` is
                 `None`.
         """
-        if loss.shape != self.nominal.shape:
-            raise ValueError(
-                f"loss must have the same shape as nominal, got {tuple(loss.shape)} "
-                f"and {tuple(self.nominal.shape)}."
-            )
-        if self.radius == 0.0:
-            return torch.sum(self.nominal * loss)
+        batch_shape = self._batch_shape(loss)
+        if self._radius_is_zero:
+            return self._nominal_expectation(loss, batch_shape)
 
         def dual_objective(params: torch.Tensor) -> torch.Tensor:
-            eta = torch.exp(params[0])
-            lam = params[1]
+            eta = torch.exp(params[..., 0])
+            lam = params[..., 1]
+            scaled_shift = (loss - lam.unsqueeze(-1)) / eta.unsqueeze(-1)
             conjugate_term = torch.sum(
-                self.nominal * self.phi_conjugate((loss - lam) / eta)
+                self.nominal * self.phi_conjugate(scaled_shift), dim=-1
             )
             return eta * self.radius + lam + eta * conjugate_term
 
-        return self._solve_dual(dual_objective)
+        return self._solve_dual(dual_objective, batch_shape)
 
 
 class ChiSquareAmbiguitySet(PhiAmbiguitySet):
@@ -212,7 +215,7 @@ class ChiSquareAmbiguitySet(PhiAmbiguitySet):
     def __init__(
         self,
         nominal: torch.Tensor,
-        radius: float,
+        radius: float | torch.Tensor,
         eps: float = 1e-12,
         dual_solver: Solver[MinimizationProblem, MinimizationResult] | None = None,
         initial_log_eta: float = 0.0,
@@ -224,8 +227,10 @@ class ChiSquareAmbiguitySet(PhiAmbiguitySet):
             nominal: Reference distribution the ambiguity set is centered
                 on, a nonnegative tensor that sums to one along its last
                 dimension.
-            radius: Nonnegative scalar bounding the chi-square divergence of
-                any distribution inside the ambiguity set from `nominal`.
+            radius: Nonnegative bound on the chi-square divergence of any
+                distribution inside the ambiguity set from `nominal`. A
+                tensor radius is broadcast against the batch shape of
+                `worst_case_expectation`'s `loss`.
             eps: Small positive constant used to clamp `nominal` away from
                 zero before dividing, passed through to the underlying
                 `ChiSquareDivergence`.
@@ -239,7 +244,8 @@ class ChiSquareAmbiguitySet(PhiAmbiguitySet):
                 warm-started on later calls alongside `initial_log_eta`.
 
         Raises:
-            ValueError: If `radius` is negative or `eps` is not positive.
+            ValueError: If `radius` is a negative float or `eps` is not
+                positive.
         """
         super().__init__(
             nominal=nominal,
@@ -283,14 +289,15 @@ class TotalVariationAmbiguitySet(AmbiguitySet):
         nominal: Reference distribution the ambiguity set is centered on.
         divergence: `TotalVariationDivergence` instance measuring distance
             from `nominal`.
-        radius: Nonnegative scalar bounding the total variation distance of
-            any distribution inside the ambiguity set from `nominal`.
+        radius: Nonnegative bound on the total variation distance of any
+            distribution inside the ambiguity set from `nominal`, either a
+            float or a tensor of radii evaluated as one batch.
     """
 
     def __init__(
         self,
         nominal: torch.Tensor,
-        radius: float,
+        radius: float | torch.Tensor,
         eps: float = 1e-12,
     ) -> None:
         """Initialize the total variation ambiguity set.
@@ -299,14 +306,18 @@ class TotalVariationAmbiguitySet(AmbiguitySet):
             nominal: Reference distribution the ambiguity set is centered
                 on, a nonnegative tensor that sums to one along its last
                 dimension.
-            radius: Nonnegative scalar bounding the total variation distance
-                of any distribution inside the ambiguity set from `nominal`.
+            radius: Nonnegative bound on the total variation distance of any
+                distribution inside the ambiguity set from `nominal`. A
+                tensor radius is broadcast against the batch shape of
+                `worst_case_expectation`'s `loss`, which turns a radius
+                sweep into one vectorized evaluation of the closed form.
             eps: Small positive constant used to clamp the reference
                 distribution away from zero before dividing, passed through
                 to the underlying `TotalVariationDivergence`.
 
         Raises:
-            ValueError: If `radius` is negative or `eps` is not positive.
+            ValueError: If `radius` is a negative float or `eps` is not
+                positive.
         """
         super().__init__(
             nominal=nominal,
@@ -318,39 +329,41 @@ class TotalVariationAmbiguitySet(AmbiguitySet):
         """Compute the worst-case expected loss over the total variation ambiguity set.
 
         Args:
-            loss: Per-scenario loss values, one entry per element of
-                `nominal`'s support.
+            loss: Per-scenario loss values of shape `(..., n)`, one trailing
+                entry per element of `nominal`'s support. Leading dimensions
+                are a batch of independent loss vectors; the closed form is
+                evaluated over the whole batch at once, with no solver and
+                no Python-level loop over batch elements.
 
         Returns:
-            A scalar tensor holding the worst-case expected loss: the exact
-            `sum(nominal * loss)` when `radius` is zero (the ambiguity set
-            then contains only `nominal`), otherwise the closed-form value
-            of the mass-reallocation linear program described in the class
-            docstring.
+            A tensor of shape `(...)` holding the worst-case expected loss:
+            the exact `sum(nominal * loss)` when `radius` is zero (the
+            ambiguity set then contains only `nominal`), otherwise the
+            closed-form value of the mass-reallocation linear program
+            described in the class docstring.
 
         Raises:
-            ValueError: If `loss` does not have the same shape as
-                `nominal`.
+            ValueError: If `loss`'s trailing dimension does not match
+                `nominal`'s support size, or its batch shape does not
+                broadcast against `nominal` and `radius`.
         """
-        if loss.shape != self.nominal.shape:
-            raise ValueError(
-                f"loss must have the same shape as nominal, got {tuple(loss.shape)} "
-                f"and {tuple(self.nominal.shape)}."
-            )
-        if self.radius == 0.0:
-            return torch.sum(self.nominal * loss)
+        batch_shape = self._batch_shape(loss)
+        if self._radius_is_zero:
+            return self._nominal_expectation(loss, batch_shape)
 
-        sorted_loss, sort_index = torch.sort(loss)
-        sorted_nominal = self.nominal[sort_index]
+        sorted_loss, sort_index = torch.sort(loss, dim=-1)
+        sorted_nominal = self.nominal.expand_as(loss).gather(-1, sort_index)
 
-        rest_nominal = sorted_nominal[:-1]
-        rest_loss = sorted_loss[:-1]
-        max_loss = sorted_loss[-1]
+        rest_nominal = sorted_nominal[..., :-1]
+        rest_loss = sorted_loss[..., :-1]
+        max_loss = sorted_loss[..., -1:]
 
-        mass_available_before = torch.cumsum(rest_nominal, dim=0) - rest_nominal
-        remaining_budget = torch.clamp(self.radius - mass_available_before, min=0.0)
+        radius = self.radius
+        budget = radius.unsqueeze(-1) if isinstance(radius, torch.Tensor) else radius
+        mass_available_before = torch.cumsum(rest_nominal, dim=-1) - rest_nominal
+        remaining_budget = torch.clamp(budget - mass_available_before, min=0.0)
         reallocated_mass = torch.minimum(remaining_budget, rest_nominal)
 
-        return torch.sum(self.nominal * loss) + torch.sum(
-            reallocated_mass * (max_loss - rest_loss)
-        )
+        nominal_expectation = torch.sum(self.nominal * loss, dim=-1)
+        reallocation_gain = torch.sum(reallocated_mass * (max_loss - rest_loss), dim=-1)
+        return (nominal_expectation + reallocation_gain).expand(batch_shape)

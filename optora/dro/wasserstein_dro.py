@@ -76,8 +76,9 @@ class WassersteinAmbiguitySet(DualAmbiguitySet):
         nominal: Reference distribution the ambiguity set is centered on.
         divergence: `SinkhornDivergence` instance approximating distance
             from `nominal` for `contains(...)`.
-        radius: Nonnegative scalar bounding the Wasserstein distance of any
-            distribution inside the ambiguity set from `nominal`.
+        radius: Nonnegative bound on the Wasserstein distance of any
+            distribution inside the ambiguity set from `nominal`, either a
+            float or a tensor of radii evaluated as one batch.
         cost: Square, nonnegative pairwise ground cost matrix between the
             shared support points of `nominal` and any candidate
             distribution.
@@ -93,7 +94,7 @@ class WassersteinAmbiguitySet(DualAmbiguitySet):
         self,
         nominal: torch.Tensor,
         cost: torch.Tensor,
-        radius: float,
+        radius: float | torch.Tensor,
         epsilon: float = 0.1,
         sinkhorn_max_iter: int = 100,
         sinkhorn_tol: float = 1e-6,
@@ -111,8 +112,11 @@ class WassersteinAmbiguitySet(DualAmbiguitySet):
             cost: Square, nonnegative pairwise ground cost matrix between
                 the shared support points of `nominal` and any candidate
                 distribution, shape `(n, n)` where `n = nominal.shape[-1]`.
-            radius: Nonnegative scalar bounding the Wasserstein distance of
-                any distribution inside the ambiguity set from `nominal`.
+            radius: Nonnegative bound on the Wasserstein distance of any
+                distribution inside the ambiguity set from `nominal`. A
+                tensor radius is broadcast against the batch shape of
+                `worst_case_expectation`'s `loss`, evaluating a sweep of
+                radii in one solve.
             epsilon: Positive entropic regularization strength for the
                 `SinkhornDivergence` used by `contains(...)`.
             sinkhorn_max_iter: Maximum number of Sinkhorn scaling
@@ -134,8 +138,8 @@ class WassersteinAmbiguitySet(DualAmbiguitySet):
                 to keep construction asynchronous.
 
         Raises:
-            ValueError: If `radius` is negative, if `cost` is not a square
-                2D tensor, if `validate` is set and `cost` contains
+            ValueError: If `radius` is a negative float, if `cost` is not a
+                square 2D tensor, if `validate` is set and `cost` contains
                 negative entries, or if `cost`'s size does not match
                 `nominal`'s support size.
         """
@@ -166,28 +170,28 @@ class WassersteinAmbiguitySet(DualAmbiguitySet):
         """Compute the worst-case expected loss over the Wasserstein ambiguity set.
 
         Args:
-            loss: Per-scenario loss values, one entry per element of
-                `nominal`'s support.
+            loss: Per-scenario loss values of shape `(..., n)`, one trailing
+                entry per element of `nominal`'s support. Leading dimensions
+                are a batch of independent loss vectors, each solved with
+                its own dual variable `gamma` in a single joint solve.
 
         Returns:
-            A scalar tensor holding the worst-case expected loss: the exact
-            `sum(nominal * loss)` when `radius` is zero (the ambiguity set
-            then contains only `nominal`), otherwise the convex dual
-            objective evaluated at the `gamma` found by `dual_solver`.
+            A tensor of shape `(...)` holding the worst-case expected loss:
+            the exact `sum(nominal * loss)` when `radius` is zero (the
+            ambiguity set then contains only `nominal`), otherwise the
+            convex dual objective evaluated at the `gamma` found by
+            `dual_solver`.
 
         Raises:
-            ValueError: If `loss` does not have the same shape as
-                `nominal`.
+            ValueError: If `loss`'s trailing dimension does not match
+                `nominal`'s support size, or its batch shape does not
+                broadcast against `nominal` and `radius`.
             RuntimeError: If `radius` is positive and `dual_solver` is
                 `None`.
         """
-        if loss.shape != self.nominal.shape:
-            raise ValueError(
-                f"loss must have the same shape as nominal, got {tuple(loss.shape)} "
-                f"and {tuple(self.nominal.shape)}."
-            )
-        if self.radius == 0.0:
-            return torch.sum(self.nominal * loss)
+        batch_shape = self._batch_shape(loss)
+        if self._radius_is_zero:
+            return self._nominal_expectation(loss, batch_shape)
 
         def dual_objective(gamma_raw: torch.Tensor) -> torch.Tensor:
             # `where` keeps the one-sided derivative at gamma_raw = 0, where
@@ -195,8 +199,8 @@ class WassersteinAmbiguitySet(DualAmbiguitySet):
             gamma = torch.where(
                 gamma_raw >= 0.0, gamma_raw, torch.zeros_like(gamma_raw)
             )
-            shifted = loss.unsqueeze(-2) - gamma * self.cost
+            shifted = loss.unsqueeze(-2) - gamma[..., None, None] * self.cost
             row_max = torch.amax(shifted, dim=-1)
-            return gamma * self.radius + torch.sum(self.nominal * row_max)
+            return gamma * self.radius + torch.sum(self.nominal * row_max, dim=-1)
 
-        return self._solve_dual(dual_objective)
+        return self._solve_dual(dual_objective, batch_shape)

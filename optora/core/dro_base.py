@@ -14,6 +14,33 @@ from optora.core.solver_base import (
 )
 
 
+def _broadcast_batch_shapes(**shapes: torch.Size) -> torch.Size:
+    """Broadcast named batch shapes together under NumPy broadcasting rules.
+
+    Args:
+        **shapes: Batch shapes to broadcast, keyed by the name of the
+            argument each came from so a failure can point at it.
+
+    Returns:
+        The common shape every input broadcasts to.
+
+    Raises:
+        ValueError: If the shapes are not mutually broadcastable.
+    """
+    rank = max((len(shape) for shape in shapes.values()), default=0)
+    aligned = [(1,) * (rank - len(shape)) + tuple(shape) for shape in shapes.values()]
+    broadcast: list[int] = []
+    for dimensions in zip(*aligned, strict=True):
+        size = max(dimensions)
+        if any(dimension not in (1, size) for dimension in dimensions):
+            named = ", ".join(
+                f"{name}={tuple(shape)}" for name, shape in shapes.items()
+            )
+            raise ValueError(f"batch shapes do not broadcast: {named}.")
+        broadcast.append(size)
+    return torch.Size(broadcast)
+
+
 class AmbiguitySet(nn.Module, ABC):
     """Set of distributions within a bounded divergence of a nominal distribution.
 
@@ -33,17 +60,20 @@ class AmbiguitySet(nn.Module, ABC):
         nominal: Reference distribution the ambiguity set is centered on, a
             nonnegative tensor that sums to one along its last dimension.
         divergence: Divergence used to measure distance from `nominal`.
-        radius: Nonnegative scalar bounding the divergence of any
-            distribution inside the ambiguity set from `nominal`.
+        radius: Nonnegative bound on the divergence of any distribution
+            inside the ambiguity set from `nominal`, either a Python float
+            or a tensor of radii broadcastable against the batch shape of
+            `worst_case_expectation`'s `loss`.
     """
 
     nominal: torch.Tensor
+    radius: float | torch.Tensor
 
     def __init__(
         self,
         nominal: torch.Tensor,
         divergence: Divergence,
-        radius: float,
+        radius: float | torch.Tensor,
     ) -> None:
         """Initialize the ambiguity set.
 
@@ -51,18 +81,83 @@ class AmbiguitySet(nn.Module, ABC):
             nominal: Reference distribution the ambiguity set is centered
                 on.
             divergence: Divergence used to measure distance from `nominal`.
-            radius: Nonnegative scalar bounding the divergence of any
-                distribution inside the ambiguity set from `nominal`.
+            radius: Nonnegative bound on the divergence of any distribution
+                inside the ambiguity set from `nominal`. A tensor radius is
+                registered as a buffer and broadcast against the batch
+                shape of `worst_case_expectation`'s `loss`, which evaluates
+                a whole sweep of radii in one call; its entries are not
+                checked for nonnegativity, since reading them on the host
+                would block on the device (the same opt-in policy the
+                divergences apply to their tensor arguments), and a tensor
+                radius never takes the zero-radius shortcut.
 
         Raises:
-            ValueError: If `radius` is negative.
+            ValueError: If `radius` is a negative float.
         """
         super().__init__()
-        if radius < 0:
-            raise ValueError(f"radius must be nonnegative, got {radius}.")
         self.register_buffer("nominal", nominal)
         self.divergence = divergence
-        self.radius = radius
+        if isinstance(radius, torch.Tensor):
+            self.register_buffer("radius", radius)
+            self._radius_is_zero = False
+        else:
+            if radius < 0:
+                raise ValueError(f"radius must be nonnegative, got {radius}.")
+            self.radius = radius
+            self._radius_is_zero = radius == 0.0
+
+    def _batch_shape(self, loss: torch.Tensor) -> torch.Size:
+        """Validate a loss tensor and return the batch shape it induces.
+
+        Args:
+            loss: Per-scenario loss values of shape `(..., n)`, where `n` is
+                `nominal`'s support size.
+
+        Returns:
+            The broadcast of `loss`'s leading dimensions against those of
+            `nominal` and against `radius`'s shape: the shape every
+            `worst_case_expectation` returns, and the shape of the per-batch
+            dual variables solved for along the way.
+
+        Raises:
+            ValueError: If `loss` is zero-dimensional, if its trailing
+                dimension does not match `nominal`'s support size, or if its
+                leading dimensions do not broadcast against `nominal` and
+                `radius`.
+        """
+        nominal = self.nominal
+        if loss.ndim == 0 or loss.shape[-1] != nominal.shape[-1]:
+            raise ValueError(
+                "loss must have shape (..., n) matching nominal's support size "
+                f"{nominal.shape[-1]}, got {tuple(loss.shape)}."
+            )
+        return _broadcast_batch_shapes(
+            loss=loss.shape[:-1],
+            nominal=nominal.shape[:-1],
+            radius=self._radius_shape,
+        )
+
+    @property
+    def _radius_shape(self) -> torch.Size:
+        """Shape a tensor radius contributes to the batch shape, empty for a float."""
+        radius = self.radius
+        return radius.shape if isinstance(radius, torch.Tensor) else torch.Size()
+
+    def _nominal_expectation(
+        self, loss: torch.Tensor, batch_shape: torch.Size
+    ) -> torch.Tensor:
+        """Return the nominal expectation of `loss`, broadcast to `batch_shape`.
+
+        Args:
+            loss: Per-scenario loss values of shape `(..., n)`.
+            batch_shape: Shape returned by `_batch_shape` for this `loss`.
+
+        Returns:
+            `sum(nominal * loss)` over the support, expanded to
+            `batch_shape`. This is the exact worst-case expectation of a
+            zero-radius ambiguity set, which contains only `nominal`.
+        """
+        return torch.sum(self.nominal * loss, dim=-1).expand(batch_shape)
 
     def contains(self, candidate: torch.Tensor) -> torch.Tensor:
         """Check whether a candidate distribution lies inside the ambiguity set.
@@ -89,12 +184,14 @@ class AmbiguitySet(nn.Module, ABC):
         """Compute the worst-case expected loss over the ambiguity set.
 
         Args:
-            loss: Per-scenario loss values, one entry per element of
-                `nominal`'s support.
+            loss: Per-scenario loss values of shape `(..., n)`, one trailing
+                entry per element of `nominal`'s support. Leading dimensions
+                are a batch of independent loss vectors, solved in one call.
 
         Returns:
-            A scalar tensor holding the worst-case expected loss attainable
-            by any distribution inside the ambiguity set.
+            A tensor of shape `(...)` holding, for each batch element, the
+            worst-case expected loss attainable by any distribution inside
+            the ambiguity set. An unbatched `(n,)` loss gives a scalar.
         """
         raise NotImplementedError
 
@@ -125,16 +222,27 @@ class DualAmbiguitySet(AmbiguitySet):
     `initial_dual_point`, for example before evaluating an unrelated loss or
     after a diverged solve.
 
+    A batched `loss` of shape `(..., n)` is solved with one set of dual
+    variables per batch element, since the duals decouple across batch
+    elements. `_solve_dual` therefore hands `dual_solver` the *sum* of the
+    per-element dual objectives: the sum's gradient with respect to any one
+    element's dual variables is that element's own gradient, so a single
+    joint solve reproduces independent per-element solves exactly.
+    Convergence is judged on the joint gradient norm over the whole batch,
+    so every element keeps iterating until the batch as a whole is
+    stationary (see `progress/decisions.md`).
+
     Attributes:
         nominal: Reference distribution the ambiguity set is centered on.
         divergence: Divergence used to measure distance from `nominal`.
-        radius: Nonnegative scalar bounding the divergence of any
-            distribution inside the ambiguity set from `nominal`.
+        radius: Nonnegative bound on the divergence of any distribution
+            inside the ambiguity set from `nominal`.
         dual_solver: Solver minimizing the dual objective. Required to
             evaluate a positive-radius set.
-        initial_dual_point: Dual point the first solve starts from,
-            registered as a buffer so it is built once and follows
-            `.to(device)` with the rest of the module.
+        initial_dual_point: Dual point of a *single* batch element that the
+            first solve starts from, registered as a buffer so it is built
+            once and follows `.to(device)` with the rest of the module. It
+            is expanded over the batch shape of the loss being evaluated.
     """
 
     initial_dual_point: torch.Tensor
@@ -144,7 +252,7 @@ class DualAmbiguitySet(AmbiguitySet):
         self,
         nominal: torch.Tensor,
         divergence: Divergence,
-        radius: float,
+        radius: float | torch.Tensor,
         dual_solver: Solver[MinimizationProblem, MinimizationResult] | None,
         initial_dual_point: torch.Tensor,
     ) -> None:
@@ -154,14 +262,15 @@ class DualAmbiguitySet(AmbiguitySet):
             nominal: Reference distribution the ambiguity set is centered
                 on.
             divergence: Divergence used to measure distance from `nominal`.
-            radius: Nonnegative scalar bounding the divergence of any
-                distribution inside the ambiguity set from `nominal`.
+            radius: Nonnegative bound on the divergence of any distribution
+                inside the ambiguity set from `nominal`.
             dual_solver: Solver minimizing the dual objective. Required to
                 evaluate a positive-radius set.
-            initial_dual_point: Dual point the first solve starts from.
+            initial_dual_point: Dual point of a single batch element that
+                the first solve starts from.
 
         Raises:
-            ValueError: If `radius` is negative.
+            ValueError: If `radius` is a negative float.
         """
         super().__init__(nominal=nominal, divergence=divergence, radius=radius)
         self.dual_solver = dual_solver
@@ -177,20 +286,27 @@ class DualAmbiguitySet(AmbiguitySet):
         self._dual_warm_start = None
 
     def _solve_dual(
-        self, dual_objective: Callable[[torch.Tensor], torch.Tensor]
+        self,
+        dual_objective: Callable[[torch.Tensor], torch.Tensor],
+        batch_shape: torch.Size,
     ) -> torch.Tensor:
         """Minimize a dual objective and return its value at the optimum.
 
         Args:
-            dual_objective: Formulation-specific convex dual objective of
-                the dual variables, closing over the `loss` it was built
-                for.
+            dual_objective: Formulation-specific convex dual objective,
+                closing over the `loss` it was built for. It maps dual
+                variables of shape `batch_shape + initial_dual_point.shape`
+                to per-batch-element dual values of shape `batch_shape`.
+            batch_shape: Batch shape of the loss being evaluated, as
+                returned by `AmbiguitySet._batch_shape`.
 
         Returns:
-            A scalar tensor holding `dual_objective` re-evaluated at the
-            dual optimum found by `dual_solver`. The re-evaluation is what
-            keeps the result differentiable with respect to `loss` even
-            though the dual variables themselves are detached.
+            A tensor of shape `batch_shape` holding `dual_objective`
+            re-evaluated at the dual optimum found by `dual_solver`. The
+            re-evaluation is what keeps the result differentiable with
+            respect to `loss` even though the dual variables themselves are
+            detached. The cached warm start is reused only when its shape
+            still matches the batch being solved.
 
         Raises:
             RuntimeError: If `dual_solver` is `None`.
@@ -200,11 +316,15 @@ class DualAmbiguitySet(AmbiguitySet):
                 "dual_solver is required to evaluate a positive-radius "
                 f"{type(self).__name__}."
             )
+        initial = self.initial_dual_point
+        start_shape = batch_shape + initial.shape
         warm_start = self._dual_warm_start
         problem = MinimizationProblem(
-            objective=dual_objective,
+            objective=lambda point: torch.sum(dual_objective(point)),
             initial_point=(
-                self.initial_dual_point if warm_start is None else warm_start
+                warm_start
+                if warm_start is not None and warm_start.shape == start_shape
+                else initial.expand(start_shape)
             ),
         )
         result = self.dual_solver.solve(problem)
