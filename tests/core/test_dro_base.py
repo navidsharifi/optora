@@ -135,10 +135,12 @@ class _QuadraticDualAmbiguitySet(DualAmbiguitySet):
     """Dual-solved ambiguity set with a trivially convex scalar dual."""
 
     def worst_case_expectation(self, loss: torch.Tensor) -> torch.Tensor:
-        def dual_objective(dual_point: torch.Tensor) -> torch.Tensor:
-            return torch.sum((dual_point - loss.sum()) ** 2)
+        batch_shape = self._batch_shape(loss)
 
-        return self._solve_dual(dual_objective)
+        def dual_objective(dual_point: torch.Tensor) -> torch.Tensor:
+            return (dual_point - loss.sum(dim=-1)) ** 2
+
+        return self._solve_dual(dual_objective, batch_shape)
 
 
 def _dual_ambiguity_set(
