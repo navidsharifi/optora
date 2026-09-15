@@ -47,11 +47,13 @@ python examples/01_kl_dro_radius_sweep.py
 | [Robust decisions across geometries](robust_decision_across_ambiguity_sets.md) | How much does the choice of ambiguity set change the decision you end up making? |
 | [Convergence diagnostics](convergence_diagnostics.md) | Are the outer and the inner solve both genuinely converged, or only plausibly so? |
 | [Wasserstein-DRO and Lipschitz regularization](wasserstein_lipschitz_equivalence.md) | In what sense, exactly, is Wasserstein-DRO "the same as" a Lipschitz penalty? |
+| [Calibrating the ambiguity radius](calibrated_ambiguity_radius.md) | What radius should you actually use, and does the finite-sample theory that answers it hold up at the sample size you have? |
 
 They are ordered roughly by how much machinery they involve: the first one
 touches a single [`AmbiguitySet`](../api/core/dro_base.md), the fourth
-pulls a solver apart to inspect its trajectory, and the last one turns the
-dual formula itself into the object under test.
+pulls a solver apart to inspect its trajectory, the fifth turns the dual
+formula itself into the object under test, and the last one stops treating
+the radius as a free parameter at all.
 
 !!! warning "These scripts are tuned down on purpose"
 
@@ -60,7 +62,9 @@ dual formula itself into the object under test.
     multiplies iteration counts unpleasantly fast. The budgets in those
     scripts are much smaller than each solver's defaults. They are chosen
     to show qualitative behaviour — monotonicity, limits, ordering — not to
-    hit tight tolerances.
+    hit tight tolerances. Example 6 is the slowest of the set for a
+    different reason: estimating a coverage probability needs thousands of
+    independent dual solves, not deeper ones.
 
 ## The shared plotting helper
 

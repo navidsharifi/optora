@@ -294,6 +294,32 @@ def test_chi_square_matches_mean_plus_sqrt_radius_variance_in_interior_regime() 
     assert torch.allclose(result, expected, atol=1e-4)
 
 
+def test_chi_square_calibrated_radius_gives_the_normal_interval() -> None:
+    """The Duchi-Namkoong calibration must reproduce the textbook normal interval.
+
+    Setting `radius = chi2_{1, 1 - alpha} / n` on the uniform empirical
+    distribution of `n` observations makes the ambiguity set an
+    asymptotically valid `1 - alpha` confidence region, which in the
+    interior regime means the worst-case expectation is exactly the upper
+    end of the normal confidence interval,
+    `mean + z_{1 - alpha/2} * std / sqrt(n)`.
+    """
+    num_samples = 64
+    quantiles = (torch.arange(num_samples, dtype=torch.float64) + 0.5) / num_samples
+    observations = torch.special.ndtri(quantiles)
+    nominal = torch.full_like(observations, 1.0 / num_samples)
+    normal_quantile = torch.special.ndtri(torch.tensor(0.975, dtype=torch.float64))
+    radius = float(normal_quantile**2) / num_samples
+    solver = GradientDescent(step_size=0.1, max_iter=5000, tol=1e-11)
+    ambiguity_set = ChiSquareAmbiguitySet(nominal, radius=radius, dual_solver=solver)
+
+    result = ambiguity_set.worst_case_expectation(observations)
+
+    standard_error = torch.std(observations, unbiased=False) / num_samples**0.5
+    expected = torch.mean(observations) + normal_quantile * standard_error
+    assert torch.allclose(result, expected, atol=1e-6)
+
+
 def test_chi_square_matches_grid_search_over_dual_variables() -> None:
     nominal = torch.tensor([0.1, 0.2, 0.3, 0.4], dtype=torch.float64)
     loss = torch.tensor([0.0, 1.0, 2.0, 5.0], dtype=torch.float64)
