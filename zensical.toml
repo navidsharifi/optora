@@ -70,6 +70,7 @@ nav = [
     { "Robust decisions across geometries" = "examples/robust_decision_across_ambiguity_sets.md" },
     { "Convergence diagnostics" = "examples/convergence_diagnostics.md" },
     { "Wasserstein-DRO and Lipschitz regularization" = "examples/wasserstein_lipschitz_equivalence.md" },
+    { "Calibrating the ambiguity radius" = "examples/calibrated_ambiguity_radius.md" },
   ] },
   # BEGIN GENERATED API NAVIGATION
   { "API reference" = [

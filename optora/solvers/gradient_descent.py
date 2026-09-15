@@ -40,6 +40,16 @@ class GradientDescent(Solver[MinimizationProblem, MinimizationResult]):
     and every step costs an inner dual solve. See
     `optora.core.convergence.ConvergenceTracker`.
 
+    The point is a single tensor of any shape, and the stopping rule is the
+    norm of the whole gradient. A batch of independent problems stacked into
+    one point (as an `optora.dro` ambiguity set does for a batched loss) is
+    therefore stopped jointly: iteration continues until every element is
+    stationary. Per-element early exit is deliberately not offered, since
+    retiring elements individually needs a host-side read of a per-element
+    mask on every step, which is exactly the synchronization
+    `ConvergenceTracker` exists to avoid. The frozen-step rule makes the
+    extra steps exact no-ops for elements that already converged.
+
     Attributes:
         step_size: Positive learning rate applied to each gradient step.
         max_iter: Maximum number of gradient steps.
