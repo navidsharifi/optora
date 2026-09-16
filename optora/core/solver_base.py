@@ -7,6 +7,8 @@ from typing import Generic, TypeVar
 
 import torch
 
+from optora.core.convergence import ConvergenceDiagnostics, ConvergenceStatus
+
 ProblemT = TypeVar("ProblemT")
 ResultT = TypeVar("ResultT")
 
@@ -64,21 +66,21 @@ class MinimizationProblem:
 
 
 @dataclass(frozen=True)
-class MinimizationResult:
+class MinimizationResult(ConvergenceDiagnostics):
     """Outcome of solving a `MinimizationProblem`.
 
     Attributes:
         point: Final iterate.
         value: Objective value at `point`.
-        converged: Whether the solver's convergence criterion was met before
-            its iteration budget was exhausted.
-        num_iterations: Number of iterations actually performed.
+        status: Convergence diagnostics of the solve, exposed on the host
+            as `converged` and `num_iterations` by `ConvergenceDiagnostics`
+            and read back from the device only when one of those is
+            accessed.
     """
 
     point: torch.Tensor
     value: torch.Tensor
-    converged: bool
-    num_iterations: int
+    status: ConvergenceStatus
 
 
 def require_gradient(gradient: torch.Tensor | None, variable: str) -> torch.Tensor:

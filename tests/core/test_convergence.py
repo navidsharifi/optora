@@ -64,7 +64,8 @@ def test_iteration_count_stops_advancing_after_convergence() -> None:
     for residual in (1.0, 1.0, 0.1, 0.1, 0.1):
         tracker.update(torch.tensor(residual))
 
-    assert tracker.to_host() == (True, 3)
+    status = tracker.status()
+    assert (status.converged, status.num_iterations) == (True, 3)
 
 
 def test_iteration_count_matches_the_loop_length_without_convergence() -> None:
@@ -75,7 +76,8 @@ def test_iteration_count_matches_the_loop_length_without_convergence() -> None:
     for _ in range(4):
         tracker.update(torch.tensor(1.0))
 
-    assert tracker.to_host() == (False, 4)
+    status = tracker.status()
+    assert (status.converged, status.num_iterations) == (False, 4)
 
 
 def test_should_stop_only_synchronizes_on_checkpoint_iterations(
@@ -96,3 +98,47 @@ def test_should_stop_is_false_while_the_residual_stays_above_tolerance() -> None
     tracker.update(torch.tensor(1.0))
 
     assert not tracker.should_stop(0)
+
+
+def test_start_latches_convergence_without_counting_an_iteration() -> None:
+    tracker = ConvergenceTracker(tol=0.5, check_interval=1, reference=torch.zeros(()))
+
+    frozen = tracker.start(torch.tensor(0.1))
+    status = tracker.status()
+
+    assert frozen
+    assert status.converged
+    assert status.num_iterations == 0
+
+
+def test_status_does_not_synchronize_until_a_diagnostic_is_read(
+    host_sync_counter: Callable[[], Any],
+) -> None:
+    # Regression test: a solve used to copy its convergence flag and
+    # iteration count to the host unconditionally, so every inner dual solve
+    # of a nested `MinimaxSolver` paid two synchronizations for diagnostics
+    # nobody read.
+    tracker = ConvergenceTracker(tol=0.5, check_interval=1, reference=torch.zeros(()))
+    tracker.update(torch.tensor(0.1))
+
+    with host_sync_counter() as syncs:
+        status = tracker.status()
+
+    assert syncs == []
+    assert status.converged
+    assert status.num_iterations == 1
+
+
+def test_status_caches_the_diagnostics_it_reads_back(
+    host_sync_counter: Callable[[], Any],
+) -> None:
+    tracker = ConvergenceTracker(tol=0.5, check_interval=1, reference=torch.zeros(()))
+    tracker.update(torch.tensor(0.1))
+    status = tracker.status()
+
+    with host_sync_counter() as syncs:
+        for _ in range(5):
+            assert status.converged
+            assert status.num_iterations == 1
+
+    assert len(syncs) == 2

@@ -5,6 +5,7 @@ from dataclasses import dataclass
 
 import torch
 
+from optora.core.convergence import ConvergenceDiagnostics, ConvergenceStatus
 from optora.core.dro_base import AmbiguitySet
 from optora.core.solver_base import (
     MinimizationProblem,
@@ -49,22 +50,22 @@ class MinimaxProblem:
 
 
 @dataclass(frozen=True)
-class MinimaxResult:
+class MinimaxResult(ConvergenceDiagnostics):
     """Outcome of a `MinimaxSolver` solve.
 
     Attributes:
         point: Final decision-variable iterate.
         value: Worst-case expected loss at `point`, i.e.
             `ambiguity_set.worst_case_expectation(loss_fn(point))`.
-        converged: Whether the outer solver's convergence criterion was met
-            before its iteration budget was exhausted.
-        num_iterations: Number of outer iterations actually performed.
+        status: Convergence diagnostics of the outer solve, exposed on the
+            host as `converged` and `num_iterations` by
+            `ConvergenceDiagnostics` and read back from the device only
+            when one of those is accessed.
     """
 
     point: torch.Tensor
     value: torch.Tensor
-    converged: bool
-    num_iterations: int
+    status: ConvergenceStatus
 
 
 class MinimaxSolver(Solver[MinimaxProblem, MinimaxResult]):
@@ -155,6 +156,5 @@ class MinimaxSolver(Solver[MinimaxProblem, MinimaxResult]):
         return MinimaxResult(
             point=result.point,
             value=result.value,
-            converged=result.converged,
-            num_iterations=result.num_iterations,
+            status=result.status,
         )

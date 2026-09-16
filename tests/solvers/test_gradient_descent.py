@@ -109,8 +109,9 @@ def test_no_objective_evaluations_after_convergence() -> None:
     # Regression test: the post-loop final-value computation used to
     # re-evaluate the objective at an iterate convergence had already
     # frozen. With `check_interval=1` the objective must be evaluated
-    # exactly once per reported step, which is what makes an outer
-    # `MinimaxSolver` step cost exactly one inner dual solve.
+    # exactly once per reported step, plus once at the starting point, which
+    # is what makes an outer `MinimaxSolver` step cost exactly one inner
+    # dual solve.
     calls: list[None] = []
     minimizer = torch.tensor([3.0, -2.0], dtype=torch.float64)
 
@@ -126,7 +127,7 @@ def test_no_objective_evaluations_after_convergence() -> None:
     result = solver.solve(problem)
 
     assert result.converged
-    assert len(calls) == result.num_iterations
+    assert len(calls) == result.num_iterations + 1
 
 
 @pytest.mark.parametrize("tol", [1e-8, 1e-30])

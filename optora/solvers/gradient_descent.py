@@ -1,5 +1,7 @@
 """Gradient descent solver for differentiable objectives, with warm starts."""
 
+from collections.abc import Callable
+
 import torch
 
 from optora.core.convergence import (
@@ -38,7 +40,11 @@ class GradientDescent(Solver[MinimizationProblem, MinimizationResult]):
     interval. Keep `check_interval=1` when the objective is expensive, as
     it is when this solver is the outer solver of an `optora.dro.MinimaxSolver`
     and every step costs an inner dual solve. See
-    `optora.core.convergence.ConvergenceTracker`.
+    `optora.core.convergence.ConvergenceTracker`. The returned diagnostics
+    stay on the device as well (see
+    `optora.core.convergence.ConvergenceStatus`), so a solve whose
+    `converged` and `num_iterations` nobody reads — every inner dual solve
+    of an `optora.dro` ambiguity set — never synchronizes for them.
 
     The point is a single tensor of any shape, and the stopping rule is the
     norm of the whole gradient. A batch of independent problems stacked into
@@ -92,6 +98,28 @@ class GradientDescent(Solver[MinimizationProblem, MinimizationResult]):
         self.tol = tol
         self.check_interval = validate_check_interval(check_interval)
 
+    def _evaluate(
+        self,
+        objective: Callable[[torch.Tensor], torch.Tensor],
+        point: torch.Tensor,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """Evaluate the objective and its gradient at a differentiable point.
+
+        Args:
+            objective: Differentiable scalar-valued objective.
+            point: Iterate the objective is evaluated at, requiring grad.
+
+        Returns:
+            The objective value and its gradient with respect to `point`.
+
+        Raises:
+            ValueError: If `objective` does not depend on `point` through
+                autograd.
+        """
+        value = objective(point)
+        (raw_grad,) = torch.autograd.grad(value, point, allow_unused=True)
+        return value, require_gradient(raw_grad, "the point")
+
     def solve(self, problem: MinimizationProblem) -> MinimizationResult:
         """Minimize `problem.objective` starting from `problem.initial_point`.
 
@@ -108,27 +136,24 @@ class GradientDescent(Solver[MinimizationProblem, MinimizationResult]):
         """
         point = problem.initial_point.detach().clone().requires_grad_(True)
         tracker = ConvergenceTracker(self.tol, self.check_interval, point)
+        # Each iteration steps with the gradient of the previous evaluation
+        # and then evaluates the new iterate, so the last evaluation is
+        # always taken at the point returned below. Evaluating after the
+        # loop instead would need the convergence flag on the host, one
+        # synchronization per solve, which nesting multiplies by the outer
+        # iteration count.
+        value, grad = self._evaluate(problem.objective, point)
+        frozen = tracker.start(torch.linalg.vector_norm(grad))
         for iteration in range(self.max_iter):
-            value = problem.objective(point)
-            (raw_grad,) = torch.autograd.grad(value, point, allow_unused=True)
-            grad = require_gradient(raw_grad, "the point")
             with torch.no_grad():
-                frozen = tracker.update(torch.linalg.vector_norm(grad))
                 point = torch.where(frozen, point, point - self.step_size * grad)
             point = point.detach().requires_grad_(True)
+            value, grad = self._evaluate(problem.objective, point)
+            frozen = tracker.update(torch.linalg.vector_norm(grad))
             if tracker.should_stop(iteration):
                 break
-        converged, num_iterations = tracker.to_host()
-        # Once converged, the iterate has been frozen, so the last in-loop
-        # evaluation was already taken at `point`; re-evaluating would repeat
-        # the whole objective, which for a composed `optora.dro` objective is
-        # an entire inner dual solve. The fallback is deliberately not wrapped
-        # in `torch.no_grad()`: such an objective runs its own inner
-        # autograd-based dual solve, which needs autograd enabled here too.
-        final_value = value.detach() if converged else problem.objective(point).detach()
         return MinimizationResult(
             point=point.detach(),
-            value=final_value,
-            converged=converged,
-            num_iterations=num_iterations,
+            value=value.detach(),
+            status=tracker.status(),
         )
