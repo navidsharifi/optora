@@ -6,6 +6,7 @@ from typing import Any
 import pytest
 import torch
 
+from optora.core.convergence import ConvergenceStatus
 from optora.core.dro_base import AmbiguitySet
 from optora.core.solver_base import (
     MinimizationProblem,
@@ -42,8 +43,7 @@ class _RecordingSolver(Solver[MinimizationProblem, MinimizationResult]):
         return MinimizationResult(
             point=point,
             value=problem.objective(point),
-            converged=True,
-            num_iterations=0,
+            status=ConvergenceStatus(torch.tensor(True), torch.tensor(0)),
         )
 
 

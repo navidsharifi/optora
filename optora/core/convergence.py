@@ -1,8 +1,76 @@
 """Convergence tracking for iterative loops without per-iteration host syncs."""
 
+from functools import cached_property
+
 import torch
 
 DEFAULT_CHECK_INTERVAL = 10
+
+
+class ConvergenceStatus:
+    """Convergence diagnostics of a finished solve, materialized on demand.
+
+    A loop produces its convergence flag and iteration count on the
+    iterate's device, so reporting them as a Python `bool` and `int` costs
+    two synchronizations per solve: exactly the cost `ConvergenceTracker`
+    removes from the loop, paid again once the loop is over. Under nesting
+    that becomes the dominant cost, since every outer iteration of an
+    `optora.dro.MinimaxSolver` runs an inner dual solve whose diagnostics
+    nothing ever reads.
+
+    `ConvergenceStatus` therefore keeps the diagnostics as the tensors the
+    loop computed and converts them on first access, caching each
+    conversion so repeated reads cost one synchronization at most. A solve
+    whose diagnostics are never read never synchronizes for them.
+    """
+
+    def __init__(self, converged: torch.Tensor, num_iterations: torch.Tensor) -> None:
+        """Hold a finished loop's convergence state on its device.
+
+        Args:
+            converged: Zero-dimensional boolean tensor recording whether
+                the loop's residual fell below its tolerance.
+            num_iterations: Zero-dimensional integer tensor holding the
+                number of iterations performed before convergence.
+        """
+        self._converged = converged
+        self._num_iterations = num_iterations
+
+    @cached_property
+    def converged(self) -> bool:
+        """Whether the loop's convergence criterion was met, read on the host."""
+        return bool(self._converged)
+
+    @cached_property
+    def num_iterations(self) -> int:
+        """Number of iterations the loop performed, read on the host."""
+        return int(self._num_iterations)
+
+
+class ConvergenceDiagnostics:
+    """Host-side view of the convergence diagnostics of a solver result.
+
+    Mixed into every solver result so `result.converged` and
+    `result.num_iterations` read as plain Python values while the solve
+    itself stays asynchronous: `status` holds them as device tensors until
+    one of these properties is read.
+
+    Attributes:
+        status: Device-side convergence diagnostics of the solve, converted
+            to host values only when read.
+    """
+
+    status: ConvergenceStatus
+
+    @property
+    def converged(self) -> bool:
+        """Whether the convergence criterion was met before the iteration budget."""
+        return self.status.converged
+
+    @property
+    def num_iterations(self) -> int:
+        """Number of iterations actually performed."""
+        return self.status.num_iterations
 
 
 class ConvergenceTracker:
@@ -69,6 +137,26 @@ class ConvergenceTracker:
             (), dtype=torch.long, device=reference.device
         )
 
+    def start(self, residual: torch.Tensor) -> torch.Tensor:
+        """Record the residual of the starting iterate, before any iteration.
+
+        A loop that evaluates its residual at the current iterate and steps
+        with what it learned there tests the starting iterate once before
+        iterating. That test is not an iteration, so it latches convergence
+        without advancing the iteration count: a loop that starts at its
+        own solution reports zero iterations.
+
+        Args:
+            residual: Zero-dimensional nonnegative convergence residual at
+                the starting iterate.
+
+        Returns:
+            The updated `converged` flag, to be used as the predicate of a
+            `torch.where` that freezes the first iteration's update.
+        """
+        self.converged = self.converged | (residual.detach() < self._tol)
+        return self.converged
+
     def update(self, residual: torch.Tensor) -> torch.Tensor:
         """Record one iteration's residual without synchronizing.
 
@@ -86,8 +174,7 @@ class ConvergenceTracker:
             `torch.where` that freezes this iteration's update.
         """
         self._num_iterations = self._num_iterations + ~self.converged
-        self.converged = self.converged | (residual.detach() < self._tol)
-        return self.converged
+        return self.start(residual)
 
     def should_stop(self, iteration: int) -> bool:
         """Check whether the loop may exit, synchronizing at most periodically.
@@ -103,17 +190,17 @@ class ConvergenceTracker:
             return False
         return bool(self.converged)
 
-    def to_host(self) -> tuple[bool, int]:
-        """Copy the final convergence diagnostics back to the host.
-
-        This is the one deliberate synchronization per solve, paid when the
-        loop is already over.
+    def status(self) -> ConvergenceStatus:
+        """Hand the loop's final diagnostics over without synchronizing.
 
         Returns:
-            A tuple of the convergence flag and the number of iterations
-            performed before convergence.
+            A `ConvergenceStatus` wrapping the convergence flag and the
+            number of iterations performed before convergence, still as
+            device tensors. Converting them to host values is deferred to
+            whoever reads them, so an inner solve nobody inspects costs no
+            synchronization at all.
         """
-        return bool(self.converged), int(self._num_iterations)
+        return ConvergenceStatus(self.converged, self._num_iterations)
 
 
 def validate_check_interval(check_interval: int) -> int:

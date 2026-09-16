@@ -140,7 +140,7 @@ def test_no_objective_evaluations_after_convergence() -> None:
     result = solver.solve(problem)
 
     assert result.converged
-    assert len(calls) == result.num_iterations
+    assert len(calls) == result.num_iterations + 1
 
 
 @pytest.mark.parametrize("tol", [1e-8, 1e-30])

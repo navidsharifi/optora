@@ -1,7 +1,7 @@
 """Shared pytest fixtures for the Optora test suite."""
 
 from collections.abc import Callable, Iterator
-from contextlib import contextmanager
+from contextlib import ExitStack, contextmanager
 from typing import Any
 from unittest.mock import patch
 
@@ -28,10 +28,12 @@ def dtype(request: pytest.FixtureRequest) -> torch.dtype:
 def host_sync_counter() -> Callable[[], Any]:
     """Return a context manager that counts tensor-to-host synchronizations.
 
-    `bool(tensor)` is the synchronization every Optora iterative loop must
-    avoid paying per iteration: it blocks until the device has produced the
-    value. Counting calls to `torch.Tensor.__bool__` therefore gives an
-    exact, CPU-testable count of the host synchronizations a solve issues.
+    Converting a tensor to a Python value — `bool(tensor)` in an iterative
+    loop's stopping test, `int(tensor)` in its reported iteration count — is
+    the synchronization every Optora loop must avoid paying per iteration:
+    it blocks until the device has produced the value. Counting calls to
+    those conversions therefore gives an exact, CPU-testable count of the
+    host synchronizations a solve issues.
 
     Returns:
         A context manager yielding a list whose length is the number of
@@ -41,13 +43,24 @@ def host_sync_counter() -> Callable[[], Any]:
     @contextmanager
     def counter() -> Iterator[list[None]]:
         syncs: list[None] = []
-        original = torch.Tensor.__bool__
+        conversions = {
+            "__bool__": torch.Tensor.__bool__,
+            "__int__": torch.Tensor.__int__,
+            "__float__": torch.Tensor.__float__,
+        }
 
-        def counting(tensor: torch.Tensor) -> bool:
-            syncs.append(None)
-            return original(tensor)
+        def counting(original: Callable[[torch.Tensor], Any]) -> Any:
+            def wrapper(tensor: torch.Tensor) -> Any:
+                syncs.append(None)
+                return original(tensor)
 
-        with patch.object(torch.Tensor, "__bool__", counting):
+            return wrapper
+
+        with ExitStack() as stack:
+            for name, original in conversions.items():
+                stack.enter_context(
+                    patch.object(torch.Tensor, name, counting(original))
+                )
             yield syncs
 
     return counter

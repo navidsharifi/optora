@@ -7,6 +7,8 @@ import torch
 
 from optora.core.convergence import (
     DEFAULT_CHECK_INTERVAL,
+    ConvergenceDiagnostics,
+    ConvergenceStatus,
     ConvergenceTracker,
     validate_check_interval,
 )
@@ -46,24 +48,24 @@ class SaddlePointProblem:
 
 
 @dataclass(frozen=True)
-class SaddlePointResult:
+class SaddlePointResult(ConvergenceDiagnostics):
     """Outcome of a `SaddlePointSolver` solve.
 
     Attributes:
         primal_point: Final primal (minimizing) iterate.
         dual_point: Final dual (maximizing) iterate.
         value: Objective value at `(primal_point, dual_point)`.
-        converged: Whether the combined primal/dual gradient norm fell
-            below `tol` before `max_iter` iterations were exhausted.
-        num_iterations: Number of ascent-descent iterations actually
-            performed.
+        status: Convergence diagnostics of the solve, exposed on the host
+            as `converged` and `num_iterations` by `ConvergenceDiagnostics`
+            and read back from the device only when one of those is
+            accessed. Convergence is the combined primal/dual gradient norm
+            falling below `tol` before `max_iter` iterations are exhausted.
     """
 
     primal_point: torch.Tensor
     dual_point: torch.Tensor
     value: torch.Tensor
-    converged: bool
-    num_iterations: int
+    status: ConvergenceStatus
 
 
 class SaddlePointSolver(Solver[SaddlePointProblem, SaddlePointResult]):
@@ -95,7 +97,10 @@ class SaddlePointSolver(Solver[SaddlePointProblem, SaddlePointResult]):
     taken after convergence are frozen, so the solution does not depend on
     that interval. Keep `check_interval=1` when the objective is expensive,
     for example when each iteration costs an `optora.dro` inner dual solve.
-    See `optora.core.convergence.ConvergenceTracker`.
+    See `optora.core.convergence.ConvergenceTracker`. The returned
+    diagnostics stay on the device as well (see
+    `optora.core.convergence.ConvergenceStatus`), so a solve nobody
+    inspects never synchronizes for them.
 
     Attributes:
         primal_step_size: Positive learning rate for the descent step on
@@ -152,6 +157,37 @@ class SaddlePointSolver(Solver[SaddlePointProblem, SaddlePointResult]):
         self.tol = tol
         self.check_interval = validate_check_interval(check_interval)
 
+    @staticmethod
+    def _evaluate(
+        objective: Callable[[torch.Tensor, torch.Tensor], torch.Tensor],
+        primal_point: torch.Tensor,
+        dual_point: torch.Tensor,
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        """Evaluate the objective and both gradients at differentiable iterates.
+
+        Args:
+            objective: Differentiable scalar-valued minimax objective.
+            primal_point: Primal iterate, requiring grad.
+            dual_point: Dual iterate, requiring grad.
+
+        Returns:
+            The objective value and its gradients with respect to the
+            primal and the dual iterate.
+
+        Raises:
+            ValueError: If `objective` does not depend on both iterates
+                through autograd.
+        """
+        value = objective(primal_point, dual_point)
+        raw_primal_grad, raw_dual_grad = torch.autograd.grad(
+            value, (primal_point, dual_point), allow_unused=True
+        )
+        return (
+            value,
+            require_gradient(raw_primal_grad, "the primal point"),
+            require_gradient(raw_dual_grad, "the dual point"),
+        )
+
     def solve(self, problem: SaddlePointProblem) -> SaddlePointResult:
         """Find a saddle point of `problem.objective`.
 
@@ -168,23 +204,29 @@ class SaddlePointSolver(Solver[SaddlePointProblem, SaddlePointResult]):
                 its arguments through autograd.
         """
         dual_projection = problem.dual_projection or (lambda point: point)
-        primal_point = problem.primal_initial_point.detach().clone()
-        dual_point = dual_projection(problem.dual_initial_point.detach().clone())
+        primal_point = (
+            problem.primal_initial_point.detach().clone().requires_grad_(True)
+        )
+        dual_point = (
+            dual_projection(problem.dual_initial_point.detach().clone())
+            .detach()
+            .requires_grad_(True)
+        )
         tracker = ConvergenceTracker(self.tol, self.check_interval, primal_point)
+        # Each iteration steps with the gradients of the previous evaluation
+        # and then evaluates the new iterates, so the last evaluation is
+        # always taken at the iterates returned below. Evaluating after the
+        # loop instead would need the convergence flag on the host, one
+        # synchronization per solve, which nesting multiplies by the outer
+        # iteration count.
+        value, primal_grad, dual_grad = self._evaluate(
+            problem.objective, primal_point, dual_point
+        )
+        frozen = tracker.start(
+            torch.linalg.vector_norm(primal_grad) + torch.linalg.vector_norm(dual_grad)
+        )
         for iteration in range(self.max_iter):
-            primal_point = primal_point.detach().requires_grad_(True)
-            dual_point = dual_point.detach().requires_grad_(True)
-            value = problem.objective(primal_point, dual_point)
-            raw_primal_grad, raw_dual_grad = torch.autograd.grad(
-                value, (primal_point, dual_point), allow_unused=True
-            )
-            primal_grad = require_gradient(raw_primal_grad, "the primal point")
-            dual_grad = require_gradient(raw_dual_grad, "the dual point")
-            grad_norm = torch.linalg.vector_norm(
-                primal_grad
-            ) + torch.linalg.vector_norm(dual_grad)
             with torch.no_grad():
-                frozen = tracker.update(grad_norm)
                 primal_point = torch.where(
                     frozen,
                     primal_point,
@@ -195,24 +237,20 @@ class SaddlePointSolver(Solver[SaddlePointProblem, SaddlePointResult]):
                     dual_point,
                     dual_projection(dual_point + self.dual_step_size * dual_grad),
                 )
+            primal_point = primal_point.detach().requires_grad_(True)
+            dual_point = dual_point.detach().requires_grad_(True)
+            value, primal_grad, dual_grad = self._evaluate(
+                problem.objective, primal_point, dual_point
+            )
+            frozen = tracker.update(
+                torch.linalg.vector_norm(primal_grad)
+                + torch.linalg.vector_norm(dual_grad)
+            )
             if tracker.should_stop(iteration):
                 break
-        converged, num_iterations = tracker.to_host()
-        if converged:
-            # Both iterates have been frozen since convergence, so the last
-            # in-loop evaluation was already taken at them. Re-evaluating
-            # would repeat the whole objective, which for a composed
-            # `optora.dro` objective is an entire inner dual solve.
-            final_value = value.detach()
-        else:
-            # Not wrapped in `torch.no_grad()`: an objective composed from an
-            # `AmbiguitySet.worst_case_expectation` runs its own inner
-            # autograd-based dual solve, which needs autograd enabled here too.
-            final_value = problem.objective(primal_point, dual_point).detach()
         return SaddlePointResult(
             primal_point=primal_point.detach(),
             dual_point=dual_point.detach(),
-            value=final_value,
-            converged=converged,
-            num_iterations=num_iterations,
+            value=value.detach(),
+            status=tracker.status(),
         )

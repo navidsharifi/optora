@@ -1,10 +1,13 @@
 """Tests for `MinimaxSolver`."""
 
+from collections.abc import Callable
+from typing import Any
 from unittest.mock import patch
 
 import pytest
 import torch
 
+from optora.core.convergence import ConvergenceStatus
 from optora.core.solver_base import (
     MinimizationProblem,
     MinimizationResult,
@@ -35,8 +38,9 @@ class _RecordingSolver(Solver[MinimizationProblem, MinimizationResult]):
         return MinimizationResult(
             point=torch.tensor(self.point, dtype=dtype),
             value=torch.tensor(self.value, dtype=dtype),
-            converged=self.converged,
-            num_iterations=self.num_iterations,
+            status=ConvergenceStatus(
+                torch.tensor(self.converged), torch.tensor(self.num_iterations)
+            ),
         )
 
 
@@ -255,9 +259,9 @@ def test_every_outer_iteration_costs_exactly_one_inner_dual_solve() -> None:
     # Regression test: one outer iteration is an entire inner dual solve, so
     # iterations run after convergence (under the default
     # `check_interval`) and the post-loop final-value evaluation were pure
-    # waste. With `check_interval=1` and the value reused from the last
-    # frozen iteration, the inner dual must be solved exactly once per
-    # reported outer iteration.
+    # waste. With `check_interval=1` the inner dual must be solved exactly
+    # once per reported outer iteration, plus once at the starting point,
+    # which every iterative method has to evaluate before it can step.
     nominal = torch.tensor([0.25, 0.5, 0.25], dtype=torch.float64)
     targets = torch.tensor([0.0, 1.0, 2.0], dtype=torch.float64)
     ambiguity_set = KLAmbiguitySet(
@@ -286,7 +290,51 @@ def test_every_outer_iteration_costs_exactly_one_inner_dual_solve() -> None:
         result = solver.solve(problem)
 
     assert result.converged
-    assert spy.call_count == result.num_iterations
+    assert spy.call_count == result.num_iterations + 1
+
+
+@pytest.mark.parametrize("outer_max_iter", [5, 20])
+def test_nested_solve_does_not_synchronize_for_inner_diagnostics(
+    outer_max_iter: int, host_sync_counter: Callable[[], Any]
+) -> None:
+    # Regression test: every inner dual solve used to copy its convergence
+    # flag and iteration count back to the host, two synchronizations per
+    # outer iteration on the one code path whose stated purpose is to avoid
+    # per-iteration synchronization. Inner diagnostics nobody reads now stay
+    # on the device, so a nested solve whose loops never reach a checkpoint
+    # synchronizes exactly zero times, whatever the outer iteration count.
+    nominal = torch.tensor([0.25, 0.5, 0.25], dtype=torch.float64)
+    targets = torch.tensor([0.0, 1.0, 2.0], dtype=torch.float64)
+    ambiguity_set = KLAmbiguitySet(
+        nominal,
+        radius=0.2,
+        dual_solver=GradientDescent(
+            step_size=0.3, max_iter=50, tol=1e-10, check_interval=1000
+        ),
+    )
+
+    def loss_fn(x: torch.Tensor) -> torch.Tensor:
+        return (x - targets) ** 2
+
+    problem = MinimaxProblem(
+        ambiguity_set=ambiguity_set,
+        loss_fn=loss_fn,
+        initial_point=torch.tensor(0.0, dtype=torch.float64),
+    )
+    solver = MinimaxSolver(
+        solver=GradientDescent(
+            step_size=0.1, max_iter=outer_max_iter, tol=1e-8, check_interval=1000
+        )
+    )
+
+    with host_sync_counter() as syncs:
+        result = solver.solve(problem)
+
+    assert syncs == []
+    # The diagnostics are still available; reading them is where the
+    # synchronization is now paid, once per solve rather than once per
+    # inner solve.
+    assert result.num_iterations == outer_max_iter
 
 
 # --- Generic wiring across ambiguity-set types -------------------------------
