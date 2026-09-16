@@ -8,6 +8,21 @@ from unittest.mock import patch
 import pytest
 import torch
 
+FLOAT_DTYPES = (torch.float32, torch.float64)
+
+
+@pytest.fixture(
+    params=FLOAT_DTYPES, ids=lambda dtype: str(dtype).removeprefix("torch.")
+)
+def dtype(request: pytest.FixtureRequest) -> torch.dtype:
+    """Iterate over the floating-point dtypes Optora must preserve end to end.
+
+    Returns:
+        One of `torch.float32` or `torch.float64`.
+    """
+    parameter: torch.dtype = request.param
+    return parameter
+
 
 @pytest.fixture
 def host_sync_counter() -> Callable[[], Any]:
