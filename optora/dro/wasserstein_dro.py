@@ -1,5 +1,7 @@
 """Wasserstein-distance-constrained ambiguity set (Wasserstein-DRO)."""
 
+from typing import cast
+
 import torch
 
 from optora.core.dro_base import DualAmbiguitySet
@@ -81,14 +83,12 @@ class WassersteinAmbiguitySet(DualAmbiguitySet):
             float or a tensor of radii evaluated as one batch.
         cost: Square, nonnegative pairwise ground cost matrix between the
             shared support points of `nominal` and any candidate
-            distribution.
+            distribution. Aliases `divergence.cost`; not a separate buffer.
         dual_solver: Solver minimizing the dual objective over `gamma_raw`.
         initial_dual_point: Value of `gamma_raw` the first dual solve starts
             from; later solves warm-start from the previous optimum (see
             `optora.core.dro_base.DualAmbiguitySet`).
     """
-
-    cost: torch.Tensor
 
     def __init__(
         self,
@@ -169,7 +169,13 @@ class WassersteinAmbiguitySet(DualAmbiguitySet):
             ),
             validate=validate,
         )
-        self.register_buffer("cost", cost)
+
+    @property
+    def cost(self) -> torch.Tensor:
+        """Ground cost matrix, aliasing `divergence.cost` (no separate buffer)."""
+        # `divergence` is declared as the base `Divergence` type, but this
+        # class always constructs it as a `SinkhornDivergence` above.
+        return cast(SinkhornDivergence, self.divergence).cost
 
     def worst_case_expectation(self, loss: torch.Tensor) -> torch.Tensor:
         """Compute the worst-case expected loss over the Wasserstein ambiguity set.

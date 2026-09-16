@@ -514,6 +514,29 @@ def test_sinkhorn_parameters_are_passed_through_to_divergence() -> None:
     assert ambiguity_set.divergence.eps == 1e-10
 
 
+def test_cost_is_not_duplicated_as_a_separate_buffer() -> None:
+    nominal = torch.tensor([0.5, 0.5])
+    cost = torch.tensor([[0.0, 1.0], [1.0, 0.0]])
+    ambiguity_set = WassersteinAmbiguitySet(nominal, cost=cost, radius=0.1)
+
+    buffer_names = [name for name, _ in ambiguity_set.named_buffers()]
+
+    assert buffer_names.count("divergence.cost") == 1
+    assert "cost" not in buffer_names
+    assert ambiguity_set.cost.data_ptr() == ambiguity_set.divergence.cost.data_ptr()
+
+
+def test_cost_stays_aliased_with_divergence_cost_after_to() -> None:
+    nominal = torch.tensor([0.5, 0.5])
+    cost = torch.tensor([[0.0, 1.0], [1.0, 0.0]])
+    ambiguity_set = WassersteinAmbiguitySet(nominal, cost=cost, radius=0.1)
+
+    ambiguity_set = ambiguity_set.to(torch.float64)
+
+    assert ambiguity_set.cost.dtype == torch.float64
+    assert ambiguity_set.cost.data_ptr() == ambiguity_set.divergence.cost.data_ptr()
+
+
 # --- Containment and type checks ---------------------------------------------
 
 
