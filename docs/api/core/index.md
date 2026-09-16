@@ -4,6 +4,8 @@
 
 ## Modules
 - [`optora.core.convergence`](convergence.md)
+    - [`ConvergenceStatus`](convergence.md#optora.core.convergence.ConvergenceStatus)
+    - [`ConvergenceDiagnostics`](convergence.md#optora.core.convergence.ConvergenceDiagnostics)
     - [`ConvergenceTracker`](convergence.md#optora.core.convergence.ConvergenceTracker)
     - [`validate_check_interval`](convergence.md#optora.core.convergence.validate_check_interval)
 - [`optora.core.divergence_base`](divergence_base.md)
