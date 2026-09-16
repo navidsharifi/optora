@@ -62,6 +62,7 @@ class KLAmbiguitySet(DualAmbiguitySet):
         eps: float = 1e-12,
         dual_solver: Solver[MinimizationProblem, MinimizationResult] | None = None,
         initial_log_eta: float = 0.0,
+        validate: bool = False,
     ) -> None:
         """Initialize the KL-DRO ambiguity set.
 
@@ -82,10 +83,14 @@ class KLAmbiguitySet(DualAmbiguitySet):
             initial_log_eta: Value of `log(eta)` the first dual solve starts
                 from. Later calls warm-start from the previous solve's
                 optimum unless `reset_warm_start()` is called.
+            validate: Whether to check that `nominal` is nonnegative and
+                sums to one. The check synchronizes with the device, so it
+                is opt-in and off by default.
 
         Raises:
-            ValueError: If `radius` is a negative float or `eps` is not
-                positive.
+            ValueError: If `radius` is a negative float, if `eps` is not
+                positive, or if `validate` is set and `nominal` is not a
+                valid probability distribution.
         """
         super().__init__(
             nominal=nominal,
@@ -95,6 +100,7 @@ class KLAmbiguitySet(DualAmbiguitySet):
             initial_dual_point=torch.tensor(
                 initial_log_eta, dtype=nominal.dtype, device=nominal.device
             ),
+            validate=validate,
         )
         self.eps = eps
         self.register_buffer(

@@ -13,6 +13,60 @@ from optora.core.solver_base import (
     Solver,
 )
 
+_MASS_TOLERANCE_FLOOR = 1e-6
+
+
+def _mass_tolerance(nominal: torch.Tensor) -> float:
+    """Return the tolerance allowed on a nominal distribution's total mass.
+
+    Summing `n` entries accumulates on the order of `n` roundings of
+    relative size `eps`, so the tolerance scales with the support size and
+    the dtype instead of being one constant that is slack in float64 and
+    unreachable in float32 on a large support.
+
+    Args:
+        nominal: Reference distribution whose mass is being checked.
+
+    Returns:
+        The largest absolute deviation from unit mass that still counts as a
+        normalized distribution.
+    """
+    support_size = nominal.shape[-1]
+    return max(_MASS_TOLERANCE_FLOOR, support_size * torch.finfo(nominal.dtype).eps)
+
+
+def _validate_nominal(nominal: torch.Tensor) -> None:
+    """Check that `nominal` is a valid probability distribution.
+
+    Both value checks are plain reductions read back as a single boolean,
+    rather than elementwise predicates such as
+    `torch.all(torch.isfinite(nominal) & (nominal >= 0))`, so validation
+    costs two host synchronizations and no tensor temporaries the size of
+    `nominal`. Each test is written as `not (reduction <= bound)` so that a
+    `nan` reduction, which compares false against everything, fails the
+    check instead of passing it.
+
+    Args:
+        nominal: Candidate reference distribution.
+
+    Raises:
+        ValueError: If `nominal` is not a floating-point tensor, holds a
+            negative or non-finite entry, or does not sum to one along its
+            last dimension within `_mass_tolerance(nominal)`.
+    """
+    if not nominal.is_floating_point():
+        raise ValueError(
+            f"nominal must be a floating-point tensor, got dtype {nominal.dtype}."
+        )
+    if not bool(torch.amin(nominal) >= 0.0):
+        raise ValueError("nominal must be nonnegative and finite.")
+    tolerance = _mass_tolerance(nominal)
+    mass_error = torch.amax(torch.abs(torch.sum(nominal, dim=-1) - 1.0))
+    if not bool(mass_error <= tolerance):
+        raise ValueError(
+            f"nominal must sum to one along its last dimension within {tolerance}."
+        )
+
 
 def _broadcast_batch_shapes(**shapes: torch.Size) -> torch.Size:
     """Broadcast named batch shapes together under NumPy broadcasting rules.
@@ -74,6 +128,7 @@ class AmbiguitySet(nn.Module, ABC):
         nominal: torch.Tensor,
         divergence: Divergence,
         radius: float | torch.Tensor,
+        validate: bool = False,
     ) -> None:
         """Initialize the ambiguity set.
 
@@ -90,11 +145,26 @@ class AmbiguitySet(nn.Module, ABC):
                 would block on the device (the same opt-in policy the
                 divergences apply to their tensor arguments), and a tensor
                 radius never takes the zero-radius shortcut.
+            validate: Whether to check that `nominal` is nonnegative and
+                sums to one along its last dimension. The check reads two
+                reductions over `nominal` on the host, which blocks until
+                the device has produced them, so it is opt-in and off by
+                default to keep construction asynchronous. The shape and
+                hyperparameter checks are metadata-only and always run.
 
         Raises:
-            ValueError: If `radius` is a negative float.
+            ValueError: If `nominal` is a scalar tensor, if `radius` is a
+                negative float, or if `validate` is set and `nominal` is not
+                a valid probability distribution.
         """
         super().__init__()
+        if nominal.ndim == 0:
+            raise ValueError(
+                "nominal must have shape (..., n) with a trailing support "
+                "dimension, got a scalar tensor."
+            )
+        if validate:
+            _validate_nominal(nominal)
         self.register_buffer("nominal", nominal)
         self.divergence = divergence
         if isinstance(radius, torch.Tensor):
@@ -255,6 +325,7 @@ class DualAmbiguitySet(AmbiguitySet):
         radius: float | torch.Tensor,
         dual_solver: Solver[MinimizationProblem, MinimizationResult] | None,
         initial_dual_point: torch.Tensor,
+        validate: bool = False,
     ) -> None:
         """Initialize the dual-solved ambiguity set.
 
@@ -268,11 +339,21 @@ class DualAmbiguitySet(AmbiguitySet):
                 evaluate a positive-radius set.
             initial_dual_point: Dual point of a single batch element that
                 the first solve starts from.
+            validate: Whether to check that `nominal` is a valid
+                probability distribution, off by default because the check
+                synchronizes with the device.
 
         Raises:
-            ValueError: If `radius` is a negative float.
+            ValueError: If `nominal` is a scalar tensor, if `radius` is a
+                negative float, or if `validate` is set and `nominal` is not
+                a valid probability distribution.
         """
-        super().__init__(nominal=nominal, divergence=divergence, radius=radius)
+        super().__init__(
+            nominal=nominal,
+            divergence=divergence,
+            radius=radius,
+            validate=validate,
+        )
         self.dual_solver = dual_solver
         self.register_buffer("initial_dual_point", initial_dual_point)
         self.register_buffer("_dual_warm_start", None, persistent=False)
