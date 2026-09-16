@@ -104,6 +104,7 @@ class PhiAmbiguitySet(DualAmbiguitySet):
         dual_solver: Solver[MinimizationProblem, MinimizationResult] | None = None,
         initial_log_eta: float = 0.0,
         initial_lam: float = 0.0,
+        validate: bool = False,
     ) -> None:
         """Initialize the phi-divergence ambiguity set.
 
@@ -127,9 +128,14 @@ class PhiAmbiguitySet(DualAmbiguitySet):
                 optimum unless `reset_warm_start()` is called.
             initial_lam: Value of `lam` the first dual solve starts from,
                 warm-started on later calls alongside `initial_log_eta`.
+            validate: Whether to check that `nominal` is nonnegative and
+                sums to one. The check synchronizes with the device, so it
+                is opt-in and off by default.
 
         Raises:
-            ValueError: If `radius` is a negative float.
+            ValueError: If `radius` is a negative float, or if `validate`
+                is set and `nominal` is not a valid probability
+                distribution.
         """
         super().__init__(
             nominal=nominal,
@@ -141,6 +147,7 @@ class PhiAmbiguitySet(DualAmbiguitySet):
                 dtype=nominal.dtype,
                 device=nominal.device,
             ),
+            validate=validate,
         )
         self.phi_conjugate = phi_conjugate
 
@@ -220,6 +227,7 @@ class ChiSquareAmbiguitySet(PhiAmbiguitySet):
         dual_solver: Solver[MinimizationProblem, MinimizationResult] | None = None,
         initial_log_eta: float = 0.0,
         initial_lam: float = 0.0,
+        validate: bool = False,
     ) -> None:
         """Initialize the chi-square ambiguity set.
 
@@ -242,10 +250,14 @@ class ChiSquareAmbiguitySet(PhiAmbiguitySet):
                 optimum unless `reset_warm_start()` is called.
             initial_lam: Value of `lam` the first dual solve starts from,
                 warm-started on later calls alongside `initial_log_eta`.
+            validate: Whether to check that `nominal` is nonnegative and
+                sums to one. The check synchronizes with the device, so it
+                is opt-in and off by default.
 
         Raises:
-            ValueError: If `radius` is a negative float or `eps` is not
-                positive.
+            ValueError: If `radius` is a negative float, if `eps` is not
+                positive, or if `validate` is set and `nominal` is not a
+                valid probability distribution.
         """
         super().__init__(
             nominal=nominal,
@@ -255,6 +267,7 @@ class ChiSquareAmbiguitySet(PhiAmbiguitySet):
             dual_solver=dual_solver,
             initial_log_eta=initial_log_eta,
             initial_lam=initial_lam,
+            validate=validate,
         )
 
 
@@ -299,6 +312,7 @@ class TotalVariationAmbiguitySet(AmbiguitySet):
         nominal: torch.Tensor,
         radius: float | torch.Tensor,
         eps: float = 1e-12,
+        validate: bool = False,
     ) -> None:
         """Initialize the total variation ambiguity set.
 
@@ -314,15 +328,20 @@ class TotalVariationAmbiguitySet(AmbiguitySet):
             eps: Small positive constant used to clamp the reference
                 distribution away from zero before dividing, passed through
                 to the underlying `TotalVariationDivergence`.
+            validate: Whether to check that `nominal` is nonnegative and
+                sums to one. The check synchronizes with the device, so it
+                is opt-in and off by default.
 
         Raises:
-            ValueError: If `radius` is a negative float or `eps` is not
-                positive.
+            ValueError: If `radius` is a negative float, if `eps` is not
+                positive, or if `validate` is set and `nominal` is not a
+                valid probability distribution.
         """
         super().__init__(
             nominal=nominal,
             divergence=TotalVariationDivergence(eps=eps),
             radius=radius,
+            validate=validate,
         )
 
     def worst_case_expectation(self, loss: torch.Tensor) -> torch.Tensor:

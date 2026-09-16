@@ -132,18 +132,22 @@ class WassersteinAmbiguitySet(DualAmbiguitySet):
                 from. Later calls warm-start from the previous solve's
                 optimum unless `reset_warm_start()` is called.
             validate: Whether to check that `cost` is nonnegative, passed
-                through to `SinkhornDivergence`. The check reads a
-                reduction over `cost` on the host, which blocks until the
-                device has produced it, so it is opt-in and off by default
-                to keep construction asynchronous.
+                through to `SinkhornDivergence`, and that `nominal` is a
+                valid probability distribution. The checks read reductions
+                over `cost` and `nominal` on the host, which blocks until
+                the device has produced them, so they are opt-in and off by
+                default to keep construction asynchronous.
 
         Raises:
             ValueError: If `radius` is a negative float, if `cost` is not a
-                square 2D tensor, if `validate` is set and `cost` contains
-                negative entries, or if `cost`'s size does not match
-                `nominal`'s support size.
+                square 2D tensor, if `cost`'s size does not match
+                `nominal`'s support size, or if `validate` is set and
+                `cost` contains negative entries or `nominal` is not a
+                valid probability distribution.
         """
-        if cost.shape[-1] != nominal.shape[-1]:
+        # A scalar nominal has no support size to compare against; let
+        # AmbiguitySet reject it with its own message.
+        if nominal.ndim > 0 and cost.shape[-1] != nominal.shape[-1]:
             raise ValueError(
                 "cost must have shape (n, n) matching nominal's support "
                 f"size {nominal.shape[-1]}, got cost shape {tuple(cost.shape)}."
@@ -163,6 +167,7 @@ class WassersteinAmbiguitySet(DualAmbiguitySet):
             initial_dual_point=torch.tensor(
                 initial_gamma, dtype=nominal.dtype, device=nominal.device
             ),
+            validate=validate,
         )
         self.register_buffer("cost", cost)
 
