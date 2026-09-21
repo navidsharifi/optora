@@ -45,7 +45,6 @@ COST = (OUTCOMES.unsqueeze(0) - OUTCOMES.unsqueeze(1)) ** 2
 OUTER_SOLVER = GradientDescent(step_size=0.01, max_iter=120, tol=1e-7, check_interval=1)
 KL_DUAL_SOLVER = GradientDescent(step_size=0.1, max_iter=200, tol=1e-8)
 CHI_SQUARE_DUAL_SOLVER = GradientDescent(step_size=0.05, max_iter=300, tol=1e-8)
-WASSERSTEIN_DUAL_SOLVER = GradientDescent(step_size=0.02, max_iter=300, tol=1e-8)
 
 
 def loss_fn(x: torch.Tensor) -> torch.Tensor:
@@ -82,7 +81,6 @@ def main() -> None:
             nominal=NOMINAL,
             cost=COST,
             radius=radius,
-            dual_solver=WASSERSTEIN_DUAL_SOLVER,
         ),
     }
     radii = [0.0, 0.02, 0.05, 0.1, 0.2, 0.4]

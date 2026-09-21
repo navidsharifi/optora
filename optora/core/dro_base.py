@@ -272,9 +272,8 @@ class DualAmbiguitySet(AmbiguitySet):
     Every divergence-based ambiguity set that reformulates its inner
     supremum as a convex dual minimization over a handful of dual variables
     (`optora.dro.KLAmbiguitySet` over $\log(\eta)$,
-    `optora.dro.PhiAmbiguitySet` over $(\log(\eta), \lambda)$,
-    `optora.dro.WassersteinAmbiguitySet` over $\gamma$) runs the same
-    machinery around a formulation-specific dual objective, so that
+    `optora.dro.PhiAmbiguitySet` over $(\log(\eta), \lambda)$) runs the
+    same machinery around a formulation-specific dual objective, so that
     machinery lives here: hold an injected `dual_solver`, start it from a
     dual point, and re-evaluate the dual objective at the returned optimum
     so the result stays differentiable with respect to `loss` by the

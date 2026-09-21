@@ -89,7 +89,7 @@ class MinimaxSolver(Solver[MinimaxProblem, MinimaxResult]):
     differentiable with respect to `x` by the envelope theorem: each
     ambiguity set that needs an inner dual solve (`KLAmbiguitySet`,
     `PhiAmbiguitySet`, `ChiSquareAmbiguitySet`, `WassersteinAmbiguitySet`)
-    solves its own dual variable via a detached inner `dual_solver`, then
+    finds its own dual variable in a detached inner solve, then
     re-evaluates the dual objective at that (detached) optimum with the
     still-attached `loss` tensor; since the dual objective's gradient with
     respect to its own dual variable vanishes at that optimum, the gradient

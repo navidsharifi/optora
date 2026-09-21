@@ -44,10 +44,8 @@ import torch
 from _plotting import save_figure
 
 from optora.dro import WassersteinAmbiguitySet
-from optora.solvers import GradientDescent
 
 LIPSCHITZ_CONSTANT = 1.0
-DUAL_SOLVER = GradientDescent(step_size=0.05, max_iter=800, tol=1e-12)
 RADII = torch.logspace(-4.0, 0.5, steps=12, dtype=torch.float64)
 RADIUS_SWEEP_SIZES = (16, 64, 256)
 SAMPLE_SIZES = (8, 16, 32, 64, 128, 256)
@@ -98,9 +96,7 @@ def normalized_gap(
     normalized gap isolates the Lipschitz deficiency `Lip(loss) - L_n` that
     the small-radius limit should expose.
     """
-    ambiguity_set = WassersteinAmbiguitySet(
-        nominal=nominal, cost=cost, radius=radius, dual_solver=DUAL_SOLVER
-    )
+    ambiguity_set = WassersteinAmbiguitySet(nominal=nominal, cost=cost, radius=radius)
     exact = ambiguity_set.worst_case_expectation(loss).item()
     surrogate = torch.sum(nominal * loss).item() + radius * LIPSCHITZ_CONSTANT
     return (surrogate - exact) / radius
