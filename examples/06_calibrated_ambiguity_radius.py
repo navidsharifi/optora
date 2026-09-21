@@ -67,7 +67,11 @@ NUM_REPLICATIONS = 200
 SEED = 20260915
 POPULATION_MEAN = 1.0
 POPULATION_VARIANCE = 1.0
-DUAL_SOLVER = GradientDescent(step_size=0.2, max_iter=120, tol=1e-7)
+# The whole radius-by-replication grid is one joint solve that starts from a
+# single shared point, so it runs until the *slowest* element is stationary;
+# a larger budget than a lone solve needs is cheap per iteration and keeps
+# every element at solver precision.
+DUAL_SOLVER = GradientDescent(step_size=0.2, max_iter=2000, tol=1e-7)
 
 
 def chi_square_quantile(confidence: float) -> float:
@@ -124,25 +128,29 @@ def exponential_samples(num_samples: int, generator: torch.Generator) -> torch.T
 
 
 def build_ambiguity_sets(
-    nominal: torch.Tensor, radius: float
+    nominal: torch.Tensor, radius: torch.Tensor
 ) -> tuple[ChiSquareAmbiguitySet, ChiSquareAmbiguitySet]:
     """Build the two ambiguity sets that produce a two-sided mean interval.
 
     Both sets are identical as sets; they differ only in where their dual
-    solve starts. Keeping them separate lets each one warm-start from its
-    own previous optimum across replications instead of being dragged back
-    and forth between the upper and the lower problem. The starting point
-    is the asymptotic interior optimum implied by the *population* moments,
-    which is a good guess without reading anything off the sample.
+    solve starts, because the lower bound is computed on the negated loss
+    and its multiplier `lam` therefore sits near `-mean` rather than
+    `mean`. The starting point is the asymptotic interior optimum implied
+    by the *population* moments, which is a good guess without reading
+    anything off the sample. A dual solve starts from one point shared by
+    the whole batch, so a sweep of radii starts from the interior optimum
+    at their geometric mean.
 
     Args:
         nominal: Uniform empirical distribution over the support.
-        radius: Calibrated chi-square radius.
+        radius: Calibrated chi-square radius, a scalar or a tensor of radii
+            that broadcasts against the batch of losses.
 
     Returns:
         The `(lower, upper)` ambiguity sets.
     """
-    initial_log_eta = 0.5 * math.log(POPULATION_VARIANCE / (4.0 * radius))
+    typical_radius = float(torch.exp(torch.mean(torch.log(radius))))
+    initial_log_eta = 0.5 * math.log(POPULATION_VARIANCE / (4.0 * typical_radius))
     lower = ChiSquareAmbiguitySet(
         nominal=nominal,
         radius=radius,
@@ -174,25 +182,32 @@ def main() -> None:
         sample_mean = torch.mean(samples, dim=-1)
         sample_variance = torch.var(samples, dim=-1, unbiased=False)
 
+        # One batched solve per side covers every confidence level and every
+        # replication: the radii form a `(levels, 1)` column that broadcasts
+        # against the `(replications,)` batch of losses, so each side of the
+        # interval comes back as a `(levels, replications)` tensor.
+        radii = torch.tensor(
+            [calibrated_radius(num_samples, level) for level in CONFIDENCE_LEVELS],
+            dtype=torch.float64,
+        ).unsqueeze(-1)
+        lower_set, upper_set = build_ambiguity_sets(nominal, radii)
+        lower = -lower_set.worst_case_expectation(-samples)
+        upper = upper_set.worst_case_expectation(samples)
+
+        covered = (lower <= POPULATION_MEAN) & (upper >= POPULATION_MEAN)
+        coverages = torch.mean(covered.to(samples.dtype), dim=-1).tolist()
+        asymptotic = sample_mean + torch.sqrt(radii * sample_variance)
+        closed_form_gaps = torch.amin(upper - asymptotic, dim=-1).tolist()
+
         print(f"\nn = {num_samples}, {NUM_REPLICATIONS} replications")
         print("  confidence   radius   coverage   worst closed-form gap")
-        coverages = []
-        for confidence in CONFIDENCE_LEVELS:
-            radius = calibrated_radius(num_samples, confidence)
-            lower_set, upper_set = build_ambiguity_sets(nominal, radius)
-            lower = torch.stack(
-                [-lower_set.worst_case_expectation(-sample) for sample in samples]
-            )
-            upper = torch.stack(
-                [upper_set.worst_case_expectation(sample) for sample in samples]
-            )
-
-            covered = (lower <= POPULATION_MEAN) & (upper >= POPULATION_MEAN)
-            coverage = float(torch.mean(covered.to(samples.dtype)))
-            asymptotic = sample_mean + torch.sqrt(radius * sample_variance)
-            closed_form_gap = float(torch.min(upper - asymptotic))
-
-            coverages.append(coverage)
+        for confidence, radius, coverage, closed_form_gap in zip(
+            CONFIDENCE_LEVELS,
+            radii.squeeze(-1).tolist(),
+            coverages,
+            closed_form_gaps,
+            strict=True,
+        ):
             closed_form_gap_by_setting[num_samples, confidence] = closed_form_gap
             print(
                 f"  {confidence:>9.2f}   {radius:>6.4f}   {coverage:>8.3f}"
@@ -274,7 +289,9 @@ def _assert_calibration_matches_normal_interval() -> None:
     generator = torch.Generator().manual_seed(SEED)
     sample = exponential_samples(num_samples, generator)[0]
     nominal = torch.full((num_samples,), 1.0 / num_samples, dtype=torch.float64)
-    radius = calibrated_radius(num_samples, confidence)
+    radius = torch.tensor(
+        calibrated_radius(num_samples, confidence), dtype=torch.float64
+    )
 
     _, upper_set = build_ambiguity_sets(nominal, radius)
     solved = float(upper_set.worst_case_expectation(sample))

@@ -152,11 +152,13 @@ it is a clean indicator function:
 
 | $1-\alpha$ | $n = 10$ | $n = 40$ | $n = 160$ |
 | --- | --- | --- | --- |
-| 0.90 | $+8 \times 10^{-15}$ | $+1 \times 10^{-10}$ | $+4 \times 10^{-9}$ |
-| 0.95 | $-1.8 \times 10^{-3}$ | $+9 \times 10^{-15}$ | $+3 \times 10^{-9}$ |
-| 0.99 | $-2.1 \times 10^{-2}$ | $+4 \times 10^{-14}$ | $+2 \times 10^{-10}$ |
+| 0.90 | $\approx 0$ | $\approx 0$ | $\approx 0$ |
+| 0.95 | $-1.8 \times 10^{-3}$ | $\approx 0$ | $\approx 0$ |
+| 0.99 | $-2.1 \times 10^{-2}$ | $\approx 0$ | $\approx 0$ |
 
-Positive entries are solver slop. The two negative ones are real: at
+Entries marked $\approx 0$ are floating-point rounding, a few times
+$10^{-16}$: the dual solve is exact to working precision there and simply
+reproduces the closed form. The two negative ones are real: at
 $n = 10$ and high confidence the calibrated radius is large enough
 ($\rho = 0.38$ and $\rho = 0.66$) to hit the boundary of the simplex. That
 is not a coincidence — it is the same small-$n$, high-confidence corner
@@ -176,16 +178,25 @@ told which one it is in.
   estimate near $0.9$ is about $0.02$, which is exactly the size of the
   wobble you can see at $1-\alpha = 0.50$.
 
-!!! warning "This is the slowest script in the section"
+!!! note "One batched solve per side"
 
-    Coverage is a Monte Carlo quantity, so the experiment is
-    $3 \times 5 \times 200 \times 2 = 6000$ independent dual solves, and
-    `worst_case_expectation` takes one scenario vector at a time — batching
-    it over replications is
-    [tracked as a known gap](https://github.com/navidsharifi/optora/issues/20).
-    Expect a couple of minutes. The dual solves are warm-started from the
-    population asymptotic optimum, which is a legitimate guess because it
-    uses no information from the sample being solved.
+    Coverage is a Monte Carlo quantity, so the experiment needs
+    $3 \times 5 \times 200 \times 2 = 6000$ dual solves. They are not run
+    one by one: `worst_case_expectation` accepts a loss of shape
+    $(\dots, n)$ and a tensor radius that broadcasts against the batch, so
+    the five confidence levels form a $(5, 1)$ column of radii and the 200
+    replications a $(200, n)$ loss, and one call returns all
+    $5 \times 200$ values. Each sample size therefore costs two calls, one
+    per side of the interval, and the whole script runs in about ten
+    seconds.
+
+    A batched dual solve starts every element from one shared point, here
+    the population asymptotic optimum at the geometric mean of the radii,
+    which is a legitimate guess because it uses no information from the
+    sample being solved. It also runs until the slowest element is
+    stationary, so the script gives `GradientDescent` a generous iteration
+    budget; a smaller one leaves the extreme radii a few $10^{-4}$ short of
+    the optimum, enough to move a coverage estimate.
 
 ## Source
 
