@@ -79,7 +79,6 @@ def _wasserstein(dtype: torch.dtype) -> AmbiguitySet:
         _nominal(dtype),
         cost=torch.tensor(COST, dtype=dtype),
         radius=RADIUS,
-        dual_solver=_solver(),
     )
 
 

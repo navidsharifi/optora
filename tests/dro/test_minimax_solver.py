@@ -372,12 +372,7 @@ def test_generic_wiring_for_wasserstein_ambiguity_set() -> None:
     nominal = torch.tensor([0.5, 0.5], dtype=torch.float64)
     targets = torch.tensor([1.0, 5.0], dtype=torch.float64)
     cost = torch.tensor([[0.0, 2.0], [2.0, 0.0]], dtype=torch.float64)
-    ambiguity_set = WassersteinAmbiguitySet(
-        nominal,
-        cost=cost,
-        radius=0.3,
-        dual_solver=GradientDescent(step_size=0.02, max_iter=150, tol=1e-7),
-    )
+    ambiguity_set = WassersteinAmbiguitySet(nominal, cost=cost, radius=0.3)
 
     def loss_fn(x: torch.Tensor) -> torch.Tensor:
         return (x - targets) ** 2

@@ -6,16 +6,9 @@ from typing import Any
 import pytest
 import torch
 
-from optora.core.convergence import ConvergenceStatus
 from optora.core.dro_base import AmbiguitySet
-from optora.core.solver_base import (
-    MinimizationProblem,
-    MinimizationResult,
-    Solver,
-)
 from optora.divergences.wasserstein import SinkhornDivergence
-from optora.dro.wasserstein_dro import WassersteinAmbiguitySet
-from optora.solvers.gradient_descent import GradientDescent
+from optora.dro.wasserstein_dro import WassersteinAmbiguitySet, _bisection_steps
 
 TWO_POINT_COST = torch.tensor([[0.0, 2.0], [2.0, 0.0]], dtype=torch.float64)
 
@@ -28,23 +21,6 @@ FOUR_POINT_COST = torch.tensor(
     ],
     dtype=torch.float64,
 )
-
-
-class _RecordingSolver(Solver[MinimizationProblem, MinimizationResult]):
-    """Fake dual solver returning a fixed `gamma_raw` for deterministic checks."""
-
-    def __init__(self, gamma_raw: float) -> None:
-        self.gamma_raw = gamma_raw
-        self.received_problem: MinimizationProblem | None = None
-
-    def solve(self, problem: MinimizationProblem) -> MinimizationResult:
-        self.received_problem = problem
-        point = torch.tensor(self.gamma_raw, dtype=problem.initial_point.dtype)
-        return MinimizationResult(
-            point=point,
-            value=problem.objective(point),
-            status=ConvergenceStatus(torch.tensor(True), torch.tensor(0)),
-        )
 
 
 def _grid_search_wasserstein_dual_minimum(
@@ -76,77 +52,17 @@ def test_zero_radius_returns_exact_expectation() -> None:
     assert torch.allclose(result, torch.sum(nominal * loss), atol=1e-6)
 
 
-def test_worst_case_expectation_uses_custom_dual_solver() -> None:
-    nominal = torch.tensor([0.5, 0.5], dtype=torch.float64)
-    loss = torch.tensor([0.0, 1.0], dtype=torch.float64)
-    fake_solver = _RecordingSolver(gamma_raw=0.5)
-    ambiguity_set = WassersteinAmbiguitySet(
-        nominal, cost=TWO_POINT_COST, radius=0.3, dual_solver=fake_solver
-    )
-
-    result = ambiguity_set.worst_case_expectation(loss)
-
-    assert fake_solver.received_problem is not None
-    gamma = torch.tensor(0.5, dtype=torch.float64)
-    shifted = loss.unsqueeze(-2) - gamma * TWO_POINT_COST
-    row_max = torch.amax(shifted, dim=-1)
-    expected = gamma * 0.3 + torch.sum(nominal * row_max)
-    assert torch.allclose(result, expected, atol=1e-6)
-
-
-def test_positive_radius_requires_an_explicit_dual_solver() -> None:
-    ambiguity_set = WassersteinAmbiguitySet(
-        torch.tensor([0.5, 0.5]), cost=TWO_POINT_COST, radius=0.1
-    )
-
-    with pytest.raises(RuntimeError, match="dual_solver is required"):
-        ambiguity_set.worst_case_expectation(
-            torch.tensor([0.0, 1.0], dtype=torch.float64)
-        )
-
-
-def test_dual_reparameterization_clamps_negative_gamma_to_zero() -> None:
-    nominal = torch.tensor([0.5, 0.5], dtype=torch.float64)
-    loss = torch.tensor([0.0, 1.0], dtype=torch.float64)
-    fake_solver = _RecordingSolver(gamma_raw=-3.0)
-    ambiguity_set = WassersteinAmbiguitySet(
-        nominal, cost=TWO_POINT_COST, radius=0.3, dual_solver=fake_solver
-    )
-
-    result = ambiguity_set.worst_case_expectation(loss)
-
-    assert torch.allclose(result, loss.max(), atol=1e-6)
-
-
-def test_dual_objective_keeps_one_sided_gradient_at_the_zero_boundary() -> None:
-    # The nonnegativity projection must expose the right derivative of the dual
-    # at gamma = 0, the default starting point: `torch.clamp` reports a zero
-    # subgradient there, which would stall gradient descent immediately.
-    nominal = torch.tensor([0.5, 0.5], dtype=torch.float64)
-    loss = torch.tensor([0.0, 1.0], dtype=torch.float64)
-    fake_solver = _RecordingSolver(gamma_raw=0.0)
-    ambiguity_set = WassersteinAmbiguitySet(
-        nominal, cost=TWO_POINT_COST, radius=0.3, dual_solver=fake_solver
-    )
-
-    ambiguity_set.worst_case_expectation(loss)
-
-    assert fake_solver.received_problem is not None
-    gamma_raw = torch.tensor(0.0, dtype=torch.float64, requires_grad=True)
-    (gradient,) = torch.autograd.grad(
-        fake_solver.received_problem.objective(gamma_raw), gamma_raw
-    )
-    expected = 0.3 - torch.sum(nominal * TWO_POINT_COST[:, 1])
-    assert torch.allclose(gradient, expected, atol=1e-12)
-
-
-def test_worst_case_expectation_matches_grid_search_over_dual_variable() -> None:
+@pytest.mark.parametrize("radius", [0.05, 0.1, 0.2, 0.5, 1.0, 2.0])
+def test_worst_case_expectation_matches_grid_search_over_dual_variable(
+    radius: float,
+) -> None:
+    # The dual is piecewise linear in gamma, so a fixed-step gradient method
+    # oscillates around its kink; bisecting the monotone derivative instead
+    # lands on the minimum to machine precision, not to a solver tolerance.
     nominal = torch.tensor([0.1, 0.2, 0.3, 0.4], dtype=torch.float64)
     loss = torch.tensor([0.0, 1.0, 2.0, 5.0], dtype=torch.float64)
-    radius = 0.2
-    solver = GradientDescent(step_size=0.01, max_iter=20000, tol=1e-10)
     ambiguity_set = WassersteinAmbiguitySet(
-        nominal, cost=FOUR_POINT_COST, radius=radius, dual_solver=solver
+        nominal, cost=FOUR_POINT_COST, radius=radius
     )
 
     result = ambiguity_set.worst_case_expectation(loss)
@@ -154,57 +70,130 @@ def test_worst_case_expectation_matches_grid_search_over_dual_variable() -> None
     reference = _grid_search_wasserstein_dual_minimum(
         nominal, loss, FOUR_POINT_COST, radius
     )
-    assert torch.allclose(result, reference, atol=1e-3)
+    assert torch.allclose(result, reference, atol=1e-12)
 
 
-def test_initial_dual_point_is_built_once_from_the_configured_gamma() -> None:
+def test_dual_bracket_contains_the_minimizer() -> None:
+    # The bisection is only exact because the bracket is: the dual must still
+    # be decreasing at gamma = 0 and no longer decreasing at the upper bound.
+    nominal = torch.tensor([0.1, 0.2, 0.3, 0.4], dtype=torch.float64)
+    loss = torch.tensor([0.0, 1.0, 2.0, 5.0], dtype=torch.float64)
+    ambiguity_set = WassersteinAmbiguitySet(nominal, cost=FOUR_POINT_COST, radius=0.2)
+
+    upper = ambiguity_set._dual_upper_bound(loss)
+    lower_derivative = ambiguity_set._dual_derivative(loss, torch.zeros_like(upper))
+    upper_derivative = ambiguity_set._dual_derivative(loss, upper)
+
+    assert lower_derivative <= 0.0
+    assert upper_derivative >= 0.0
+    lower, bracketed_upper = ambiguity_set._dual_bracket(loss, torch.Size())
+    assert 0.0 <= lower <= bracketed_upper <= upper
+    assert ambiguity_set._dual_derivative(loss, lower) <= 0.0
+    assert ambiguity_set._dual_derivative(loss, bracketed_upper) >= 0.0
+
+
+def test_dual_solve_costs_a_fixed_number_of_derivative_evaluations() -> None:
+    # The whole point of the bisection: bounded, dtype-determined work,
+    # instead of a fixed-step gradient method burning its iteration budget.
+    nominal = torch.tensor([0.1, 0.2, 0.3, 0.4], dtype=torch.float64)
+    loss = torch.tensor([0.0, 1.0, 2.0, 5.0], dtype=torch.float64)
+    ambiguity_set = WassersteinAmbiguitySet(nominal, cost=FOUR_POINT_COST, radius=0.2)
+    evaluations = 0
+    derivative = ambiguity_set._dual_derivative
+
+    def counting_derivative(loss: torch.Tensor, gamma: torch.Tensor) -> torch.Tensor:
+        nonlocal evaluations
+        evaluations += 1
+        return derivative(loss, gamma)
+
+    ambiguity_set._dual_derivative = counting_derivative  # type: ignore[method-assign]
+    ambiguity_set.worst_case_expectation(loss)
+
+    assert evaluations == _bisection_steps(torch.float64)
+    assert evaluations < 60
+
+
+def test_bisection_step_count_tracks_the_working_precision() -> None:
+    assert _bisection_steps(torch.float32) < _bisection_steps(torch.float64)
+    for dtype in (torch.float32, torch.float64):
+        assert 2.0 ** -_bisection_steps(dtype) < torch.finfo(dtype).eps
+
+
+def test_worst_case_expectation_does_not_synchronize_with_the_host(
+    host_sync_counter: Callable[[], Any],
+) -> None:
+    nominal = torch.tensor([0.1, 0.2, 0.3, 0.4], dtype=torch.float64)
+    loss = torch.tensor([0.0, 1.0, 2.0, 5.0], dtype=torch.float64)
+    ambiguity_set = WassersteinAmbiguitySet(nominal, cost=FOUR_POINT_COST, radius=0.2)
+
+    with host_sync_counter() as syncs:
+        ambiguity_set.worst_case_expectation(loss)
+
+    assert len(syncs) == 0
+
+
+def test_large_radius_puts_the_dual_minimizer_exactly_at_zero() -> None:
+    # Once the radius covers the cost of moving all mass onto the highest-loss
+    # point the constraint gamma >= 0 is active, and the bracket's left end is
+    # the answer: the worst case is the maximum loss itself.
     nominal = torch.tensor([0.5, 0.5], dtype=torch.float64)
     loss = torch.tensor([0.0, 1.0], dtype=torch.float64)
-    fake_solver = _RecordingSolver(gamma_raw=0.5)
-    ambiguity_set = WassersteinAmbiguitySet(
-        nominal,
-        cost=TWO_POINT_COST,
-        radius=0.3,
-        dual_solver=fake_solver,
-        initial_gamma=0.25,
+    ambiguity_set = WassersteinAmbiguitySet(nominal, cost=TWO_POINT_COST, radius=1.5)
+
+    lower, _ = ambiguity_set._dual_bracket(loss, torch.Size())
+
+    assert torch.equal(lower, torch.zeros_like(lower))
+    assert torch.equal(ambiguity_set.worst_case_expectation(loss), loss.max())
+
+
+def test_worst_case_distribution_spends_the_radius_exactly() -> None:
+    # The dual minimizer is a kink: the transport plans on either side of it
+    # over- and under-spend the radius, and only their mixture is optimal.
+    # Reading the value off the dual there instead would break the gradient.
+    nominal = torch.tensor([0.25, 0.25, 0.25, 0.25], dtype=torch.float64)
+    outcomes = torch.tensor([1.0, 2.0, 3.0, 10.0], dtype=torch.float64)
+    cost = (outcomes.unsqueeze(0) - outcomes.unsqueeze(1)) ** 2
+    radius = 0.02
+    decision = torch.tensor(3.98, dtype=torch.float64, requires_grad=True)
+    ambiguity_set = WassersteinAmbiguitySet(nominal, cost=cost, radius=radius)
+
+    value = ambiguity_set.worst_case_expectation((outcomes - decision) ** 2)
+    (gradient,) = torch.autograd.grad(value, decision)
+
+    # The gradient is the one of the true worst-case distribution, so it must
+    # agree with a central difference of the (exact) value function.
+    step = 1e-5
+    shifted = torch.tensor([decision.item() - step, decision.item() + step])
+    losses = (outcomes - shifted.to(torch.float64).unsqueeze(-1)) ** 2
+    values = ambiguity_set.worst_case_expectation(losses)
+    assert torch.allclose(gradient, (values[1] - values[0]) / (2.0 * step), atol=1e-6)
+
+
+def test_worst_case_expectation_is_differentiable_through_the_dual_optimum() -> None:
+    # The bisection is detached, so the gradient comes entirely from
+    # re-evaluating the dual at the minimizer (envelope theorem). Comparing
+    # against a difference quotient in a direction that keeps the same
+    # maximizers avoids the kinks where the value is only subdifferentiable.
+    nominal = torch.tensor([0.1, 0.2, 0.3, 0.4], dtype=torch.float64)
+    loss = torch.tensor([0.0, 1.0, 2.0, 5.0], dtype=torch.float64)
+    direction = torch.ones_like(loss)
+    ambiguity_set = WassersteinAmbiguitySet(nominal, cost=FOUR_POINT_COST, radius=0.2)
+    variable = loss.clone().requires_grad_(True)
+
+    value = ambiguity_set.worst_case_expectation(variable)
+    (gradient,) = torch.autograd.grad(value, variable)
+
+    # Shifting every loss by a constant shifts the worst case by the same
+    # constant, so the directional derivative along `direction` must be one.
+    assert torch.allclose(
+        torch.sum(gradient * direction), torch.tensor(1.0, dtype=torch.float64)
     )
-
-    ambiguity_set.worst_case_expectation(loss)
-
-    assert fake_solver.received_problem is not None
-    assert torch.equal(
-        fake_solver.received_problem.initial_point,
-        torch.tensor(0.25, dtype=torch.float64),
-    )
-
-
-def test_repeated_calls_warm_start_from_the_previous_dual_optimum() -> None:
-    nominal = torch.tensor([0.5, 0.5], dtype=torch.float64)
-    loss = torch.tensor([0.0, 1.0], dtype=torch.float64)
-    fake_solver = _RecordingSolver(gamma_raw=0.5)
-    ambiguity_set = WassersteinAmbiguitySet(
-        nominal,
-        cost=TWO_POINT_COST,
-        radius=0.3,
-        dual_solver=fake_solver,
-        initial_gamma=0.25,
-    )
-
-    ambiguity_set.worst_case_expectation(loss)
-    ambiguity_set.worst_case_expectation(loss)
-
-    assert fake_solver.received_problem is not None
-    assert torch.equal(
-        fake_solver.received_problem.initial_point,
-        torch.tensor(0.5, dtype=torch.float64),
-    )
-
-    ambiguity_set.reset_warm_start()
-    ambiguity_set.worst_case_expectation(loss)
-
-    assert torch.equal(
-        fake_solver.received_problem.initial_point,
-        torch.tensor(0.25, dtype=torch.float64),
+    step = 1e-6
+    shifted = ambiguity_set.worst_case_expectation(loss + step * direction)
+    assert torch.allclose(
+        shifted - value.detach(),
+        torch.tensor(step, dtype=torch.float64),
+        atol=1e-12,
     )
 
 
@@ -218,14 +207,11 @@ def test_matches_hand_computed_two_point_example_below_threshold() -> None:
     # against a fine grid search over gamma).
     nominal = torch.tensor([0.5, 0.5], dtype=torch.float64)
     loss = torch.tensor([0.0, 1.0], dtype=torch.float64)
-    solver = GradientDescent(step_size=0.01, max_iter=20000, tol=1e-10)
-    ambiguity_set = WassersteinAmbiguitySet(
-        nominal, cost=TWO_POINT_COST, radius=0.3, dual_solver=solver
-    )
+    ambiguity_set = WassersteinAmbiguitySet(nominal, cost=TWO_POINT_COST, radius=0.3)
 
     result = ambiguity_set.worst_case_expectation(loss)
 
-    assert torch.allclose(result, torch.tensor(0.65, dtype=torch.float64), atol=1e-4)
+    assert torch.allclose(result, torch.tensor(0.65, dtype=torch.float64), atol=1e-12)
 
 
 def test_matches_hand_computed_two_point_example_at_threshold() -> None:
@@ -235,14 +221,11 @@ def test_matches_hand_computed_two_point_example_at_threshold() -> None:
     # max loss.
     nominal = torch.tensor([0.5, 0.5], dtype=torch.float64)
     loss = torch.tensor([0.0, 1.0], dtype=torch.float64)
-    solver = GradientDescent(step_size=0.01, max_iter=20000, tol=1e-10)
-    ambiguity_set = WassersteinAmbiguitySet(
-        nominal, cost=TWO_POINT_COST, radius=1.0, dual_solver=solver
-    )
+    ambiguity_set = WassersteinAmbiguitySet(nominal, cost=TWO_POINT_COST, radius=1.0)
 
     result = ambiguity_set.worst_case_expectation(loss)
 
-    assert torch.allclose(result, torch.tensor(1.0, dtype=torch.float64), atol=1e-6)
+    assert torch.allclose(result, torch.tensor(1.0, dtype=torch.float64), atol=1e-12)
 
 
 def test_worst_case_expectation_is_attained_by_explicit_transport_plan() -> None:
@@ -260,26 +243,30 @@ def test_worst_case_expectation_is_attained_by_explicit_transport_plan() -> None
     exact_transport_cost = torch.sum(coupling * TWO_POINT_COST)
     assert exact_transport_cost <= 0.3 + 1e-9
 
-    solver = GradientDescent(step_size=0.01, max_iter=20000, tol=1e-10)
-    ambiguity_set = WassersteinAmbiguitySet(
-        nominal, cost=TWO_POINT_COST, radius=0.3, dual_solver=solver
-    )
+    ambiguity_set = WassersteinAmbiguitySet(nominal, cost=TWO_POINT_COST, radius=0.3)
     result = ambiguity_set.worst_case_expectation(loss)
 
-    assert torch.allclose(result, torch.sum(candidate * loss), atol=1e-4)
+    assert torch.allclose(result, torch.sum(candidate * loss), atol=1e-12)
 
 
 def test_worst_case_expectation_reaches_max_loss_for_large_radius() -> None:
     nominal = torch.tensor([0.1, 0.2, 0.3, 0.4], dtype=torch.float64)
     loss = torch.tensor([0.0, 1.0, 2.0, 5.0], dtype=torch.float64)
-    solver = GradientDescent(step_size=0.01, max_iter=20000, tol=1e-10)
-    ambiguity_set = WassersteinAmbiguitySet(
-        nominal, cost=FOUR_POINT_COST, radius=2.0, dual_solver=solver
-    )
+    ambiguity_set = WassersteinAmbiguitySet(nominal, cost=FOUR_POINT_COST, radius=2.0)
 
     result = ambiguity_set.worst_case_expectation(loss)
 
-    assert torch.allclose(result, torch.tensor(5.0, dtype=torch.float64), atol=1e-6)
+    assert torch.allclose(result, torch.tensor(5.0, dtype=torch.float64), atol=1e-12)
+
+
+def test_single_support_point_has_no_transport_and_no_bracket() -> None:
+    nominal = torch.tensor([1.0], dtype=torch.float64)
+    loss = torch.tensor([3.0], dtype=torch.float64)
+    ambiguity_set = WassersteinAmbiguitySet(
+        nominal, cost=torch.zeros(1, 1, dtype=torch.float64), radius=0.5
+    )
+
+    assert torch.equal(ambiguity_set.worst_case_expectation(loss), loss[0])
 
 
 # --- General bounds and monotonicity ----------------------------------------
@@ -288,13 +275,12 @@ def test_worst_case_expectation_reaches_max_loss_for_large_radius() -> None:
 def test_worst_case_expectation_is_monotonic_in_radius() -> None:
     nominal = torch.tensor([0.1, 0.2, 0.3, 0.4], dtype=torch.float64)
     loss = torch.tensor([0.0, 1.0, 2.0, 5.0], dtype=torch.float64)
-    solver = GradientDescent(step_size=0.01, max_iter=20000, tol=1e-10)
 
     small = WassersteinAmbiguitySet(
-        nominal, cost=FOUR_POINT_COST, radius=0.05, dual_solver=solver
+        nominal, cost=FOUR_POINT_COST, radius=0.05
     ).worst_case_expectation(loss)
     large = WassersteinAmbiguitySet(
-        nominal, cost=FOUR_POINT_COST, radius=0.5, dual_solver=solver
+        nominal, cost=FOUR_POINT_COST, radius=0.5
     ).worst_case_expectation(loss)
 
     assert large >= small - 1e-6
@@ -306,14 +292,11 @@ def test_worst_case_expectation_is_at_least_nominal_expectation() -> None:
     cost = torch.tensor(
         [[0.0, 1.0, 2.0], [1.0, 0.0, 1.0], [2.0, 1.0, 0.0]], dtype=torch.float64
     )
-    solver = GradientDescent(step_size=0.01, max_iter=20000, tol=1e-10)
-    ambiguity_set = WassersteinAmbiguitySet(
-        nominal, cost=cost, radius=0.1, dual_solver=solver
-    )
+    ambiguity_set = WassersteinAmbiguitySet(nominal, cost=cost, radius=0.1)
 
     result = ambiguity_set.worst_case_expectation(loss)
 
-    assert result >= torch.sum(nominal * loss) - 1e-4
+    assert result >= torch.sum(nominal * loss) - 1e-12
 
 
 def test_worst_case_expectation_does_not_exceed_max_loss() -> None:
@@ -322,14 +305,11 @@ def test_worst_case_expectation_does_not_exceed_max_loss() -> None:
     cost = torch.tensor(
         [[0.0, 1.0, 2.0], [1.0, 0.0, 1.0], [2.0, 1.0, 0.0]], dtype=torch.float64
     )
-    solver = GradientDescent(step_size=0.01, max_iter=20000, tol=1e-10)
-    ambiguity_set = WassersteinAmbiguitySet(
-        nominal, cost=cost, radius=0.5, dual_solver=solver
-    )
+    ambiguity_set = WassersteinAmbiguitySet(nominal, cost=cost, radius=0.5)
 
     result = ambiguity_set.worst_case_expectation(loss)
 
-    assert result <= loss.max() + 1e-4
+    assert result <= loss.max() + 1e-12
 
 
 # --- Lipschitz-regularization equivalence -----------------------------------
@@ -363,10 +343,7 @@ def test_small_radius_dual_equals_lipschitz_regularized_expectation() -> None:
     loss = torch.abs(support)
     nominal = torch.full_like(support, 0.2)
     radius = 0.2
-    solver = GradientDescent(step_size=0.01, max_iter=2000, tol=1e-12)
-    ambiguity_set = WassersteinAmbiguitySet(
-        nominal, cost=cost, radius=radius, dual_solver=solver
-    )
+    ambiguity_set = WassersteinAmbiguitySet(nominal, cost=cost, radius=radius)
 
     result = ambiguity_set.worst_case_expectation(loss)
 
@@ -375,7 +352,7 @@ def test_small_radius_dual_equals_lipschitz_regularized_expectation() -> None:
         torch.tensor(1.0, dtype=torch.float64),
     )
     expected = torch.sum(nominal * loss) + radius * 1.0
-    assert torch.allclose(result, expected, atol=5e-3)
+    assert torch.allclose(result, expected, atol=1e-12)
 
 
 @pytest.mark.parametrize("radius", [0.01, 0.1, 1.0, 5.0])
@@ -383,10 +360,7 @@ def test_lipschitz_surrogate_upper_bounds_the_dual(radius: float) -> None:
     support, cost = _metric_support(24)
     loss = torch.nn.functional.softplus(support)
     nominal = torch.full_like(support, 1.0 / support.numel())
-    solver = GradientDescent(step_size=0.05, max_iter=600, tol=1e-12)
-    ambiguity_set = WassersteinAmbiguitySet(
-        nominal, cost=cost, radius=radius, dual_solver=solver
-    )
+    ambiguity_set = WassersteinAmbiguitySet(nominal, cost=cost, radius=radius)
 
     result = ambiguity_set.worst_case_expectation(loss)
 
@@ -402,16 +376,13 @@ def test_lipschitz_surrogate_gap_shrinks_as_the_sample_refines() -> None:
     # asymptotically, so L_n increases -- and the gap shrinks -- as the sample
     # refines.
     radius = 1e-3
-    solver = GradientDescent(step_size=0.05, max_iter=600, tol=1e-12)
     normalized_gaps = []
     deficiencies = []
     for num_points in (8, 32, 128):
         support, cost = _metric_support(num_points)
         loss = torch.nn.functional.softplus(support)
         nominal = torch.full_like(support, 1.0 / num_points)
-        ambiguity_set = WassersteinAmbiguitySet(
-            nominal, cost=cost, radius=radius, dual_solver=solver
-        )
+        ambiguity_set = WassersteinAmbiguitySet(nominal, cost=cost, radius=radius)
 
         result = ambiguity_set.worst_case_expectation(loss)
 
@@ -421,7 +392,7 @@ def test_lipschitz_surrogate_gap_shrinks_as_the_sample_refines() -> None:
 
     assert normalized_gaps == sorted(normalized_gaps, reverse=True)
     for measured, predicted in zip(normalized_gaps, deficiencies, strict=True):
-        assert abs(measured - predicted) < 5e-3
+        assert abs(measured - predicted) < 1e-9
 
 
 # --- Validation --------------------------------------------------------------

@@ -109,11 +109,16 @@ $$
 $$
 
 `gamma`'s optimum can sit exactly at the boundary `gamma = 0` (once the
-radius is generous enough to move all the mass to the worst scenario),
-so this one is reparameterized with a `clamp` instead of an exponential.
-It uses a `SinkhornDivergence` internally only as an approximate
-`contains(...)` membership check; the worst-case expectation itself is
-solved exactly, not through the entropic approximation.
+radius is generous enough to move all the mass to the worst scenario).
+The dual is convex but *piecewise linear* in `gamma`, so a fixed-step
+gradient method oscillates around its kink and never converges; its
+derivative is nevertheless monotone, so `WassersteinAmbiguitySet` takes
+no dual solver at all and instead bisects that derivative's sign change
+inside a closed-form bracket, reaching the exact minimizer in a fixed,
+dtype-determined number of steps. It uses a `SinkhornDivergence`
+internally only as an approximate `contains(...)` membership check; the
+worst-case expectation itself is solved exactly, not through the entropic
+approximation.
 
 ### `MinimaxSolver`
 

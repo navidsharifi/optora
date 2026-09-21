@@ -46,12 +46,7 @@ def _total_variation(radius: float | torch.Tensor) -> AmbiguitySet:
 
 
 def _wasserstein(radius: float | torch.Tensor) -> AmbiguitySet:
-    return WassersteinAmbiguitySet(
-        NOMINAL,
-        cost=COST,
-        radius=radius,
-        dual_solver=GradientDescent(step_size=0.05, max_iter=600, tol=1e-10),
-    )
+    return WassersteinAmbiguitySet(NOMINAL, cost=COST, radius=radius)
 
 
 FACTORIES: dict[str, AmbiguitySetFactory] = {
