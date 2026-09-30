@@ -2,6 +2,7 @@
 
 from collections.abc import Callable
 from typing import Any
+from unittest.mock import patch
 
 import pytest
 import torch
@@ -138,9 +139,80 @@ def test_sinkhorn_loop_does_not_synchronize_on_every_iteration(
     with host_sync_counter() as syncs:
         divergence(p, q)
 
-    # Three `_entropic_transport_cost` calls, each checking convergence at
-    # most every 20 of its 60 iterations, instead of once per iteration.
-    assert len(syncs) <= 3 * (60 // 20)
+    # One batched Sinkhorn loop over the three debiasing transport problems,
+    # checking convergence every 20 of its 60 iterations: a third of the
+    # reads the three sequential loops used to cost.
+    assert len(syncs) == 60 // 20
+
+
+def test_debiasing_runs_one_batched_sinkhorn_loop() -> None:
+    divergence = SinkhornDivergence(cost=TWO_POINT_COST)
+    p = torch.tensor([0.1, 0.9])
+    q = torch.tensor([0.7, 0.3])
+    batch_shapes = []
+    sinkhorn = SinkhornDivergence._sinkhorn
+
+    def recording(
+        self: SinkhornDivergence, row: torch.Tensor, column: torch.Tensor
+    ) -> torch.Tensor:
+        batch_shapes.append(tuple(row.shape[:-1]))
+        return sinkhorn(self, row, column)
+
+    with patch.object(SinkhornDivergence, "_sinkhorn", recording):
+        divergence(p, q)
+
+    assert batch_shapes == [(3,)]
+
+
+def test_identical_distributions_are_exactly_zero() -> None:
+    divergence = SinkhornDivergence(cost=TWO_POINT_COST, max_iter=3)
+    p = torch.tensor([0.25, 0.75])
+
+    # The three debiasing legs are the same problem in the same batched
+    # kernels, so they cancel bitwise even before the loop converges.
+    assert torch.equal(divergence(p, p), torch.zeros(()))
+
+
+def test_batched_distributions_match_elementwise_divergences() -> None:
+    divergence = SinkhornDivergence(cost=TWO_POINT_COST, max_iter=200)
+    p = torch.tensor([[0.1, 0.9], [0.5, 0.5], [0.8, 0.2]])
+    q = torch.tensor([[0.7, 0.3], [0.2, 0.8], [0.5, 0.5]])
+
+    value = divergence(p, q)
+
+    assert value.shape == (3,)
+    expected = torch.stack(
+        [divergence(row, column) for row, column in zip(p, q, strict=True)]
+    )
+    assert torch.allclose(value, expected, atol=1e-6)
+
+
+def test_batched_p_broadcasts_against_a_single_q() -> None:
+    divergence = SinkhornDivergence(cost=TWO_POINT_COST, max_iter=200)
+    p = torch.tensor([[0.1, 0.9], [0.5, 0.5], [0.8, 0.2]])
+    q = torch.tensor([0.7, 0.3])
+
+    value = divergence(p, q)
+
+    assert value.shape == (3,)
+    expected = torch.stack([divergence(row, q) for row in p])
+    assert torch.allclose(value, expected, atol=1e-6)
+
+
+def test_batched_solve_does_not_synchronize_per_batch_element(
+    host_sync_counter: Callable[[], Any],
+) -> None:
+    divergence = SinkhornDivergence(
+        cost=TWO_POINT_COST, tol=1e-30, max_iter=60, check_interval=20
+    )
+    p = torch.rand(16, 2)
+    p = p / p.sum(dim=-1, keepdim=True)
+    q = torch.tensor([0.7, 0.3])
+
+    with host_sync_counter() as syncs:
+        divergence(p, q)
+
+    assert len(syncs) == 60 // 20
 
 
 def test_mismatched_shape_raises_value_error() -> None:

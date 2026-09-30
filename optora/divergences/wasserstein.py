@@ -49,9 +49,11 @@ class SinkhornDivergence(Divergence):
 
     which removes that self-transport bias so $S_\epsilon(p, p) = 0$ exactly,
     as required by the `Divergence` contract, while still converging to the
-    Wasserstein distance induced by `cost` as $\epsilon \to 0$.
-    `optora.dro.wasserstein_dro` uses this divergence to define
-    Wasserstein-based ambiguity sets.
+    Wasserstein distance induced by `cost` as $\epsilon \to 0$. The three
+    transport costs the debiasing needs share one ground cost, so they are
+    solved as a single batched Sinkhorn problem rather than three
+    sequential loops. `optora.dro.wasserstein_dro` uses this divergence to
+    define Wasserstein-based ambiguity sets.
 
     Attributes:
         cost: Square, nonnegative pairwise ground cost matrix between the
@@ -60,8 +62,9 @@ class SinkhornDivergence(Divergence):
             approximate the exact Wasserstein distance more closely at the
             cost of more Sinkhorn iterations to converge.
         max_iter: Maximum number of Sinkhorn scaling iterations.
-        tol: Convergence tolerance on the change in the row dual potential
-            between iterations.
+        tol: Convergence tolerance on the largest change in a row dual
+            potential between iterations, taken over the whole batched
+            problem so it stops when its slowest element does.
         eps: Small positive constant used to clamp `p` and `q` away from
             zero before taking the logarithm, avoiding `log(0)` without
             branching.
@@ -89,8 +92,9 @@ class SinkhornDivergence(Divergence):
                 the shared support points of `p` and `q`, shape `(n, n)`.
             epsilon: Positive entropic regularization strength.
             max_iter: Maximum number of Sinkhorn scaling iterations.
-            tol: Convergence tolerance on the change in the row dual
-                potential between iterations.
+            tol: Convergence tolerance on the largest change in a row dual
+                potential between iterations, taken over the whole batched
+                problem.
             eps: Small positive constant used to clamp `p` and `q` away
                 from zero before taking the logarithm.
             check_interval: Number of Sinkhorn iterations between host
@@ -134,15 +138,25 @@ class SinkhornDivergence(Divergence):
     def forward(self, p: torch.Tensor, q: torch.Tensor) -> torch.Tensor:
         r"""Compute the debiased Sinkhorn divergence of `p` from `q`.
 
+        The three entropic transport costs the debiasing needs are solved
+        as one batched Sinkhorn problem rather than three sequential ones:
+        the marginal pairs $(p, q)$, $(p, p)$ and $(q, q)$ stack along a
+        new leading dimension against the shared ground cost, so the three
+        problems share one loop, one convergence tracker, and one third of
+        the periodic host reads.
+
         Args:
-            p: Candidate distribution, a nonnegative tensor of shape `(n,)`
-                that sums to one, indexing `cost`.
-            q: Reference distribution, a nonnegative tensor of shape `(n,)`
-                that sums to one, indexing `cost`.
+            p: Candidate distribution, a nonnegative tensor of shape
+                `(..., n)` whose last dimension sums to one and indexes
+                `cost`.
+            q: Reference distribution, a nonnegative tensor of shape
+                `(..., n)` whose last dimension sums to one and indexes
+                `cost`. Its batch shape must broadcast against `p`'s.
 
         Returns:
-            A scalar tensor holding $S_\epsilon(p, q)$, clamped to be
-            nonnegative to absorb floating-point error near zero.
+            A tensor of shape `batch_shape` holding $S_\epsilon(p, q)$ over
+            the broadcast batch, clamped to be nonnegative to absorb
+            floating-point error near zero.
 
         Raises:
             ValueError: If the shape of `p` or `q` does not match `cost`.
@@ -157,9 +171,15 @@ class SinkhornDivergence(Divergence):
                 f"q must have shape (..., {self.cost.shape[0]}) to index "
                 f"cost, got {tuple(q.shape)}."
             )
-        cost_pq = self._entropic_transport_cost(p, q)
-        cost_pp = self._entropic_transport_cost(p, p)
-        cost_qq = self._entropic_transport_cost(q, q)
+        # Stacking the three marginal pairs into one batched problem needs
+        # `p` and `q` at a common shape; adding a zero of the other's shape
+        # broadcasts each to it.
+        p, q = p + torch.zeros_like(q), q + torch.zeros_like(p)
+        cost_pq, cost_pp, cost_qq = torch.unbind(
+            self._entropic_transport_cost(
+                torch.stack((p, p, q)), torch.stack((q, p, q))
+            )
+        )
         divergence = cost_pq - 0.5 * cost_pp - 0.5 * cost_qq
         return torch.clamp(divergence, min=0.0)
 
@@ -169,20 +189,21 @@ class SinkhornDivergence(Divergence):
         r"""Compute the entropic optimal transport cost $\mathrm{OT}_\epsilon(p, q)$.
 
         Args:
-            p: Row marginal, a nonnegative tensor of shape `(n,)` that sums
-                to one.
-            q: Column marginal, a nonnegative tensor of shape `(n,)` that
-                sums to one.
+            p: Row marginals, a nonnegative tensor of shape `(..., n)` whose
+                last dimension sums to one.
+            q: Column marginals, a nonnegative tensor of shape `(..., n)`
+                whose last dimension sums to one.
 
         Returns:
-            A scalar tensor holding $\langle \mathrm{cost}, \pi \rangle$ for
-            the transport plan `pi` produced by Sinkhorn's algorithm.
+            A tensor of shape `batch_shape` holding
+            $\langle \mathrm{cost}, \pi \rangle$ for each transport plan
+            `pi` produced by Sinkhorn's algorithm.
         """
         transport_plan = self._sinkhorn(p, q)
-        return torch.sum(transport_plan * self.cost)
+        return torch.sum(transport_plan * self.cost, dim=(-2, -1))
 
     def _sinkhorn(self, p: torch.Tensor, q: torch.Tensor) -> torch.Tensor:
-        r"""Run Sinkhorn's algorithm to compute an entropic transport plan.
+        r"""Run Sinkhorn's algorithm to compute entropic transport plans.
 
         Updates the dual potentials `f` and `g` in the log domain via
         `torch.logsumexp` rather than rescaling `u = p / (kernel @ v)`
@@ -192,24 +213,30 @@ class SinkhornDivergence(Divergence):
         for small $\epsilon$ or large `cost`, while `logsumexp` stays
         accurate in that regime by construction.
 
+        Leading batch dimensions run as one loop over a stack of transport
+        problems sharing the ground cost. The stopping test is the largest
+        potential update over the whole batch, so the batch stops when its
+        slowest element does and every element is at least as converged as
+        a solo run would leave it.
+
         The stopping test on `f` runs on the potentials' device and is read
         back to the host only every `check_interval` iterations; the
-        potentials are frozen once converged, so the returned plan is the
-        same one a per-iteration test would produce.
+        potentials are frozen once converged, so the returned plans are the
+        same ones a per-iteration test would produce.
 
         Args:
-            p: Row marginal, a nonnegative tensor of shape `(n,)` that sums
-                to one.
-            q: Column marginal, a nonnegative tensor of shape `(n,)` that
-                sums to one.
+            p: Row marginals, a nonnegative tensor of shape `(..., n)` whose
+                last dimension sums to one.
+            q: Column marginals, a nonnegative tensor of shape `(..., n)`
+                whose last dimension sums to one.
 
         Returns:
-            The converged transport plan
-            $\pi = \exp\!\big((f \oplus g - \mathrm{cost}) / \epsilon\big)$
-            (computed as `exp((f.unsqueeze(-1) + g.unsqueeze(-2) - cost) /
-            eps)`), a tensor of shape `(n, n)` with row sums approximating
-            `p` and column sums approximating `q`.
+            The converged transport plans
+            $\pi = \exp\!\big((f \oplus g - \mathrm{cost}) / \epsilon\big)$,
+            a tensor of shape `(..., n, n)` whose row sums approximate `p`
+            and whose column sums approximate `q`.
         """
+        scaled_cost = self.cost / self.epsilon
         log_p = torch.log(torch.clamp(p, min=self.eps))
         log_q = torch.log(torch.clamp(q, min=self.eps))
         f = torch.zeros_like(p)
@@ -224,7 +251,7 @@ class SinkhornDivergence(Divergence):
                 * (
                     log_p
                     - torch.logsumexp(
-                        (g.unsqueeze(-2) - self.cost) / self.epsilon, dim=-1
+                        g.unsqueeze(-2) / self.epsilon - scaled_cost, dim=-1
                     )
                 ),
             )
@@ -235,11 +262,14 @@ class SinkhornDivergence(Divergence):
                 * (
                     log_q
                     - torch.logsumexp(
-                        (f.unsqueeze(-1) - self.cost) / self.epsilon, dim=-2
+                        f.unsqueeze(-1) / self.epsilon - scaled_cost, dim=-2
                     )
                 ),
             )
             tracker.update(torch.max(torch.abs(f - f_prev)))
             if tracker.should_stop(iteration):
                 break
-        return torch.exp((f.unsqueeze(-1) + g.unsqueeze(-2) - self.cost) / self.epsilon)
+        scaled_potentials = (
+            f.unsqueeze(-1) / self.epsilon + g.unsqueeze(-2) / self.epsilon
+        )
+        return torch.exp(scaled_potentials - scaled_cost)
