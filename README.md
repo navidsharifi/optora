@@ -26,8 +26,7 @@ a KL-ball of plausible distributions over four observed outcomes:
 
 ```python
 import torch
-from optora.dro import KLAmbiguitySet, MinimaxProblem, MinimaxSolver
-from optora.solvers import GradientDescent
+from optora import GradientDescent, KLAmbiguitySet, MinimaxProblem, MinimaxSolver
 
 nominal = torch.tensor([0.25, 0.25, 0.25, 0.25])
 outcomes = torch.tensor([1.0, 2.0, 3.0, 10.0])
@@ -56,6 +55,11 @@ is covered by pytest tests checked against known closed-form results,
 independent grid-search cross-checks, convergence limits, and
 monotonicity properties, and the whole package is type-checked under
 mypy's strict mode.
+
+Every main class is importable from the package root
+(`from optora import KLAmbiguitySet`) or from its subpackage
+(`from optora.dro import KLAmbiguitySet`); both name the same object.
+Convergence diagnostics and helper functions live in `optora.core`.
 
 ## Learn more
 

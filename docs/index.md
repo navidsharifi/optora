@@ -69,6 +69,21 @@ and documentation extras:
 pip install -e ".[dev,docs]"
 ```
 
+## Imports
+
+Every main class is re-exported from the package root, so the two forms below
+name the same object:
+
+```python
+from optora import KLAmbiguitySet, MinimaxSolver
+from optora.dro import KLAmbiguitySet, MinimaxSolver
+```
+
+The root exports classes only: the `Solver`, `Divergence`, and `AmbiguitySet`
+contracts, their reference implementations, and the problem and result types.
+Convergence diagnostics and helper functions stay in `optora.core`. There are
+no root-level workflow functions; run an algorithm with `Solver.solve(problem)`.
+
 ## Build documentation
 
 === "Preview"
