@@ -13,6 +13,7 @@ Latest release: `v0.0.6`
 <!-- optora-version-end -->
 
 [Get started :octicons-arrow-right-24:](#install){ .md-button .md-button--primary }
+[Training guide](training.md){ .md-button }
 [Examples](examples/index.md){ .md-button }
 [API reference](api/index.md){ .md-button }
 
@@ -45,6 +46,15 @@ Latest release: `v0.0.6`
     Vectorized PyTorch throughout, with tensor state that moves to an
     accelerator through a single `.to(device)` call.
 
+-   :material-school-outline:{ .lg .middle } __Trains like any PyTorch loss__
+
+    ---
+
+    The worst-case expectation is an ordinary differentiable objective, so
+    an `nn.Module` trains against it with plain `torch.optim`.
+
+    [:octicons-arrow-right-24: Training guide](training.md)
+
 -   :material-flask-outline:{ .lg .middle } __Verified numerics__
 
     ---
@@ -68,6 +78,21 @@ and documentation extras:
 ```bash
 pip install -e ".[dev,docs]"
 ```
+
+## Imports
+
+Every main class is re-exported from the package root, so the two forms below
+name the same object:
+
+```python
+from optora import KLAmbiguitySet, MinimaxSolver
+from optora.dro import KLAmbiguitySet, MinimaxSolver
+```
+
+The root exports classes only: the `Solver`, `Divergence`, and `AmbiguitySet`
+contracts, their reference implementations, and the problem and result types.
+Convergence diagnostics and helper functions stay in `optora.core`. There are
+no root-level workflow functions; run an algorithm with `Solver.solve(problem)`.
 
 ## Build documentation
 

@@ -26,8 +26,7 @@ a KL-ball of plausible distributions over four observed outcomes:
 
 ```python
 import torch
-from optora.dro import KLAmbiguitySet, MinimaxProblem, MinimaxSolver
-from optora.solvers import GradientDescent
+from optora import GradientDescent, KLAmbiguitySet, MinimaxProblem, MinimaxSolver
 
 nominal = torch.tensor([0.25, 0.25, 0.25, 0.25])
 outcomes = torch.tensor([1.0, 2.0, 3.0, 10.0])
@@ -57,10 +56,17 @@ independent grid-search cross-checks, convergence limits, and
 monotonicity properties, and the whole package is type-checked under
 mypy's strict mode.
 
+Every main class is importable from the package root
+(`from optora import KLAmbiguitySet`) or from its subpackage
+(`from optora.dro import KLAmbiguitySet`); both name the same object.
+Convergence diagnostics and helper functions live in `optora.core`.
+
 ## Learn more
 
 - **Full mathematical formulations and design rationale:**
   [`docs/formulations.md`](docs/formulations.md).
+- **Training an `nn.Module` against a DRO objective with `torch.optim`:**
+  [`docs/training.md`](docs/training.md).
 - **Runnable, visualized DRO examples** (GitHub-only, not shipped with the
   package): [`examples/`](examples/README.md) — install with the
   `examples` extra (`pip install -e ".[examples]"`).

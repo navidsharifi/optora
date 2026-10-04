@@ -169,6 +169,50 @@ def test_worst_case_distribution_spends_the_radius_exactly() -> None:
     assert torch.allclose(gradient, (values[1] - values[0]) / (2.0 * step), atol=1e-6)
 
 
+def test_dual_minimizer_at_the_bracket_bound_still_mixes_the_two_plans() -> None:
+    # Regression: when the radius is smaller than the cheapest single
+    # transport's cost, the dual minimizer is exactly `_dual_upper_bound`'s
+    # largest crossing, so the bisection never contracts its right end and
+    # the plan there is read at a genuine tie. Testing that tie with exact
+    # float equality missed it by an ulp, collapsing the thrifty plan onto
+    # the overspending eager one and returning the overspending plan's value
+    # (4.95725 instead of 3.27839 below), discontinuously in the loss.
+    nominal = torch.tensor([0.1, 0.2, 0.3, 0.15, 0.1, 0.15], dtype=torch.float64)
+    support = torch.tensor(
+        [
+            [1.0, 0.5],
+            [-0.5, 1.5],
+            [2.0, -1.0],
+            [0.25, 0.75],
+            [-1.5, -0.5],
+            [1.0, 2.0],
+        ],
+        dtype=torch.float64,
+    )
+    cost = torch.cdist(support, support) ** 2
+    loss = torch.tensor([0.0625, 0.81, 3.61, 0.16, 14.44, 0.64], dtype=torch.float64)
+    radius = 0.15
+    ambiguity_set = WassersteinAmbiguitySet(nominal, cost=cost, radius=radius)
+
+    value = ambiguity_set.worst_case_expectation(loss)
+
+    # Only row 3 still transports at the minimizer, to row 4 at cost 4.625,
+    # so the optimal plan moves radius/4.625 of row 3's mass to row 4.
+    moved = radius / cost[3, 4]
+    expected = torch.sum(nominal * loss) + moved * (loss[4] - loss[3])
+    assert torch.allclose(value, expected, atol=1e-12)
+    assert torch.allclose(
+        value,
+        _grid_search_wasserstein_dual_minimum(nominal, loss, cost, radius),
+        atol=1e-6,
+    )
+
+    # The failure was discontinuous, so neighbouring losses must agree too.
+    for offset in (-1e-6, -1e-7, 1e-7, 1e-6):
+        nearby = ambiguity_set.worst_case_expectation(loss + offset * loss)
+        assert torch.allclose(nearby, value, rtol=1e-5)
+
+
 def test_worst_case_expectation_is_differentiable_through_the_dual_optimum() -> None:
     # The bisection is detached, so the gradient comes entirely from
     # re-evaluating the dual at the minimizer (envelope theorem). Comparing
