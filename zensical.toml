@@ -63,6 +63,7 @@ watch = ["optora"]
 nav = [
   { "Get started" = "index.md" },
   { "Mathematical formulations" = "formulations.md" },
+  { "Training with torch.optim" = "training.md" },
   { "Examples" = [
     { "Overview" = "examples/index.md" },
     { "KL-DRO radius sweep" = "examples/kl_dro_radius_sweep.md" },

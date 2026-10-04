@@ -13,6 +13,7 @@ Latest release: `v0.0.6`
 <!-- optora-version-end -->
 
 [Get started :octicons-arrow-right-24:](#install){ .md-button .md-button--primary }
+[Training guide](training.md){ .md-button }
 [Examples](examples/index.md){ .md-button }
 [API reference](api/index.md){ .md-button }
 
@@ -44,6 +45,15 @@ Latest release: `v0.0.6`
 
     Vectorized PyTorch throughout, with tensor state that moves to an
     accelerator through a single `.to(device)` call.
+
+-   :material-school-outline:{ .lg .middle } __Trains like any PyTorch loss__
+
+    ---
+
+    The worst-case expectation is an ordinary differentiable objective, so
+    an `nn.Module` trains against it with plain `torch.optim`.
+
+    [:octicons-arrow-right-24: Training guide](training.md)
 
 -   :material-flask-outline:{ .lg .middle } __Verified numerics__
 

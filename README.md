@@ -65,6 +65,8 @@ Convergence diagnostics and helper functions live in `optora.core`.
 
 - **Full mathematical formulations and design rationale:**
   [`docs/formulations.md`](docs/formulations.md).
+- **Training an `nn.Module` against a DRO objective with `torch.optim`:**
+  [`docs/training.md`](docs/training.md).
 - **Runnable, visualized DRO examples** (GitHub-only, not shipped with the
   package): [`examples/`](examples/README.md) — install with the
   `examples` extra (`pip install -e ".[examples]"`).
