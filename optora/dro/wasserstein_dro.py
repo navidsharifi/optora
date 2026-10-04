@@ -10,6 +10,13 @@ from optora.divergences.wasserstein import SinkhornDivergence
 
 _BISECTION_HEADROOM = 2
 
+# Width, in units of the dtype's unit roundoff, of the band around the inner
+# maximum that `_maximizing_columns` treats as a tie. Both sides of a tie are
+# independently rounded differences of comparable magnitude, so an exact
+# equality test misses genuine ties and leaves the transport plan undefined at
+# the dual minimizer.
+_TIE_TOLERANCE_ULPS = 16.0
+
 
 def _bisection_steps(dtype: torch.dtype) -> int:
     """Return the number of bisection steps that exhaust a dtype's precision.
@@ -240,7 +247,10 @@ class WassersteinAmbiguitySet(AmbiguitySet):
                 multipliers at which the transport plan changes, so the two
                 settings recover the plan just below and just above such a
                 multiplier; picking arbitrarily among them would leave the
-                plan undefined precisely where the dual is minimized.
+                plan undefined precisely where the dual is minimized. Ties
+                are detected within `_TIE_TOLERANCE_ULPS` of the inner
+                maximum rather than exactly, since both sides of a tie are
+                independently rounded.
 
         Returns:
             `argmax_j (loss_j - gamma * cost_ij)` for every row `i`, of shape
@@ -248,7 +258,21 @@ class WassersteinAmbiguitySet(AmbiguitySet):
             mass is transported to at this multiplier.
         """
         shifted = loss.unsqueeze(-2) - gamma[..., None, None] * self.cost
-        tied = shifted == torch.amax(shifted, dim=-1, keepdim=True)
+        # A tie is the rounded equality of two independently rounded
+        # differences, so an exact test misses ties by a few ulps and leaves
+        # the plan undefined precisely where it matters: `_dual_bracket`'s
+        # right end is the analytic crossing bound itself whenever the dual
+        # minimizer sits there, and a 1-ulp miss there hands back the
+        # overspending plan as if it were the thrifty one. Compare within a
+        # tolerance scaled to the magnitude of the terms being differenced.
+        loss_scale = torch.amax(torch.abs(loss), dim=-1, keepdim=True).unsqueeze(-1)
+        cost_scale = torch.amax(self.cost, dim=-1, keepdim=True)
+        tolerance = (
+            _TIE_TOLERANCE_ULPS
+            * torch.finfo(shifted.dtype).eps
+            * (loss_scale + gamma[..., None, None] * cost_scale)
+        )
+        tied = shifted >= torch.amax(shifted, dim=-1, keepdim=True) - tolerance
         preference = self.cost if prefer_costly else -self.cost
         return torch.argmax(
             torch.where(tied, preference, torch.full_like(shifted, -torch.inf)),
