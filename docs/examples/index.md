@@ -48,12 +48,14 @@ python examples/01_kl_dro_radius_sweep.py
 | [Convergence diagnostics](convergence_diagnostics.md) | Are the outer and the inner solve both genuinely converged, or only plausibly so? |
 | [Wasserstein-DRO and Lipschitz regularization](wasserstein_lipschitz_equivalence.md) | In what sense, exactly, is Wasserstein-DRO "the same as" a Lipschitz penalty? |
 | [Calibrating the ambiguity radius](calibrated_ambiguity_radius.md) | What radius should you actually use, and does the finite-sample theory that answers it hold up at the sample size you have? |
+| [Training under subpopulation shift](subpopulation_shift_training.md) | Does a DRO-trained model really degrade more gracefully than an ERM one when the test mixture of subpopulations changes, and where does it lose? |
 
 They are ordered roughly by how much machinery they involve: the first one
 touches a single [`AmbiguitySet`](../api/core/dro_base.md), the fourth
 pulls a solver apart to inspect its trajectory, the fifth turns the dual
-formula itself into the object under test, and the last one stops treating
-the radius as a free parameter at all.
+formula itself into the object under test, the sixth stops treating the
+radius as a free parameter at all, and the last one trains a model with
+`torch.optim` and holds the result against an ERM baseline and two controls.
 
 !!! warning "These scripts are tuned down on purpose"
 
@@ -62,9 +64,13 @@ the radius as a free parameter at all.
     multiplies iteration counts unpleasantly fast. The budgets in those
     scripts are much smaller than each solver's defaults. They are chosen
     to show qualitative behaviour — monotonicity, limits, ordering — not to
-    hit tight tolerances. Example 6 is the slowest of the set for a
+    hit tight tolerances. Example 6 is slow for a
     different reason: estimating a coverage probability needs thousands of
-    independent dual solves, not deeper ones.
+    independent dual solves, not deeper ones. Example 7 is the slowest
+    (about half a minute on a CPU) because it trains a model: it batches all
+    seeds and radii into one joint solve per step and caps each inner dual
+    solve, relying on warm starts, and then verifies the trained models
+    against closed-form and L-BFGS references with a precisely solved dual.
 
 ## The shared plotting helper
 

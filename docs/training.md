@@ -129,3 +129,6 @@ it for a low-dimensional decision variable solved to convergence with
 reported diagnostics; prefer the loop above when the decision variable is
 an `nn.Module`'s parameters, since `torch.optim` already owns that state.
 Both minimize the identical objective and reach the same optimum.
+
+For a complete training run held against an ERM baseline and two controls,
+see [Training under subpopulation shift](examples/subpopulation_shift_training.md).
