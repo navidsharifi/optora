@@ -52,12 +52,18 @@ repository owner.
 4. Set `PYPI_RELEASE_ACTOR` in GitHub Actions repository variables when the
    release actor is not the repository owner.
 5. In PyPI, add a trusted publisher for the GitHub repository, workflow
-   `.github/workflows/release.yml`, and environment `pypi`.
-6. Merge changes through pull requests. Use squash merges when you want the
+   `.github/workflows/release.yml`, and environment `pypi`. Restrict the
+   `pypi` environment's deployment branches and tags to the `v*` tag pattern.
+6. Protect `main`: require the CI checks `tests (3.10)`, `tests (3.11)`,
+   `tests (3.12)` and `quality, package, docs`, and disallow force pushes and
+   branch deletion. Leave administrators unenforced, because release
+   preparation pushes its `chore(release)` commit with the `RELEASE_PAT`
+   secret (a personal access token of a repository administrator).
+7. Merge changes through pull requests. Use squash merges when you want the
    release markers to be unambiguous in the final commit message.
-7. Include `#release` in the final commit message only when the change should
+8. Include `#release` in the final commit message only when the change should
    publish to PyPI.
-8. Let GitHub Actions build, test, create the release commit and tag, check out
+9. Let GitHub Actions build, test, create the release commit and tag, check out
    that tag for publishing, publish the package to PyPI, publish a GitHub
    release, and redeploy the documentation site.
 
