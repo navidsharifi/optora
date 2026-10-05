@@ -61,15 +61,16 @@ To add a real visual to this README:
 2. Upload that file to an external host of your choice (for example a
    dedicated `media`/`gh-pages`-style orphan branch, a release asset, or
    an image CDN) — never to a branch that `main` merges from.
-3. Reference the resulting URL here, for example:
+3. Reference the resulting URL here. Optora hosts its figures on the
+   orphan `media` branch (it shares no history with `main`); the file
+   `01_kl_dro_radius_sweep.png` on that branch renders as:
 
-   ```markdown
-   ![KL-DRO worst-case expectation vs. radius](<https://your-external-host/optora/01_kl_dro_radius_sweep.png>)
-   ```
+   ![KL-DRO worst-case expectation vs. radius](https://raw.githubusercontent.com/navidsharifi/optora/media/01_kl_dro_radius_sweep.png)
 
-   The angle-bracketed URL above is a placeholder — replace it with the
-   real hosted link once the asset exists; do not link to a path inside
-   this repository.
+   To add another figure, commit it to the `media` branch (for example in a
+   `git worktree`) and link
+   `https://raw.githubusercontent.com/navidsharifi/optora/media/<name>.png`;
+   do not link to a path inside `main`.
 
 ## Notes on solver tuning
 
