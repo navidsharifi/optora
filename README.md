@@ -2,7 +2,7 @@
 
 **A small, composable, PyTorch-native library for distributionally robust optimization (DRO).**
 
-Status: pre-alpha (`v0.0.3`) &middot; Python 3.10+ &middot; PyTorch &ge;2.2 &middot; MIT License
+Status: alpha &middot; Python 3.10+ &middot; PyTorch &ge;2.2 &middot; MIT License
 
 I started building Optora because most of the DRO code I ran into while
 reading papers lived inside one-off experiment scripts, hard-wired to
@@ -14,8 +14,13 @@ flow through the whole pipeline and nothing here blocks running on a GPU.
 
 ## Quick start
 
-Optora is pre-alpha and not yet published on PyPI; install it from a local
-clone in editable mode:
+Install the latest release from PyPI:
+
+```powershell
+pip install optora
+```
+
+To develop locally, install from a clone in editable mode:
 
 ```powershell
 pip install -e ".[dev,docs]"

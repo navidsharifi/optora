@@ -4,7 +4,7 @@ icon: lucide/rocket
 
 # Optora
 
-Optora is a pre-alpha optimization library focused on a small GPU-first
+Optora is an alpha optimization library focused on a small GPU-first
 PyTorch deterministic core that can grow toward stochastic methods,
 differentiable backends, optimal transport, and reinforcement learning.
 
