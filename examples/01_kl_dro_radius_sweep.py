@@ -42,18 +42,14 @@ def main() -> None:
     assert abs(nominal_expectation - zero_radius_value) < 1e-12
 
     radii = torch.logspace(-3, 1, steps=25, dtype=torch.float64)
-    worst_case = [
-        KLAmbiguitySet(nominal=NOMINAL, radius=radius.item(), dual_solver=DUAL_SOLVER)
-        .worst_case_expectation(LOSS)
-        .item()
-        for radius in radii
-    ]
+    sweep = KLAmbiguitySet(nominal=NOMINAL, radius=radii, dual_solver=DUAL_SOLVER)
+    worst_case = sweep.worst_case_expectation(LOSS)
     worst_possible = LOSS.max().item()
-    print(f"worst case at radius={radii[0].item():.4f}  -> {worst_case[0]:.6f}")
-    print(f"worst case at radius={radii[-1].item():.4f} -> {worst_case[-1]:.6f}")
+    print(f"worst case at radius={radii[0].item():.4f}  -> {worst_case[0].item():.6f}")
+    print(f"worst case at radius={radii[-1].item():.4f} -> {worst_case[-1].item():.6f}")
     print(f"loss.max() (saturation limit)      = {worst_possible:.6f}")
 
-    increments = torch.diff(torch.tensor(worst_case))
+    increments = torch.diff(worst_case)
     is_nondecreasing = bool(torch.all(increments >= -1e-9))
     print(f"monotonically nondecreasing in radius: {is_nondecreasing}")
 
