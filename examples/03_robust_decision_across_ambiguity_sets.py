@@ -42,9 +42,12 @@ COST = (OUTCOMES.unsqueeze(0) - OUTCOMES.unsqueeze(1)) ** 2
 # qualitative behavior, not a tight-tolerance convergence test.
 # The outer solver uses `check_interval=1` because one of its steps costs a
 # full inner dual solve, which dwarfs the synchronization a check costs.
+# The dual is solved on the loss standardized to unit spread, so the dual
+# step sizes below do not depend on the scale of `loss`: order one for KL,
+# and at most about 0.3 for chi-square, whose dual is stiffer.
 OUTER_SOLVER = GradientDescent(step_size=0.01, max_iter=120, tol=1e-7, check_interval=1)
-KL_DUAL_SOLVER = GradientDescent(step_size=0.1, max_iter=200, tol=1e-8)
-CHI_SQUARE_DUAL_SOLVER = GradientDescent(step_size=0.05, max_iter=300, tol=1e-8)
+KL_DUAL_SOLVER = GradientDescent(step_size=1.0, max_iter=200, tol=1e-8)
+CHI_SQUARE_DUAL_SOLVER = GradientDescent(step_size=0.2, max_iter=300, tol=1e-8)
 
 
 def loss_fn(x: torch.Tensor) -> torch.Tensor:

@@ -134,13 +134,23 @@ class _RecordingSolver(Solver[MinimizationProblem, MinimizationResult]):
 class _QuadraticDualAmbiguitySet(DualAmbiguitySet):
     """Dual-solved ambiguity set with a trivially convex scalar dual."""
 
-    def worst_case_expectation(self, loss: torch.Tensor) -> torch.Tensor:
-        batch_shape = self._batch_shape(loss)
+    def _dual_objective(
+        self,
+        point: torch.Tensor,
+        loss: torch.Tensor,
+        radius: float | torch.Tensor,
+    ) -> torch.Tensor:
+        return (point - loss.sum(dim=-1)) ** 2
 
-        def dual_objective(dual_point: torch.Tensor) -> torch.Tensor:
-            return (dual_point - loss.sum(dim=-1)) ** 2
+    def _to_standard_units(
+        self, point: torch.Tensor, shift: torch.Tensor, scale: torch.Tensor
+    ) -> torch.Tensor:
+        return point
 
-        return self._solve_dual(dual_objective, batch_shape)
+    def _from_standard_units(
+        self, point: torch.Tensor, shift: torch.Tensor, scale: torch.Tensor
+    ) -> torch.Tensor:
+        return point
 
 
 def _dual_ambiguity_set(

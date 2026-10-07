@@ -46,7 +46,8 @@ class KLAmbiguitySet(DualAmbiguitySet):
             before taking the logarithm inside the dual objective.
         dual_solver: Solver minimizing the dual objective over `log(eta)`.
         initial_dual_point: Value of `log(eta)` the first dual solve starts
-            from; later solves warm-start from the previous optimum (see
+            from, in the units of the raw loss (`eta` has the units of
+            `loss`); later solves warm-start from the previous optimum (see
             `optora.core.dro_base.DualAmbiguitySet`).
         log_nominal: Elementwise logarithm of the clamped `nominal`, a
             constant of the dual objective cached once rather than
@@ -61,7 +62,7 @@ class KLAmbiguitySet(DualAmbiguitySet):
         radius: float | torch.Tensor,
         eps: float = 1e-12,
         dual_solver: Solver[MinimizationProblem, MinimizationResult] | None = None,
-        initial_log_eta: float = 0.0,
+        initial_log_eta: float | None = None,
         validate: bool = False,
     ) -> None:
         """Initialize the KL-DRO ambiguity set.
@@ -81,8 +82,12 @@ class KLAmbiguitySet(DualAmbiguitySet):
             dual_solver: Solver minimizing the dual objective over
                 `log(eta)`. Required when evaluating a positive-radius set.
             initial_log_eta: Value of `log(eta)` the first dual solve starts
-                from. Later calls warm-start from the previous solve's
-                optimum unless `reset_warm_start()` is called.
+                from, in the units of the raw loss (`eta` has the units of
+                `loss`). The default `None` starts at `eta` equal to the
+                loss spread, which is the same point whatever the scale of
+                the loss; pass a value only to start from a known optimum.
+                Later calls warm-start from the previous solve's optimum
+                unless `reset_warm_start()` is called.
             validate: Whether to check that `nominal` is nonnegative and
                 sums to one. The check synchronizes with the device, so it
                 is opt-in and off by default.
@@ -98,8 +103,11 @@ class KLAmbiguitySet(DualAmbiguitySet):
             radius=radius,
             dual_solver=dual_solver,
             initial_dual_point=torch.tensor(
-                initial_log_eta, dtype=nominal.dtype, device=nominal.device
+                0.0 if initial_log_eta is None else initial_log_eta,
+                dtype=nominal.dtype,
+                device=nominal.device,
             ),
+            initial_in_raw_units=initial_log_eta is not None,
             validate=validate,
         )
         self.eps = eps
@@ -109,38 +117,53 @@ class KLAmbiguitySet(DualAmbiguitySet):
             persistent=False,
         )
 
-    def worst_case_expectation(self, loss: torch.Tensor) -> torch.Tensor:
-        """Compute the worst-case expected loss over the KL ambiguity set.
+    def _dual_objective(
+        self,
+        point: torch.Tensor,
+        loss: torch.Tensor,
+        radius: float | torch.Tensor,
+    ) -> torch.Tensor:
+        r"""Evaluate the KL dual at `point = log(eta)` on the standardized loss.
 
         Args:
-            loss: Per-scenario loss values of shape `(..., n)`, one trailing
-                entry per element of `nominal`'s support. Leading dimensions
-                are a batch of independent loss vectors, each solved with
-                its own dual variable `log(eta)` in a single joint solve.
+            point: `log(eta)` of shape `batch_shape`.
+            loss: Standardized loss of shape `(..., n)`.
+            radius: KL radius, broadcastable against `batch_shape`.
 
         Returns:
-            A tensor of shape `(...)` holding the worst-case expected loss:
-            the exact `sum(nominal * loss)` when `radius` is zero (the
-            ambiguity set then contains only `nominal`), otherwise the
-            convex dual objective evaluated at the `log(eta)` found by
-            `dual_solver`.
-
-        Raises:
-            ValueError: If `loss`'s trailing dimension does not match
-                `nominal`'s support size, or its batch shape does not
-                broadcast against `nominal` and `radius`.
-            RuntimeError: If `radius` is positive and `dual_solver` is
-                `None`.
+            $\eta \cdot \mathrm{radius} + \eta \log
+            \mathbb{E}_{\mathrm{nominal}}[e^{\mathrm{loss}/\eta}]$ per
+            batch element, with the expectation taken through a stable
+            `logsumexp`.
         """
-        batch_shape = self._batch_shape(loss)
-        if self._radius_is_zero:
-            return self._nominal_expectation(loss, batch_shape)
+        eta = torch.exp(point)
+        log_mgf = torch.logsumexp(self.log_nominal + loss / eta.unsqueeze(-1), dim=-1)
+        return eta * radius + eta * log_mgf
 
-        def dual_objective(log_eta: torch.Tensor) -> torch.Tensor:
-            eta = torch.exp(log_eta)
-            log_mgf = torch.logsumexp(
-                self.log_nominal + loss / eta.unsqueeze(-1), dim=-1
-            )
-            return eta * self.radius + eta * log_mgf
+    def _to_standard_units(
+        self, point: torch.Tensor, shift: torch.Tensor, scale: torch.Tensor
+    ) -> torch.Tensor:
+        """Map `log(eta)` to `log(eta / scale)`; `eta` has the units of `loss`."""
+        return point - torch.log(scale)
 
-        return self._solve_dual(dual_objective, batch_shape)
+    def _from_standard_units(
+        self, point: torch.Tensor, shift: torch.Tensor, scale: torch.Tensor
+    ) -> torch.Tensor:
+        """Map `log(eta / scale)` back to `log(eta)`."""
+        return point + torch.log(scale)
+
+    def _saturation_radius(self, top_mass: torch.Tensor) -> torch.Tensor:
+        r"""Return $-\log P^\star$, the KL divergence of the top-loss scenarios.
+
+        The distribution $\mathrm{nominal}$ restricted to the highest-loss
+        scenarios and renormalized sits at KL divergence $-\log P^\star$
+        from the nominal, where $P^\star$ is the nominal mass they carry.
+
+        Args:
+            top_mass: Nominal mass $P^\star$ carried by the highest-loss
+                scenarios.
+
+        Returns:
+            $-\log P^\star$, which is `inf` when that mass is zero.
+        """
+        return -torch.log(top_mass)

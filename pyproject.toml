@@ -41,7 +41,10 @@ dev = [
   "pytest>=8",
   "ruff>=0.5",
   "mypy>=1.10",
-  "twine>=5"
+  "twine>=5",
+  # Test-only: exact linear-program references for the ambiguity sets in
+  # tests/dro/oracles.py. Never a runtime dependency of optora.
+  "scipy>=1.11"
 ]
 docs = [
   "zensical>=0.0.11",

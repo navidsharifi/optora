@@ -301,6 +301,35 @@ class DualAmbiguitySet(AmbiguitySet):
     so every element keeps iterating until the batch as a whole is
     stationary (see `progress/decisions.md`).
 
+    Two properties of these sets keep a fixed-step first-order solver
+    usable on any loss, and both are handled here once rather than in each
+    formulation:
+
+    - **Loss scale.** The set of candidate distributions does not depend on
+      `loss`, so $\sup_q \mathbb{E}_q[a\,\ell + b] = a \sup_q
+      \mathbb{E}_q[\ell] + b$ for $a > 0$. The dual's curvature grows with
+      the squared loss spread, so a step size tuned for an order-one loss
+      diverges on a wide one. The dual is therefore solved on the loss
+      standardized to unit spread, $(\ell - \min \ell) / (\max \ell - \min
+      \ell)$, with a detached shift and scale: for any fixed constants this
+      is the same function of `loss`, so values and every derivative are
+      unchanged. `initial_dual_point` and the warm start stay in the units
+      of the raw loss and are converted at the boundary by
+      `_to_standard_units` and `_from_standard_units`.
+    - **Saturation.** Once `radius` reaches the divergence of the
+      distribution concentrated on the highest-loss scenarios, the set
+      contains it and the worst case is exactly $\max \ell$. The dual then
+      has no minimizer (its infimum is approached only as the multiplier
+      $\eta \to 0$), so no solver can converge and an overflow-prone dual
+      returns `nan`. The shortcut returns $\max \ell$ there, using only
+      device reductions, and solves the dual for such elements at a
+      harmless in-range radius instead, so a saturated element cannot
+      poison the joint solve of the rest of its batch. A subclass
+      supplies the threshold through `_saturation_radius`; the default
+      never saturates. The threshold is read off the highest-loss
+      scenarios of the whole support, so a highest-loss scenario with
+      zero nominal mass simply never saturates.
+
     Attributes:
         nominal: Reference distribution the ambiguity set is centered on.
         divergence: Divergence used to measure distance from `nominal`.
@@ -312,6 +341,10 @@ class DualAmbiguitySet(AmbiguitySet):
             first solve starts from, registered as a buffer so it is built
             once and follows `.to(device)` with the rest of the module. It
             is expanded over the batch shape of the loss being evaluated.
+            It is read in the units of the raw loss unless the set was
+            built with `initial_in_raw_units=False`, in which case it is
+            read in standardized units and so means the same thing on a
+            loss of any scale.
     """
 
     initial_dual_point: torch.Tensor
@@ -324,6 +357,7 @@ class DualAmbiguitySet(AmbiguitySet):
         radius: float | torch.Tensor,
         dual_solver: Solver[MinimizationProblem, MinimizationResult] | None,
         initial_dual_point: torch.Tensor,
+        initial_in_raw_units: bool = True,
         validate: bool = False,
     ) -> None:
         """Initialize the dual-solved ambiguity set.
@@ -338,6 +372,10 @@ class DualAmbiguitySet(AmbiguitySet):
                 evaluate a positive-radius set.
             initial_dual_point: Dual point of a single batch element that
                 the first solve starts from.
+            initial_in_raw_units: Whether `initial_dual_point` is in the
+                units of the raw loss (the default, for a start the caller
+                chose) or already in standardized units (for a default
+                start that must not depend on the loss scale).
             validate: Whether to check that `nominal` is a valid
                 probability distribution, off by default because the check
                 synchronizes with the device.
@@ -355,6 +393,7 @@ class DualAmbiguitySet(AmbiguitySet):
         )
         self.dual_solver = dual_solver
         self.register_buffer("initial_dual_point", initial_dual_point)
+        self._initial_in_raw_units = initial_in_raw_units
         self.register_buffer("_dual_warm_start", None, persistent=False)
 
     def reset_warm_start(self) -> None:
@@ -365,20 +404,155 @@ class DualAmbiguitySet(AmbiguitySet):
         """
         self._dual_warm_start = None
 
+    @abstractmethod
+    def _dual_objective(
+        self,
+        point: torch.Tensor,
+        loss: torch.Tensor,
+        radius: float | torch.Tensor,
+    ) -> torch.Tensor:
+        """Evaluate the formulation's convex dual objective.
+
+        Args:
+            point: Dual variables in standardized-loss units, of shape
+                `batch_shape + initial_dual_point.shape`.
+            loss: Loss standardized to unit spread, of shape `(..., n)`.
+            radius: Radius to evaluate the dual at, broadcastable against
+                the batch shape.
+
+        Returns:
+            Per-batch-element dual values of shape `batch_shape`.
+        """
+        raise NotImplementedError
+
+    @abstractmethod
+    def _to_standard_units(
+        self, point: torch.Tensor, shift: torch.Tensor, scale: torch.Tensor
+    ) -> torch.Tensor:
+        """Express raw-loss dual variables in standardized-loss units.
+
+        Args:
+            point: Dual variables of shape `batch_shape +
+                initial_dual_point.shape`, in the units of the raw loss.
+            shift: Per-element shift subtracted from the loss, broadcastable
+                against `batch_shape`.
+            scale: Per-element positive scale the loss was divided by,
+                broadcastable against `batch_shape`.
+
+        Returns:
+            The same dual point for the standardized loss. A multiplier
+            with the units of a loss (such as `lam`) maps to
+            `(lam - shift) / scale`; a log-scale variable (such as
+            `log(eta)`) maps to `log(eta) - log(scale)`.
+        """
+        raise NotImplementedError
+
+    @abstractmethod
+    def _from_standard_units(
+        self, point: torch.Tensor, shift: torch.Tensor, scale: torch.Tensor
+    ) -> torch.Tensor:
+        """Express standardized-loss dual variables in the units of the raw loss.
+
+        Args:
+            point: Dual variables in standardized-loss units.
+            shift: Per-element shift subtracted from the loss.
+            scale: Per-element positive scale the loss was divided by.
+
+        Returns:
+            The inverse of `_to_standard_units`.
+        """
+        raise NotImplementedError
+
+    def _saturation_radius(self, top_mass: torch.Tensor) -> torch.Tensor:
+        """Return the radius from which the worst case is exactly `max(loss)`.
+
+        Args:
+            top_mass: Nominal mass carried by the highest-loss scenarios,
+                of the batch shape of the loss.
+
+        Returns:
+            The divergence of the distribution concentrated on those
+            scenarios from `nominal`, which is the smallest radius whose set
+            contains it. The default is `inf`: a formulation whose
+            threshold is not known never takes the shortcut.
+        """
+        return torch.full_like(top_mass, float("inf"))
+
+    def worst_case_expectation(self, loss: torch.Tensor) -> torch.Tensor:
+        """Compute the worst-case expected loss from the convex dual.
+
+        Args:
+            loss: Per-scenario loss values of shape `(..., n)`, one trailing
+                entry per element of `nominal`'s support. Leading dimensions
+                are a batch of independent loss vectors, each solved with
+                its own dual variables in a single joint solve.
+
+        Returns:
+            A tensor of shape `(...)` holding the worst-case expected loss:
+            the exact `sum(nominal * loss)` when `radius` is a zero float
+            (the set then contains only `nominal`), exactly `max(loss)` for
+            every element whose radius has reached the saturation radius,
+            and otherwise the dual objective evaluated at the optimum found
+            by `dual_solver`.
+
+        Raises:
+            ValueError: If `loss`'s trailing dimension does not match
+                `nominal`'s support size, or its batch shape does not
+                broadcast against `nominal` and `radius`.
+            RuntimeError: If `radius` is positive and `dual_solver` is
+                `None`.
+        """
+        batch_shape = self._batch_shape(loss)
+        if self._radius_is_zero:
+            return self._nominal_expectation(loss, batch_shape)
+
+        max_loss = torch.amax(loss, dim=-1).detach()
+        shift = torch.amin(loss, dim=-1).detach()
+        spread = max_loss - shift
+        scale = torch.where(spread > 0, spread, torch.ones_like(spread))
+        standardized = (loss - shift.unsqueeze(-1)) / scale.unsqueeze(-1)
+
+        # Nominal restricted to the highest-loss scenarios and renormalized:
+        # a worst-case distribution once the set is saturated, and the exact
+        # boundary of that regime. Its gradient (rather than the even split
+        # `amax` gives across ties) stays inside the ambiguity set.
+        top = self.nominal * (loss >= max_loss.unsqueeze(-1))
+        top_mass = torch.sum(top, dim=-1)
+        top_distribution = top / torch.where(top_mass > 0, top_mass, 1.0).unsqueeze(-1)
+        saturation_radius = self._saturation_radius(top_mass)
+        saturated = self.radius >= saturation_radius
+        solvable_radius = torch.where(saturated, 0.5 * saturation_radius, self.radius)
+
+        dual_value = self._solve_dual(
+            lambda point: self._dual_objective(point, standardized, solvable_radius),
+            batch_shape,
+            shift,
+            scale,
+        )
+        saturated_value = max_loss + torch.sum(
+            top_distribution.detach() * (loss - max_loss.unsqueeze(-1)), dim=-1
+        )
+        return torch.where(saturated, saturated_value, scale * dual_value + shift)
+
     def _solve_dual(
         self,
         dual_objective: Callable[[torch.Tensor], torch.Tensor],
         batch_shape: torch.Size,
+        shift: torch.Tensor,
+        scale: torch.Tensor,
     ) -> torch.Tensor:
         """Minimize a dual objective and return its value at the optimum.
 
         Args:
-            dual_objective: Formulation-specific convex dual objective,
-                closing over the `loss` it was built for. It maps dual
-                variables of shape `batch_shape + initial_dual_point.shape`
-                to per-batch-element dual values of shape `batch_shape`.
+            dual_objective: Formulation-specific convex dual objective on
+                the standardized loss. It maps dual variables of shape
+                `batch_shape + initial_dual_point.shape` to
+                per-batch-element dual values of shape `batch_shape`.
             batch_shape: Batch shape of the loss being evaluated, as
                 returned by `AmbiguitySet._batch_shape`.
+            shift: Per-element shift the loss was standardized with.
+            scale: Per-element positive scale the loss was standardized
+                with.
 
         Returns:
             A tensor of shape `batch_shape` holding `dual_objective`
@@ -386,7 +560,9 @@ class DualAmbiguitySet(AmbiguitySet):
             re-evaluation is what keeps the result differentiable with
             respect to `loss` even though the dual variables themselves are
             detached. The cached warm start is reused only when its shape
-            still matches the batch being solved.
+            still matches the batch being solved. Both the initial point and
+            the cache are kept in raw-loss units and converted to and from
+            the standardized units the solver iterates in.
 
         Raises:
             RuntimeError: If `dual_solver` is `None`.
@@ -399,14 +575,18 @@ class DualAmbiguitySet(AmbiguitySet):
         initial = self.initial_dual_point
         start_shape = batch_shape + initial.shape
         warm_start = self._dual_warm_start
+        if warm_start is not None and warm_start.shape == start_shape:
+            start = self._to_standard_units(warm_start, shift, scale)
+        elif self._initial_in_raw_units:
+            start = self._to_standard_units(initial.expand(start_shape), shift, scale)
+        else:
+            start = initial.expand(start_shape)
         problem = MinimizationProblem(
             objective=lambda point: torch.sum(dual_objective(point)),
-            initial_point=(
-                warm_start
-                if warm_start is not None and warm_start.shape == start_shape
-                else initial.expand(start_shape)
-            ),
+            initial_point=start,
         )
         result = self.dual_solver.solve(problem)
-        self._dual_warm_start = result.point.detach()
+        self._dual_warm_start = self._from_standard_units(
+            result.point.detach(), shift, scale
+        )
         return dual_objective(result.point)

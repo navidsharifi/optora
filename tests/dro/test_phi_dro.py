@@ -1,5 +1,7 @@
 """Tests for `PhiAmbiguitySet`, `ChiSquareAmbiguitySet`, and `TotalVariationAmbiguitySet`."""  # noqa: E501
 
+import math
+
 import pytest
 import torch
 
@@ -104,11 +106,17 @@ def test_worst_case_expectation_uses_custom_dual_solver() -> None:
 
     result = ambiguity_set.worst_case_expectation(loss)
 
+    # The solver iterates on the loss standardized to unit spread, so its
+    # returned point is read in those units and the dual value is rescaled
+    # by the spread (2.0 here) with no shift (the minimum loss is 0.0).
     assert fake_solver.received_problem is not None
     eta = torch.exp(torch.tensor(0.5, dtype=torch.float64))
     lam = torch.tensor(0.3, dtype=torch.float64)
-    expected = (
-        eta * 0.3 + lam + eta * torch.sum(nominal * _kl_conjugate((loss - lam) / eta))
+    standardized = loss / 2.0
+    expected = 2.0 * (
+        eta * 0.3
+        + lam
+        + eta * torch.sum(nominal * _kl_conjugate((standardized - lam) / eta))
     )
     assert torch.allclose(result, expected, atol=1e-6)
 
@@ -189,6 +197,8 @@ def test_is_an_ambiguity_set_instance() -> None:
 
 
 def test_initial_dual_point_pairs_the_configured_log_eta_and_lam() -> None:
+    # Both are in raw loss units, so on a loss of spread 2.0 and minimum 0.0
+    # the solver receives (log(eta / 2), lam / 2).
     nominal = torch.tensor([0.5, 0.5], dtype=torch.float64)
     loss = torch.tensor([0.0, 2.0], dtype=torch.float64)
     fake_solver = _RecordingSolver(log_eta=0.5, lam=0.3)
@@ -205,9 +215,9 @@ def test_initial_dual_point_pairs_the_configured_log_eta_and_lam() -> None:
     ambiguity_set.worst_case_expectation(loss)
 
     assert fake_solver.received_problem is not None
-    assert torch.equal(
+    assert torch.allclose(
         fake_solver.received_problem.initial_point,
-        torch.tensor([-0.75, 1.5], dtype=torch.float64),
+        torch.tensor([-0.75 - math.log(2.0), 1.5 / 2.0], dtype=torch.float64),
     )
 
 
@@ -228,8 +238,10 @@ def test_repeated_calls_warm_start_from_the_previous_dual_optimum() -> None:
     ambiguity_set.worst_case_expectation(loss)
     ambiguity_set.worst_case_expectation(loss)
 
+    # Same loss, so the same standardization: the previous optimum comes back
+    # as the starting point (up to the float round trip through raw units).
     assert fake_solver.received_problem is not None
-    assert torch.equal(
+    assert torch.allclose(
         fake_solver.received_problem.initial_point,
         torch.tensor([0.5, 0.3], dtype=torch.float64),
     )
@@ -237,9 +249,9 @@ def test_repeated_calls_warm_start_from_the_previous_dual_optimum() -> None:
     ambiguity_set.reset_warm_start()
     ambiguity_set.worst_case_expectation(loss)
 
-    assert torch.equal(
+    assert torch.allclose(
         fake_solver.received_problem.initial_point,
-        torch.tensor([-0.75, 1.5], dtype=torch.float64),
+        torch.tensor([-0.75 - math.log(2.0), 1.5 / 2.0], dtype=torch.float64),
     )
 
 
