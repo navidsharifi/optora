@@ -1,5 +1,6 @@
 """Shared contract for ambiguity sets used by DRO formulations."""
 
+import math
 from abc import ABC, abstractmethod
 from collections.abc import Callable
 
@@ -14,6 +15,25 @@ from optora.core.solver_base import (
 )
 
 _MASS_TOLERANCE_FLOOR = 1e-6
+
+
+def _bisection_steps(dtype: torch.dtype) -> int:
+    """Return the number of bisection steps that exhaust `dtype`'s precision.
+
+    Bisecting the unit interval `k` times narrows the bracket to `2 ** -k`,
+    so there is nothing left to gain once that width drops below the
+    spacing of the floating-point numbers near one. The count is therefore
+    read off the dtype rather than exposed as a tolerance: 52 steps in
+    float64 and 23 in float32.
+
+    Args:
+        dtype: Floating-point dtype the bisection iterates in.
+
+    Returns:
+        The number of halvings needed to resolve a point of the unit
+        interval to `dtype`'s precision.
+    """
+    return int(-math.log2(torch.finfo(dtype).eps))
 
 
 def _mass_tolerance(nominal: torch.Tensor) -> float:
@@ -266,6 +286,194 @@ class AmbiguitySet(nn.Module, ABC):
         raise NotImplementedError
 
 
+class TiltedAmbiguitySet(AmbiguitySet):
+    r"""Ambiguity set whose worst case is a tilt of the nominal, located by bisection.
+
+    For the divergence balls whose inner supremum has a known maximizer
+    shape, the worst-case distribution is a one-parameter *tilt* of the
+    nominal: a family $q_t$ with $q_0 = \mathrm{nominal}$ along which the
+    divergence $D(q_t \,\|\, \mathrm{nominal})$ increases monotonically
+    from $0$ to the divergence of the distribution concentrated on the
+    highest-loss scenarios. KL-DRO tilts exponentially,
+    $q \propto \mathrm{nominal} \cdot e^{\beta\,\mathrm{loss}}$, and
+    chi-square-DRO tilts linearly,
+    $q \propto \mathrm{nominal} \cdot (\mathrm{loss} - c)_+$; both read
+    directly off the primal KKT conditions
+    (Hu and Hong 2013; Ben-Tal et al. 2013; Duchi and Namkoong 2021).
+
+    Because the divergence along the path is monotone, the constraint
+    $D(q_t \,\|\, \mathrm{nominal}) \le \mathrm{radius}$ pins the tilt by a
+    *bracketed* scalar root solve rather than by minimizing a convex dual.
+    That is what this class implements, once, for every such formulation:
+
+    - **A guaranteed bracket.** The tilt is parameterized by
+      $t \in [0, 1)$, a bounded reparameterization of the unbounded
+      natural parameter (the inverse multiplier $1/\eta$). The bracket
+      $[0, 1]$ is valid for every loss and every radius by construction, so
+      bisection cannot fail to make progress the way an unconstrained
+      first-order dual solve can when the minimizer runs off to infinity.
+    - **A fixed, synchronization-free trip count.** The number of halvings
+      is read off the dtype by `_bisection_steps`, so the solve is a fixed
+      number of device-side kernels with no host read of a convergence
+      flag, and a batch costs exactly what a single element costs.
+    - **Feasibility by construction.** Each step keeps the endpoint that
+      tested feasible, so the returned tilt always satisfies the radius
+      constraint. The reported value is therefore a primal objective value
+      at a feasible distribution: it can never exceed $\max \mathrm{loss}$,
+      and it is `nan`-free whatever the support size or loss scale.
+    - **Saturation without a special case.** Once `radius` reaches the
+      divergence of the distribution concentrated on the highest-loss
+      scenarios, every tilt is feasible, bisection drives $t$ to the top of
+      the bracket, and $q_t$ *is* that distribution, so the value is
+      exactly $\max \mathrm{loss}$.
+
+    The tilt is computed on the loss standardized to unit spread,
+    $(\max \ell - \ell) / (\max \ell - \min \ell)$. An ambiguity set does
+    not depend on `loss`, so the maximizer of an affinely rescaled loss is
+    the same distribution; standardizing only keeps the tilt parameter and
+    the divergence well conditioned on a loss of any scale or offset.
+
+    The worst-case expectation is reported as
+    $\sum_i q^\star_i \,\mathrm{loss}_i$ with $q^\star$ detached. By
+    Danskin's theorem the gradient of $\sup_{q \in \mathcal{U}}
+    \mathbb{E}_q[\mathrm{loss}]$ with respect to `loss` is exactly the
+    maximizer $q^\star$, so detaching the tilt costs no accuracy in the
+    backward pass while keeping the bisection itself out of the autograd
+    graph.
+
+    Attributes:
+        nominal: Reference distribution the ambiguity set is centered on.
+        divergence: Divergence used to measure distance from `nominal`.
+        radius: Nonnegative bound on the divergence of any distribution
+            inside the ambiguity set from `nominal`.
+    """
+
+    @abstractmethod
+    def _tilted_distribution(
+        self, gap: torch.Tensor, tilt: torch.Tensor
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        r"""Evaluate the tilt path at `tilt` and its divergence from `nominal`.
+
+        Both are returned together because every formulation computes the
+        divergence from the same intermediates as the distribution, and the
+        bisection needs the divergence at each step while only the final
+        step needs the distribution.
+
+        Args:
+            gap: Shortfall of each scenario below the maximum loss,
+                standardized to unit spread, of shape `(..., n)` and
+                therefore lying in $[0, 1]$ with at least one zero entry.
+                Parameterizing by the gap rather than by the loss keeps the
+                tilt of the highest-loss scenarios exactly `1` however
+                extreme the tilt becomes.
+            tilt: Path parameter in $[0, 1)$ of shape `batch_shape`, where
+                `0` is `nominal` and the upper end is the distribution
+                concentrated on the highest-loss scenarios.
+
+        Returns:
+            The tilted distribution, of shape `batch_shape + (n,)`, and its
+            divergence from `nominal`, of shape `batch_shape`.
+        """
+        raise NotImplementedError
+
+    @staticmethod
+    def _tilt_rate(tilt: torch.Tensor) -> torch.Tensor:
+        r"""Map a tilt in $[0, 1)$ to the unbounded natural parameter $t / (1 - t)$.
+
+        The natural parameter of both tilt paths (the exponential rate for
+        KL, the reciprocal cut depth for chi-square) is unbounded above,
+        which is exactly what makes an unbracketed solve on it fragile.
+        This bijection moves the solve onto the unit interval instead. The
+        complement is floored at the dtype's smallest normal number so that
+        a tilt that rounds to exactly `1` yields a large finite rate rather
+        than an infinity, keeping the product with `gap` finite.
+
+        Args:
+            tilt: Path parameter in $[0, 1)$.
+
+        Returns:
+            The corresponding nonnegative natural parameter, unsqueezed
+            along a trailing support dimension so it broadcasts against a
+            `(..., n)` gap.
+        """
+        complement = torch.clamp(1.0 - tilt, min=torch.finfo(tilt.dtype).tiny)
+        return (tilt / complement).unsqueeze(-1)
+
+    def _solve_tilt(self, gap: torch.Tensor, batch_shape: torch.Size) -> torch.Tensor:
+        """Bisect the unit interval for the largest tilt inside the radius.
+
+        Args:
+            gap: Standardized shortfall below the maximum loss, of shape
+                `(..., n)`.
+            batch_shape: Batch shape of the loss being evaluated, as
+                returned by `AmbiguitySet._batch_shape`.
+
+        Returns:
+            A tensor of shape `batch_shape` holding, per batch element, the
+            largest tilt the bisection found whose distribution lies inside
+            the ambiguity set. Elements are bisected independently through
+            elementwise `torch.where`, so a saturated or degenerate element
+            cannot disturb the rest of its batch.
+        """
+        lower = torch.zeros(batch_shape, dtype=gap.dtype, device=gap.device)
+        upper = torch.ones_like(lower)
+        for _ in range(_bisection_steps(gap.dtype)):
+            middle = 0.5 * (lower + upper)
+            _, divergence = self._tilted_distribution(gap, middle)
+            # A non-finite divergence compares false and so counts as
+            # infeasible, which is the correct reading: it means the tilt
+            # left the support of the nominal.
+            feasible = divergence <= self.radius
+            lower = torch.where(feasible, middle, lower)
+            upper = torch.where(feasible, upper, middle)
+        return lower
+
+    def worst_case_expectation(self, loss: torch.Tensor) -> torch.Tensor:
+        """Compute the worst-case expected loss at the tilt pinned by `radius`.
+
+        Args:
+            loss: Per-scenario loss values of shape `(..., n)`, one trailing
+                entry per element of `nominal`'s support. Leading dimensions
+                are a batch of independent loss vectors, bisected together
+                in one vectorized solve.
+
+        Returns:
+            A tensor of shape `(...)` holding the worst-case expected loss:
+            the exact `sum(nominal * loss)` when `radius` is a zero float
+            (the set then contains only `nominal`), and otherwise the
+            expectation of `loss` under the feasible tilted distribution
+            the bisection returned, which is exactly `max(loss)` once the
+            radius saturates the set.
+
+            The expectation is accumulated as a correction to `max(loss)`
+            rather than directly. Every term of
+            `sum(q * (loss - max(loss)))` is nonpositive, so the result can
+            never round to above `max(loss)`, and a loss with a small
+            spread around a large offset keeps the precision of its spread
+            instead of losing it to the offset.
+
+        Raises:
+            ValueError: If `loss`'s trailing dimension does not match
+                `nominal`'s support size, or its batch shape does not
+                broadcast against `nominal` and `radius`.
+        """
+        batch_shape = self._batch_shape(loss)
+        if self._radius_is_zero:
+            return self._nominal_expectation(loss, batch_shape)
+
+        detached = loss.detach()
+        max_loss = torch.amax(detached, dim=-1, keepdim=True)
+        spread = max_loss - torch.amin(detached, dim=-1, keepdim=True)
+        gap = (max_loss - detached) / torch.where(
+            spread > 0, spread, torch.ones_like(spread)
+        )
+        distribution, _ = self._tilted_distribution(
+            gap, self._solve_tilt(gap, batch_shape)
+        )
+        shortfall = torch.sum(distribution * (loss - max_loss), dim=-1)
+        return (max_loss.squeeze(-1) + shortfall).expand(batch_shape)
+
+
 class DualAmbiguitySet(AmbiguitySet):
     r"""Ambiguity set whose worst-case expectation is a low-dimensional dual solve.
 
@@ -301,34 +509,28 @@ class DualAmbiguitySet(AmbiguitySet):
     so every element keeps iterating until the batch as a whole is
     stationary (see `progress/decisions.md`).
 
-    Two properties of these sets keep a fixed-step first-order solver
-    usable on any loss, and both are handled here once rather than in each
-    formulation:
+    The loss scale is handled here once rather than in each formulation.
+    The set of candidate distributions does not depend on `loss`, so
+    $\sup_q \mathbb{E}_q[a\,\ell + b] = a \sup_q \mathbb{E}_q[\ell] + b$
+    for $a > 0$. The dual's curvature grows with the squared loss spread,
+    so a step size tuned for an order-one loss diverges on a wide one. The
+    dual is therefore solved on the loss standardized to unit spread,
+    $(\ell - \min \ell) / (\max \ell - \min \ell)$, with a detached shift
+    and scale: for any fixed constants this is the same function of `loss`,
+    so values and every derivative are unchanged. `initial_dual_point` and
+    the warm start stay in the units of the raw loss and are converted at
+    the boundary by `_to_standard_units` and `_from_standard_units`.
 
-    - **Loss scale.** The set of candidate distributions does not depend on
-      `loss`, so $\sup_q \mathbb{E}_q[a\,\ell + b] = a \sup_q
-      \mathbb{E}_q[\ell] + b$ for $a > 0$. The dual's curvature grows with
-      the squared loss spread, so a step size tuned for an order-one loss
-      diverges on a wide one. The dual is therefore solved on the loss
-      standardized to unit spread, $(\ell - \min \ell) / (\max \ell - \min
-      \ell)$, with a detached shift and scale: for any fixed constants this
-      is the same function of `loss`, so values and every derivative are
-      unchanged. `initial_dual_point` and the warm start stay in the units
-      of the raw loss and are converted at the boundary by
-      `_to_standard_units` and `_from_standard_units`.
-    - **Saturation.** Once `radius` reaches the divergence of the
-      distribution concentrated on the highest-loss scenarios, the set
-      contains it and the worst case is exactly $\max \ell$. The dual then
-      has no minimizer (its infimum is approached only as the multiplier
-      $\eta \to 0$), so no solver can converge and an overflow-prone dual
-      returns `nan`. The shortcut returns $\max \ell$ there, using only
-      device reductions, and solves the dual for such elements at a
-      harmless in-range radius instead, so a saturated element cannot
-      poison the joint solve of the rest of its batch. A subclass
-      supplies the threshold through `_saturation_radius`; the default
-      never saturates. The threshold is read off the highest-loss
-      scenarios of the whole support, so a highest-loss scenario with
-      zero nominal mass simply never saturates.
+    What standardization cannot fix is the shape of the dual itself. The
+    minimizer runs off to infinity as `radius` vanishes, and it ceases to
+    exist at all once `radius` reaches the divergence of the distribution
+    concentrated on the highest-loss scenarios, where the infimum is
+    approached only in the limit. A first-order solver returns a stale
+    iterate in the first case and can diverge outright in the second, so
+    this class is the fallback for a formulation whose maximizer optora
+    does not know in closed form. A formulation that does know it should
+    use `TiltedAmbiguitySet`, whose bracketed bisection has neither
+    failure mode.
 
     Attributes:
         nominal: Reference distribution the ambiguity set is centered on.
@@ -463,21 +665,6 @@ class DualAmbiguitySet(AmbiguitySet):
         """
         raise NotImplementedError
 
-    def _saturation_radius(self, top_mass: torch.Tensor) -> torch.Tensor:
-        """Return the radius from which the worst case is exactly `max(loss)`.
-
-        Args:
-            top_mass: Nominal mass carried by the highest-loss scenarios,
-                of the batch shape of the loss.
-
-        Returns:
-            The divergence of the distribution concentrated on those
-            scenarios from `nominal`, which is the smallest radius whose set
-            contains it. The default is `inf`: a formulation whose
-            threshold is not known never takes the shortcut.
-        """
-        return torch.full_like(top_mass, float("inf"))
-
     def worst_case_expectation(self, loss: torch.Tensor) -> torch.Tensor:
         """Compute the worst-case expected loss from the convex dual.
 
@@ -490,10 +677,11 @@ class DualAmbiguitySet(AmbiguitySet):
         Returns:
             A tensor of shape `(...)` holding the worst-case expected loss:
             the exact `sum(nominal * loss)` when `radius` is a zero float
-            (the set then contains only `nominal`), exactly `max(loss)` for
-            every element whose radius has reached the saturation radius,
-            and otherwise the dual objective evaluated at the optimum found
-            by `dual_solver`.
+            (the set then contains only `nominal`), and otherwise the dual
+            objective evaluated at the optimum found by `dual_solver`. The
+            dual value bounds the worst case from above for any dual point,
+            so an unconverged solve reports a conservative number rather
+            than a wrong direction.
 
         Raises:
             ValueError: If `loss`'s trailing dimension does not match
@@ -506,33 +694,18 @@ class DualAmbiguitySet(AmbiguitySet):
         if self._radius_is_zero:
             return self._nominal_expectation(loss, batch_shape)
 
-        max_loss = torch.amax(loss, dim=-1).detach()
         shift = torch.amin(loss, dim=-1).detach()
-        spread = max_loss - shift
+        spread = torch.amax(loss, dim=-1).detach() - shift
         scale = torch.where(spread > 0, spread, torch.ones_like(spread))
         standardized = (loss - shift.unsqueeze(-1)) / scale.unsqueeze(-1)
 
-        # Nominal restricted to the highest-loss scenarios and renormalized:
-        # a worst-case distribution once the set is saturated, and the exact
-        # boundary of that regime. Its gradient (rather than the even split
-        # `amax` gives across ties) stays inside the ambiguity set.
-        top = self.nominal * (loss >= max_loss.unsqueeze(-1))
-        top_mass = torch.sum(top, dim=-1)
-        top_distribution = top / torch.where(top_mass > 0, top_mass, 1.0).unsqueeze(-1)
-        saturation_radius = self._saturation_radius(top_mass)
-        saturated = self.radius >= saturation_radius
-        solvable_radius = torch.where(saturated, 0.5 * saturation_radius, self.radius)
-
         dual_value = self._solve_dual(
-            lambda point: self._dual_objective(point, standardized, solvable_radius),
+            lambda point: self._dual_objective(point, standardized, self.radius),
             batch_shape,
             shift,
             scale,
         )
-        saturated_value = max_loss + torch.sum(
-            top_distribution.detach() * (loss - max_loss.unsqueeze(-1)), dim=-1
-        )
-        return torch.where(saturated, saturated_value, scale * dual_value + shift)
+        return scale * dual_value + shift
 
     def _solve_dual(
         self,
