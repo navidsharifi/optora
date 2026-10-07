@@ -6,7 +6,7 @@ import pytest
 import torch
 
 from optora.core.convergence import ConvergenceStatus
-from optora.core.dro_base import AmbiguitySet
+from optora.core.dro_base import AmbiguitySet, TiltedAmbiguitySet
 from optora.core.solver_base import (
     MinimizationProblem,
     MinimizationResult,
@@ -145,11 +145,7 @@ def test_matches_kl_ambiguity_set_when_using_kl_generator_and_conjugate() -> Non
         phi_conjugate=_kl_conjugate,
         dual_solver=GradientDescent(step_size=0.05, max_iter=20000, tol=1e-11),
     )
-    kl_specific = KLAmbiguitySet(
-        nominal,
-        radius=radius,
-        dual_solver=GradientDescent(step_size=0.1, max_iter=20000, tol=1e-11),
-    )
+    kl_specific = KLAmbiguitySet(nominal, radius=radius)
 
     generic_result = generic.worst_case_expectation(loss)
     kl_result = kl_specific.worst_case_expectation(loss)
@@ -255,27 +251,22 @@ def test_repeated_calls_warm_start_from_the_previous_dual_optimum() -> None:
     )
 
 
-def test_warm_started_chi_square_values_match_cold_started_ones() -> None:
+def test_repeated_chi_square_calls_are_deterministic() -> None:
+    # The chi-square set is bisected rather than dual-solved, so it keeps no
+    # warm start and a repeat solve must reproduce the first one exactly.
     nominal = torch.tensor([0.25, 0.5, 0.25], dtype=torch.float64)
     base = torch.tensor([0.0, 1.0, 2.0], dtype=torch.float64)
     losses = [base * (1.0 + 0.05 * step) for step in range(3)]
 
-    def solver() -> GradientDescent:
-        return GradientDescent(
-            step_size=0.02, max_iter=4000, tol=1e-10, check_interval=1
-        )
-
-    warm_set = ChiSquareAmbiguitySet(nominal, radius=0.2, dual_solver=solver())
-    warm_values = [warm_set.worst_case_expectation(loss) for loss in losses]
-    cold_values = [
-        ChiSquareAmbiguitySet(
-            nominal, radius=0.2, dual_solver=solver()
-        ).worst_case_expectation(loss)
+    reused = ChiSquareAmbiguitySet(nominal, radius=0.2)
+    reused_values = [reused.worst_case_expectation(loss) for loss in losses]
+    fresh_values = [
+        ChiSquareAmbiguitySet(nominal, radius=0.2).worst_case_expectation(loss)
         for loss in losses
     ]
 
-    for warm, cold in zip(warm_values, cold_values, strict=True):
-        assert torch.allclose(warm, cold, atol=1e-9)
+    for repeated, fresh in zip(reused_values, fresh_values, strict=True):
+        assert repeated == fresh
 
 
 # --- ChiSquareAmbiguitySet -------------------------------------------------
@@ -295,15 +286,14 @@ def test_chi_square_matches_mean_plus_sqrt_radius_variance_in_interior_regime() 
     nominal = torch.tensor([0.25, 0.25, 0.25, 0.25], dtype=torch.float64)
     loss = torch.tensor([0.0, 1.0, 2.0, 3.0], dtype=torch.float64)
     radius = 0.05
-    solver = GradientDescent(step_size=0.05, max_iter=20000, tol=1e-11)
-    ambiguity_set = ChiSquareAmbiguitySet(nominal, radius=radius, dual_solver=solver)
+    ambiguity_set = ChiSquareAmbiguitySet(nominal, radius=radius)
 
     result = ambiguity_set.worst_case_expectation(loss)
 
     mean = torch.sum(nominal * loss)
     variance = torch.sum(nominal * (loss - mean) ** 2)
     expected = mean + torch.sqrt(torch.tensor(radius, dtype=torch.float64) * variance)
-    assert torch.allclose(result, expected, atol=1e-4)
+    assert torch.allclose(result, expected, atol=1e-12)
 
 
 def test_chi_square_calibrated_radius_gives_the_normal_interval() -> None:
@@ -322,22 +312,20 @@ def test_chi_square_calibrated_radius_gives_the_normal_interval() -> None:
     nominal = torch.full_like(observations, 1.0 / num_samples)
     normal_quantile = torch.special.ndtri(torch.tensor(0.975, dtype=torch.float64))
     radius = float(normal_quantile**2) / num_samples
-    solver = GradientDescent(step_size=0.1, max_iter=5000, tol=1e-11)
-    ambiguity_set = ChiSquareAmbiguitySet(nominal, radius=radius, dual_solver=solver)
+    ambiguity_set = ChiSquareAmbiguitySet(nominal, radius=radius)
 
     result = ambiguity_set.worst_case_expectation(observations)
 
     standard_error = torch.std(observations, unbiased=False) / num_samples**0.5
     expected = torch.mean(observations) + normal_quantile * standard_error
-    assert torch.allclose(result, expected, atol=1e-6)
+    assert torch.allclose(result, expected, atol=1e-12)
 
 
 def test_chi_square_matches_grid_search_over_dual_variables() -> None:
     nominal = torch.tensor([0.1, 0.2, 0.3, 0.4], dtype=torch.float64)
     loss = torch.tensor([0.0, 1.0, 2.0, 5.0], dtype=torch.float64)
     radius = 0.2
-    solver = GradientDescent(step_size=0.05, max_iter=5000, tol=1e-9)
-    ambiguity_set = ChiSquareAmbiguitySet(nominal, radius=radius, dual_solver=solver)
+    ambiguity_set = ChiSquareAmbiguitySet(nominal, radius=radius)
 
     result = ambiguity_set.worst_case_expectation(loss)
 
@@ -348,52 +336,41 @@ def test_chi_square_matches_grid_search_over_dual_variables() -> None:
 def test_chi_square_reaches_max_loss_for_large_radius() -> None:
     nominal = torch.tensor([0.1, 0.2, 0.3, 0.4], dtype=torch.float64)
     loss = torch.tensor([0.0, 1.0, 2.0, 5.0], dtype=torch.float64)
-    solver = GradientDescent(step_size=0.01, max_iter=50000, tol=1e-10)
-    ambiguity_set = ChiSquareAmbiguitySet(nominal, radius=5.0, dual_solver=solver)
+    ambiguity_set = ChiSquareAmbiguitySet(nominal, radius=5.0)
 
     result = ambiguity_set.worst_case_expectation(loss)
 
-    assert torch.allclose(result, torch.tensor(5.0, dtype=torch.float64), atol=1e-2)
+    assert result == loss.max()
 
 
 def test_chi_square_worst_case_expectation_is_monotonic_in_radius() -> None:
     nominal = torch.tensor([0.25, 0.25, 0.25, 0.25], dtype=torch.float64)
     loss = torch.tensor([0.0, 1.0, 2.0, 3.0], dtype=torch.float64)
+    radii = torch.logspace(-6, 1, steps=200, dtype=torch.float64)
 
-    small = ChiSquareAmbiguitySet(
-        nominal,
-        radius=0.02,
-        dual_solver=GradientDescent(step_size=0.05, max_iter=5000, tol=1e-9),
-    ).worst_case_expectation(loss)
-    large = ChiSquareAmbiguitySet(
-        nominal,
-        radius=0.2,
-        dual_solver=GradientDescent(step_size=0.05, max_iter=5000, tol=1e-9),
-    ).worst_case_expectation(loss)
+    values = ChiSquareAmbiguitySet(nominal, radius=radii).worst_case_expectation(loss)
 
-    assert large >= small - 1e-6
+    assert torch.all(torch.diff(values) >= 0.0)
 
 
 def test_chi_square_worst_case_expectation_is_at_least_nominal_expectation() -> None:
     nominal = torch.tensor([0.3, 0.3, 0.4], dtype=torch.float64)
     loss = torch.tensor([1.0, 2.0, 3.0], dtype=torch.float64)
-    solver = GradientDescent(step_size=0.05, max_iter=5000, tol=1e-9)
-    ambiguity_set = ChiSquareAmbiguitySet(nominal, radius=0.1, dual_solver=solver)
+    ambiguity_set = ChiSquareAmbiguitySet(nominal, radius=0.1)
 
     result = ambiguity_set.worst_case_expectation(loss)
 
-    assert result >= torch.sum(nominal * loss) - 1e-4
+    assert result >= torch.sum(nominal * loss)
 
 
 def test_chi_square_worst_case_expectation_does_not_exceed_max_loss() -> None:
     nominal = torch.tensor([0.3, 0.3, 0.4], dtype=torch.float64)
     loss = torch.tensor([1.0, 2.0, 3.0], dtype=torch.float64)
-    solver = GradientDescent(step_size=0.05, max_iter=5000, tol=1e-9)
-    ambiguity_set = ChiSquareAmbiguitySet(nominal, radius=0.1, dual_solver=solver)
+    ambiguity_set = ChiSquareAmbiguitySet(nominal, radius=0.1)
 
     result = ambiguity_set.worst_case_expectation(loss)
 
-    assert result <= loss.max() + 1e-3
+    assert result <= loss.max()
 
 
 def test_chi_square_mismatched_loss_shape_raises_value_error() -> None:
@@ -429,12 +406,71 @@ def test_chi_square_contains_uses_chi_square_divergence_and_radius() -> None:
     assert not ambiguity_set.contains(torch.tensor([0.95, 0.05]))
 
 
-def test_chi_square_is_a_phi_and_ambiguity_set_instance() -> None:
+def test_chi_square_is_a_tilted_and_ambiguity_set_instance() -> None:
     nominal = torch.tensor([0.5, 0.5])
     ambiguity_set = ChiSquareAmbiguitySet(nominal, radius=0.1)
 
-    assert isinstance(ambiguity_set, PhiAmbiguitySet)
+    assert isinstance(ambiguity_set, TiltedAmbiguitySet)
     assert isinstance(ambiguity_set, AmbiguitySet)
+
+
+@pytest.mark.parametrize("support_size", [10, 50, 100, 1000])
+@pytest.mark.parametrize("fraction", [0.1, 0.5, 0.9, 1.0, 2.0])
+def test_chi_square_on_a_large_support_is_finite_and_bounded(
+    support_size: int, fraction: float
+) -> None:
+    # Issue #51. With the repo's old dual solver this returned values above
+    # `max(loss)` from n = 10 and `nan` from n = 50, because a fixed-step
+    # first-order solve overshot into a region the conjugate overflowed.
+    nominal = torch.full((support_size,), 1.0 / support_size, dtype=torch.float64)
+    loss = torch.linspace(0.0, 1.0, support_size, dtype=torch.float64)
+    radius = fraction * (support_size - 1.0)
+
+    result = ChiSquareAmbiguitySet(nominal, radius=radius).worst_case_expectation(loss)
+
+    assert torch.isfinite(result)
+    assert result <= loss.max()
+    assert result >= torch.sum(nominal * loss)
+    if fraction >= 1.0:
+        assert result == loss.max()
+
+
+@pytest.mark.parametrize("radius", [1e-14, 1e-10, 1e-6])
+def test_chi_square_at_a_vanishing_radius_matches_the_closed_form(
+    radius: float,
+) -> None:
+    # Issue #49. In the interior regime the worst case is exactly
+    # `mean + sqrt(radius * variance)` however small the radius is, so the
+    # excess over the nominal expectation must stay accurate relative to
+    # itself rather than to the loss scale.
+    nominal = torch.tensor([0.5, 0.2, 0.2, 0.05, 0.05], dtype=torch.float64)
+    loss = torch.tensor([0.0, 1.0, 2.0, 3.0, 10.0], dtype=torch.float64)
+    mean = torch.sum(nominal * loss)
+    variance = torch.sum(nominal * (loss - mean) ** 2)
+
+    result = ChiSquareAmbiguitySet(nominal, radius=radius).worst_case_expectation(loss)
+
+    excess = float(result - mean)
+    expected = float(torch.sqrt(radius * variance))
+    assert abs(excess - expected) <= 1e-6 * expected
+
+
+@pytest.mark.parametrize("fraction", [1e-12, 1e-6, 0.01, 0.5, 0.9, 0.999])
+def test_chi_square_returned_distribution_stays_inside_the_radius(
+    fraction: float,
+) -> None:
+    nominal = torch.tensor([0.1, 0.2, 0.3, 0.4], dtype=torch.float64)
+    loss = torch.tensor([0.0, 1.0, 2.0, 5.0], dtype=torch.float64)
+    saturation = 1.0 / float(nominal[loss >= loss.max()].sum()) - 1.0
+    radius = fraction * saturation
+    ambiguity_set = ChiSquareAmbiguitySet(nominal, radius=radius)
+    differentiable = loss.clone().requires_grad_(True)
+
+    ambiguity_set.worst_case_expectation(differentiable).backward()
+
+    assert differentiable.grad is not None
+    divergence = ambiguity_set.divergence(differentiable.grad, nominal)
+    assert float(divergence) <= radius * (1.0 + 1e-9)
 
 
 # --- TotalVariationAmbiguitySet --------------------------------------------

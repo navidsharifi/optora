@@ -26,11 +26,6 @@ import torch
 from torch import nn
 
 from optora.core.dro_base import AmbiguitySet
-from optora.core.solver_base import (
-    MinimizationProblem,
-    MinimizationResult,
-    Solver,
-)
 from optora.dro.kl_dro import KLAmbiguitySet
 from optora.dro.minimax_solver import MinimaxProblem, MinimaxSolver
 from optora.dro.phi_dro import ChiSquareAmbiguitySet, TotalVariationAmbiguitySet
@@ -60,50 +55,24 @@ COST = torch.cdist(FEATURES, FEATURES) ** 2
 
 AmbiguitySetFactory = Callable[[], AmbiguitySet]
 
-# The gradient identities below hold only at the dual optimum, so the tests
-# that check them solve the inner problem far past what training needs.
-PRECISE_DUAL_SETTINGS = {"step_size": 0.05, "max_iter": 5000, "tol": 1e-12}
-TRAINING_DUAL_SETTINGS = {"step_size": 0.5, "max_iter": 200, "tol": 1e-9}
+
+def _kl() -> AmbiguitySet:
+    return KLAmbiguitySet(NOMINAL, radius=RADIUS)
 
 
-def _dual_solver(precise: bool = True) -> GradientDescent:
-    """Build an inner dual solver at the requested accuracy.
-
-    Args:
-        precise: Whether to solve the dual far past training accuracy, as
-            the gradient-identity tests require.
-
-    Returns:
-        A `GradientDescent` configured for the inner dual problem.
-    """
-    settings = PRECISE_DUAL_SETTINGS if precise else TRAINING_DUAL_SETTINGS
-    return GradientDescent(
-        step_size=float(settings["step_size"]),
-        max_iter=int(settings["max_iter"]),
-        tol=float(settings["tol"]),
-        check_interval=1,
-    )
+def _chi_square() -> AmbiguitySet:
+    return ChiSquareAmbiguitySet(NOMINAL, radius=RADIUS)
 
 
-def _kl(precise: bool = True) -> AmbiguitySet:
-    return KLAmbiguitySet(NOMINAL, radius=RADIUS, dual_solver=_dual_solver(precise))
-
-
-def _chi_square(precise: bool = True) -> AmbiguitySet:
-    return ChiSquareAmbiguitySet(
-        NOMINAL, radius=RADIUS, dual_solver=_dual_solver(precise)
-    )
-
-
-def _total_variation(precise: bool = True) -> AmbiguitySet:
+def _total_variation() -> AmbiguitySet:
     return TotalVariationAmbiguitySet(NOMINAL, radius=RADIUS)
 
 
-def _wasserstein(precise: bool = True) -> AmbiguitySet:
+def _wasserstein() -> AmbiguitySet:
     return WassersteinAmbiguitySet(NOMINAL, cost=COST, radius=RADIUS)
 
 
-BUILDERS: dict[str, Callable[[bool], AmbiguitySet]] = {
+BUILDERS: dict[str, AmbiguitySetFactory] = {
     "kl": _kl,
     "chi_square": _chi_square,
     "total_variation": _total_variation,
@@ -124,15 +93,9 @@ def name(request: pytest.FixtureRequest) -> str:
 
 
 @pytest.fixture
-def precise_factory(name: str) -> AmbiguitySetFactory:
-    """Build a freshly constructed ambiguity set with a tightly solved dual."""
-    return lambda: BUILDERS[name](True)
-
-
-@pytest.fixture
-def training_factory(name: str) -> AmbiguitySetFactory:
-    """Build a freshly constructed ambiguity set at training-loop accuracy."""
-    return lambda: BUILDERS[name](False)
+def factory(name: str) -> AmbiguitySetFactory:
+    """Build a freshly constructed ambiguity set of the named kind."""
+    return BUILDERS[name]
 
 
 class _LinearModel(nn.Module):
@@ -238,24 +201,11 @@ def _central_difference_gradient(
     return derivatives
 
 
-class _RecordingDualSolver(Solver[MinimizationProblem, MinimizationResult]):
-    """Inner solver that records every `MinimizationResult` it hands back."""
-
-    def __init__(self, inner: Solver[MinimizationProblem, MinimizationResult]) -> None:
-        self.inner = inner
-        self.results: list[MinimizationResult] = []
-
-    def solve(self, problem: MinimizationProblem) -> MinimizationResult:
-        result = self.inner.solve(problem)
-        self.results.append(result)
-        return result
-
-
 # --- The gradient is the envelope gradient -----------------------------------
 
 
 def test_gradient_with_respect_to_loss_is_the_worst_case_distribution(
-    precise_factory: AmbiguitySetFactory,
+    factory: AmbiguitySetFactory,
 ) -> None:
     # The envelope theorem says the derivative of the optimal value with
     # respect to each per-scenario loss is the worst-case distribution's mass
@@ -263,7 +213,7 @@ def test_gradient_with_respect_to_loss_is_the_worst_case_distribution(
     # of the composition: an extra gradient path through the dual variable
     # would break the identity, and a dual left short of its optimum would
     # open a duality gap in the equality below.
-    ambiguity_set = precise_factory()
+    ambiguity_set = factory()
     loss = TARGETS.clone().requires_grad_(True)
 
     value = ambiguity_set.worst_case_expectation(loss)
@@ -308,61 +258,36 @@ def test_module_gradient_equals_the_worst_case_weighted_parameter_gradient() -> 
 
 
 def test_module_gradient_matches_finite_differences_of_the_optimal_value(
-    precise_factory: AmbiguitySetFactory,
+    factory: AmbiguitySetFactory,
 ) -> None:
     # Finite differences of the optimal value know nothing about how the inner
     # problem is solved, so agreeing with them rules out a gradient that leaks
     # the inner solve's iteration path.
     model = _LinearModel()
 
-    precise_factory().worst_case_expectation(_per_scenario_loss(model)).backward()
+    factory().worst_case_expectation(_per_scenario_loss(model)).backward()
     gradient = _flat_gradient(model)
 
-    expected = _central_difference_gradient(precise_factory, model)
+    expected = _central_difference_gradient(factory, model)
 
     assert torch.allclose(gradient, expected, atol=1e-6)
 
 
-def test_gradient_is_unchanged_by_the_inner_solve_start_point() -> None:
-    # If the outer gradient were backpropagated through the inner iterations,
-    # it would depend on where those iterations started. Solving the same
-    # problem from four different dual start points must give one gradient.
+def test_gradient_is_unchanged_by_a_repeat_solve() -> None:
+    # The inner solve carries no state between calls, so repeating an
+    # identical evaluation must reproduce the same gradient exactly.
     model = _LinearModel()
-
-    def gradient_from(initial_log_eta: float) -> torch.Tensor:
-        ambiguity_set = KLAmbiguitySet(
-            NOMINAL,
-            radius=RADIUS,
-            dual_solver=_dual_solver(),
-            initial_log_eta=initial_log_eta,
-        )
-        return _gradient(
-            ambiguity_set.worst_case_expectation(_per_scenario_loss(model)), model
-        )
-
-    reference = gradient_from(0.0)
-    for initial_log_eta in (-2.0, 1.0, 3.0):
-        assert torch.allclose(gradient_from(initial_log_eta), reference, atol=1e-9)
-
-
-def test_gradient_is_unchanged_by_a_warm_started_repeat_solve() -> None:
-    # Warm starting changes the inner iteration count but not the optimum, so
-    # repeating an identical evaluation must reproduce the same gradient.
-    model = _LinearModel()
-    ambiguity_set = KLAmbiguitySet(NOMINAL, radius=RADIUS, dual_solver=_dual_solver())
+    ambiguity_set = KLAmbiguitySet(NOMINAL, radius=RADIUS)
 
     def gradient() -> torch.Tensor:
         return _gradient(
             ambiguity_set.worst_case_expectation(_per_scenario_loss(model)), model
         )
 
-    cold = gradient()
-    warm = gradient()
-    ambiguity_set.reset_warm_start()
-    recold = gradient()
+    first = gradient()
+    second = gradient()
 
-    assert torch.allclose(warm, cold, atol=1e-9)
-    assert torch.allclose(recold, cold, atol=1e-9)
+    assert torch.equal(first, second)
 
 
 def test_zero_radius_gradient_is_the_nominal_expectation_gradient() -> None:
@@ -385,25 +310,29 @@ def test_zero_radius_gradient_is_the_nominal_expectation_gradient() -> None:
 # --- The inner solve stays detached ------------------------------------------
 
 
-def test_inner_dual_solve_returns_a_detached_optimum() -> None:
-    # The envelope argument is only valid if the dual optimum re-entering the
-    # dual objective carries no autograd history back to the module.
+def test_inner_solve_returns_a_detached_worst_case_distribution() -> None:
+    # The envelope argument is only valid if the worst-case distribution
+    # multiplying the loss carries no autograd history back to the module:
+    # its gradient must be that distribution, not a path through the
+    # bisection that produced it.
     model = _LinearModel()
-    recorder = _RecordingDualSolver(_dual_solver())
-    ambiguity_set = KLAmbiguitySet(NOMINAL, radius=RADIUS, dual_solver=recorder)
+    ambiguity_set = KLAmbiguitySet(NOMINAL, radius=RADIUS)
 
-    ambiguity_set.worst_case_expectation(_per_scenario_loss(model)).backward()
+    leaf = _per_scenario_loss(model).detach().requires_grad_(True)
+    (distribution,) = torch.autograd.grad(
+        ambiguity_set.worst_case_expectation(leaf), leaf
+    )
+    value = _gradient(
+        ambiguity_set.worst_case_expectation(_per_scenario_loss(model)), model
+    )
+    reweighted = _gradient(torch.sum(distribution * _per_scenario_loss(model)), model)
 
-    assert recorder.results
-    for result in recorder.results:
-        assert result.point.grad_fn is None
-        assert not result.point.requires_grad
+    assert torch.allclose(value, reweighted, atol=1e-12)
 
 
-def test_inner_dual_solve_leaves_module_gradients_untouched() -> None:
-    # The inner solver calls `torch.autograd.grad` on a graph that reaches
-    # back into the module. That must differentiate with respect to the dual
-    # variable only, never accumulating into the module's `.grad` buffers.
+def test_inner_solve_leaves_module_gradients_untouched() -> None:
+    # The inner solve runs on a tensor that reaches back into the module.
+    # It must never accumulate into the module's `.grad` buffers.
     model = _LinearModel()
 
     value = _kl().worst_case_expectation(_per_scenario_loss(model))
@@ -460,7 +389,7 @@ def _train(
     return values
 
 
-def test_adam_converges_in_value(training_factory: AmbiguitySetFactory) -> None:
+def test_adam_converges_in_value(factory: AmbiguitySetFactory) -> None:
     # Every parameter must move, the objective must fall substantially, the
     # trajectory must then flatten rather than keep drifting, and no nearby
     # parameter vector may do meaningfully better. The last check is what
@@ -470,7 +399,7 @@ def test_adam_converges_in_value(training_factory: AmbiguitySetFactory) -> None:
     model = _LinearModel()
     initial = _flat_parameters(model).clone()
 
-    values = torch.stack(_train(training_factory(), model))
+    values = torch.stack(_train(factory(), model))
     descent = values[0] - values.min()
 
     assert torch.all(torch.abs(_flat_parameters(model) - initial) > 0.0)
@@ -478,7 +407,7 @@ def test_adam_converges_in_value(training_factory: AmbiguitySetFactory) -> None:
     assert values[-20:].max() - values[-20:].min() < 0.01 * descent
 
     optimum = _flat_parameters(model).clone()
-    final = training_factory().worst_case_expectation(_per_scenario_loss(model))
+    final = factory().worst_case_expectation(_per_scenario_loss(model))
     generator = torch.Generator().manual_seed(0)
     for _ in range(25):
         _assign_flat_parameters(
@@ -486,7 +415,7 @@ def test_adam_converges_in_value(training_factory: AmbiguitySetFactory) -> None:
             optimum
             + 0.01 * torch.randn(optimum.shape, dtype=DTYPE, generator=generator),
         )
-        candidate = training_factory().worst_case_expectation(_per_scenario_loss(model))
+        candidate = factory().worst_case_expectation(_per_scenario_loss(model))
         assert candidate > final - 0.01 * descent
     _assign_flat_parameters(model, optimum)
 
@@ -500,8 +429,8 @@ def test_adam_reaches_a_stationary_point_on_a_smooth_objective(name: str) -> Non
         pytest.skip(f"the {name} worst case is only piecewise smooth at its minimum")
     model = _LinearModel()
 
-    _train(BUILDERS[name](False), model, steps=400, learning_rate=0.03)
-    BUILDERS[name](False).worst_case_expectation(_per_scenario_loss(model)).backward()
+    _train(BUILDERS[name](), model, steps=400, learning_rate=0.03)
+    BUILDERS[name]().worst_case_expectation(_per_scenario_loss(model)).backward()
 
     assert torch.linalg.vector_norm(_flat_gradient(model)) < 1e-5
 
@@ -519,14 +448,14 @@ def test_adam_reaches_the_same_optimum_as_the_minimax_solver() -> None:
         )
     ).solve(
         MinimaxProblem(
-            ambiguity_set=_kl(precise=False),
+            ambiguity_set=_kl(),
             loss_fn=loss_fn,
             initial_point=torch.zeros((), dtype=DTYPE),
         )
     )
 
     decision = nn.Parameter(torch.zeros((), dtype=DTYPE))
-    ambiguity_set = _kl(precise=False)
+    ambiguity_set = _kl()
     optimizer = torch.optim.Adam([decision], lr=0.05)
     for _ in range(1000):
         optimizer.zero_grad()
@@ -545,14 +474,14 @@ def test_robust_training_trades_nominal_risk_for_worst_case_risk() -> None:
     robust_model = _LinearModel()
     empirical_model = _LinearModel()
 
-    _train(_kl(precise=False), robust_model)
+    _train(_kl(), robust_model)
     _train(KLAmbiguitySet(NOMINAL, radius=0.0), empirical_model)
 
     def nominal_risk(model: nn.Module) -> torch.Tensor:
         return torch.sum(NOMINAL * _per_scenario_loss(model)).detach()
 
     def worst_case_risk(model: nn.Module) -> torch.Tensor:
-        value = _kl(precise=False).worst_case_expectation(_per_scenario_loss(model))
+        value = _kl().worst_case_expectation(_per_scenario_loss(model))
         return value.detach()
 
     assert not torch.allclose(
@@ -568,7 +497,7 @@ def test_training_loop_preserves_dtype_and_keeps_parameters_leaves() -> None:
     # above cannot see.
     model = _LinearModel()
 
-    values = _train(_kl(precise=False), model, steps=5)
+    values = _train(_kl(), model, steps=5)
 
     assert all(value.dtype is DTYPE for value in values)
     assert all(

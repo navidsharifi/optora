@@ -10,7 +10,6 @@ from optora.core.dro_base import AmbiguitySet
 from optora.dro.kl_dro import KLAmbiguitySet
 from optora.dro.phi_dro import ChiSquareAmbiguitySet, TotalVariationAmbiguitySet
 from optora.dro.wasserstein_dro import WassersteinAmbiguitySet
-from optora.solvers.gradient_descent import GradientDescent
 
 NOMINAL = torch.tensor([0.25, 0.5, 0.25], dtype=torch.float64)
 
@@ -26,19 +25,11 @@ AmbiguitySetFactory = Callable[[float | torch.Tensor], AmbiguitySet]
 
 
 def _kl(radius: float | torch.Tensor) -> AmbiguitySet:
-    return KLAmbiguitySet(
-        NOMINAL,
-        radius=radius,
-        dual_solver=GradientDescent(step_size=0.1, max_iter=2000, tol=1e-10),
-    )
+    return KLAmbiguitySet(NOMINAL, radius=radius)
 
 
 def _chi_square(radius: float | torch.Tensor) -> AmbiguitySet:
-    return ChiSquareAmbiguitySet(
-        NOMINAL,
-        radius=radius,
-        dual_solver=GradientDescent(step_size=0.05, max_iter=3000, tol=1e-10),
-    )
+    return ChiSquareAmbiguitySet(NOMINAL, radius=radius)
 
 
 def _total_variation(radius: float | torch.Tensor) -> AmbiguitySet:
@@ -174,26 +165,31 @@ def test_radius_batch_that_does_not_broadcast_raises_value_error(
         ambiguity_set.worst_case_expectation(BATCHED_LOSS)
 
 
-def test_warm_start_cache_is_rebuilt_when_the_batch_shape_changes() -> None:
-    # A cached dual optimum from a differently shaped batch cannot be
-    # expanded onto the new one, so the next solve falls back to cold start.
+def test_a_later_call_on_a_different_batch_shape_is_unaffected() -> None:
+    # Nothing is cached between calls, so evaluating a batch and then a
+    # single row must give the single row exactly what it gets on its own.
     ambiguity_set = _kl(0.2)
 
     ambiguity_set.worst_case_expectation(BATCHED_LOSS)
     result = ambiguity_set.worst_case_expectation(BATCHED_LOSS[0])
 
     assert result.shape == ()
-    assert torch.allclose(
-        result, _kl(0.2).worst_case_expectation(BATCHED_LOSS[0]), atol=1e-6
-    )
+    assert result == _kl(0.2).worst_case_expectation(BATCHED_LOSS[0])
 
 
-def test_total_variation_batched_closed_form_never_synchronizes(
-    host_sync_counter: Callable[[], Any],
+@pytest.mark.parametrize(
+    "make",
+    [_kl, _chi_square, _total_variation],
+    ids=["kl", "chi_square", "total_variation"],
+)
+def test_batched_solver_free_sets_never_synchronize(
+    make: AmbiguitySetFactory, host_sync_counter: Callable[[], Any]
 ) -> None:
-    # The closed form is solver-free, so a batched evaluation must stay a
-    # pure sequence of tensor kernels with no device-to-host read at all.
-    ambiguity_set = _total_variation(torch.tensor([0.1, 0.3, 0.6], dtype=torch.float64))
+    # The tilt bisection and the total-variation closed form are both
+    # solver-free and run a trip count fixed by the dtype, so a batched
+    # evaluation must stay a pure sequence of tensor kernels with no
+    # device-to-host read at all.
+    ambiguity_set = make(torch.tensor([0.1, 0.3, 0.6], dtype=torch.float64))
 
     with host_sync_counter() as syncs:
         ambiguity_set.worst_case_expectation(BATCHED_LOSS)

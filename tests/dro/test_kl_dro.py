@@ -1,65 +1,46 @@
 """Tests for `KLAmbiguitySet`."""
 
-import math
-
 import pytest
 import torch
 
-from optora.core.convergence import ConvergenceStatus
-from optora.core.dro_base import AmbiguitySet
-from optora.core.solver_base import (
-    MinimizationProblem,
-    MinimizationResult,
-    Solver,
-)
+from optora.core.dro_base import AmbiguitySet, TiltedAmbiguitySet
 from optora.dro.kl_dro import KLAmbiguitySet
-from optora.solvers.gradient_descent import GradientDescent
 
-
-class _RecordingSolver(Solver[MinimizationProblem, MinimizationResult]):
-    """Fake dual solver returning a fixed `log(eta)` for deterministic checks."""
-
-    def __init__(self, log_eta: float) -> None:
-        self.log_eta = log_eta
-        self.received_problem: MinimizationProblem | None = None
-
-    def solve(self, problem: MinimizationProblem) -> MinimizationResult:
-        self.received_problem = problem
-        point = torch.tensor(self.log_eta, dtype=torch.float32)
-        return MinimizationResult(
-            point=point,
-            value=problem.objective(point),
-            status=ConvergenceStatus(torch.tensor(True), torch.tensor(0)),
-        )
-
-
-class _CountingSolver(Solver[MinimizationProblem, MinimizationResult]):
-    """Gradient descent recording the iteration count of every dual solve."""
-
-    def __init__(self) -> None:
-        self.solver = GradientDescent(
-            step_size=0.1, max_iter=5000, tol=1e-10, check_interval=1
-        )
-        self.iterations: list[int] = []
-
-    def solve(self, problem: MinimizationProblem) -> MinimizationResult:
-        result = self.solver.solve(problem)
-        self.iterations.append(result.num_iterations)
-        return result
+NOMINAL = torch.tensor([0.1, 0.2, 0.3, 0.4], dtype=torch.float64)
+LOSS = torch.tensor([0.0, 1.0, 2.0, 5.0], dtype=torch.float64)
 
 
 def _grid_search_dual_minimum(
     nominal: torch.Tensor, loss: torch.Tensor, radius: float
 ) -> torch.Tensor:
-    """Independent fine-grid cross-check of the KL-DRO dual formula's minimum."""
+    """Cross-check the primal tilt against a fine grid over the KL-DRO dual.
+
+    The ambiguity set is now solved in the primal, so the convex dual
+    `inf_eta eta * radius + eta * log E[exp(loss / eta)]` is an independent
+    route to the same number: strong duality makes the two equal, and a
+    bug in the tilt path would not move the dual's grid minimum.
+
+    Args:
+        nominal: Reference distribution of shape `(n,)`.
+        loss: Per-scenario losses of shape `(n,)`.
+        radius: Nonnegative KL budget in nats.
+
+    Returns:
+        The smallest dual value over a fine logarithmic grid of `eta`.
+    """
     log_nominal = torch.log(nominal)
-    eta_grid = torch.logspace(-3, 3, steps=20001, dtype=nominal.dtype)
+    eta_grid = torch.logspace(-4, 4, steps=200001, dtype=nominal.dtype)
     log_mgf = torch.logsumexp(
         log_nominal.unsqueeze(0) + loss.unsqueeze(0) / eta_grid.unsqueeze(1),
         dim=-1,
     )
-    dual_values = eta_grid * radius + eta_grid * log_mgf
-    return dual_values.min()
+    return torch.min(eta_grid * radius + eta_grid * log_mgf)
+
+
+def _kl_saturation_radius(nominal: torch.Tensor, loss: torch.Tensor) -> float:
+    """Return `-log P*`, the radius from which the worst case is `max(loss)`."""
+    top_mass = nominal[loss >= loss.max()].sum()
+    return float(-torch.log(top_mass))
 
 
 def test_zero_radius_returns_exact_expectation() -> None:
@@ -72,96 +53,53 @@ def test_zero_radius_returns_exact_expectation() -> None:
     assert torch.allclose(result, torch.sum(nominal * loss), atol=1e-6)
 
 
-def test_worst_case_expectation_uses_custom_dual_solver() -> None:
-    nominal = torch.tensor([0.5, 0.5])
-    loss = torch.tensor([0.0, 2.0])
-    fake_solver = _RecordingSolver(log_eta=1.0)
-    ambiguity_set = KLAmbiguitySet(nominal, radius=0.3, dual_solver=fake_solver)
-
-    result = ambiguity_set.worst_case_expectation(loss)
-
-    # The solver iterates on the loss standardized to unit spread, so its
-    # returned point is read in those units and the dual value is rescaled
-    # by the spread (2.0 here) with no shift (the minimum loss is 0.0).
-    assert fake_solver.received_problem is not None
-    eta = torch.exp(torch.tensor(1.0))
-    standardized = loss / 2.0
-    expected = 2.0 * (
-        eta * 0.3
-        + eta * torch.logsumexp(torch.log(nominal) + standardized / eta, dim=-1)
-    )
-    assert torch.allclose(result, expected, atol=1e-6)
-
-
-def test_positive_radius_requires_an_explicit_dual_solver() -> None:
-    ambiguity_set = KLAmbiguitySet(torch.tensor([0.5, 0.5]), radius=0.1)
-
-    with pytest.raises(RuntimeError, match="dual_solver is required"):
-        ambiguity_set.worst_case_expectation(torch.tensor([0.0, 1.0]))
-
-
-def test_worst_case_expectation_matches_grid_search_over_dual_variable() -> None:
-    nominal = torch.tensor([0.1, 0.2, 0.3, 0.4], dtype=torch.float64)
-    loss = torch.tensor([0.0, 1.0, 2.0, 5.0], dtype=torch.float64)
+def test_worst_case_expectation_matches_grid_search_over_the_dual() -> None:
     radius = 0.2
-    solver = GradientDescent(step_size=0.1, max_iter=20000, tol=1e-10)
-    ambiguity_set = KLAmbiguitySet(nominal, radius=radius, dual_solver=solver)
+    ambiguity_set = KLAmbiguitySet(NOMINAL, radius=radius)
 
-    result = ambiguity_set.worst_case_expectation(loss)
+    result = ambiguity_set.worst_case_expectation(LOSS)
 
-    reference = _grid_search_dual_minimum(nominal, loss, radius)
-    assert torch.allclose(result, reference, atol=1e-3)
+    assert torch.allclose(
+        result, _grid_search_dual_minimum(NOMINAL, LOSS, radius), atol=1e-6
+    )
 
 
 def test_worst_case_expectation_reaches_max_loss_for_large_radius() -> None:
-    nominal = torch.tensor([0.1, 0.2, 0.3, 0.4], dtype=torch.float64)
-    loss = torch.tensor([0.0, 1.0, 2.0, 5.0], dtype=torch.float64)
-    solver = GradientDescent(step_size=0.1, max_iter=20000, tol=1e-10)
-    ambiguity_set = KLAmbiguitySet(nominal, radius=2.0, dual_solver=solver)
+    ambiguity_set = KLAmbiguitySet(NOMINAL, radius=2.0)
 
-    result = ambiguity_set.worst_case_expectation(loss)
+    result = ambiguity_set.worst_case_expectation(LOSS)
 
-    assert torch.allclose(result, torch.tensor(5.0, dtype=torch.float64), atol=1e-2)
+    assert result == LOSS.max()
 
 
 def test_worst_case_expectation_is_monotonic_in_radius() -> None:
     nominal = torch.tensor([0.25, 0.25, 0.25, 0.25], dtype=torch.float64)
     loss = torch.tensor([0.0, 1.0, 2.0, 3.0], dtype=torch.float64)
+    radii = torch.logspace(-6, 1, steps=200, dtype=torch.float64)
 
-    small = KLAmbiguitySet(
-        nominal,
-        radius=0.05,
-        dual_solver=GradientDescent(step_size=0.1, max_iter=5000, tol=1e-9),
-    ).worst_case_expectation(loss)
-    large = KLAmbiguitySet(
-        nominal,
-        radius=0.5,
-        dual_solver=GradientDescent(step_size=0.1, max_iter=5000, tol=1e-9),
-    ).worst_case_expectation(loss)
+    values = KLAmbiguitySet(nominal, radius=radii).worst_case_expectation(loss)
 
-    assert large >= small - 1e-6
+    assert torch.all(torch.diff(values) >= 0.0)
 
 
 def test_worst_case_expectation_is_at_least_nominal_expectation() -> None:
     nominal = torch.tensor([0.3, 0.3, 0.4], dtype=torch.float64)
     loss = torch.tensor([1.0, 2.0, 3.0], dtype=torch.float64)
-    solver = GradientDescent(step_size=0.1, max_iter=5000, tol=1e-9)
-    ambiguity_set = KLAmbiguitySet(nominal, radius=0.1, dual_solver=solver)
+    ambiguity_set = KLAmbiguitySet(nominal, radius=0.1)
 
     result = ambiguity_set.worst_case_expectation(loss)
 
-    assert result >= torch.sum(nominal * loss) - 1e-4
+    assert result >= torch.sum(nominal * loss)
 
 
 def test_worst_case_expectation_does_not_exceed_max_loss() -> None:
     nominal = torch.tensor([0.3, 0.3, 0.4], dtype=torch.float64)
     loss = torch.tensor([1.0, 2.0, 3.0], dtype=torch.float64)
-    solver = GradientDescent(step_size=0.1, max_iter=5000, tol=1e-9)
-    ambiguity_set = KLAmbiguitySet(nominal, radius=0.5, dual_solver=solver)
+    ambiguity_set = KLAmbiguitySet(nominal, radius=0.5)
 
     result = ambiguity_set.worst_case_expectation(loss)
 
-    assert result <= loss.max() + 1e-2
+    assert result <= loss.max()
 
 
 def test_mismatched_loss_shape_raises_value_error() -> None:
@@ -200,10 +138,10 @@ def test_contains_uses_kl_divergence_and_radius() -> None:
 def test_is_an_ambiguity_set_instance() -> None:
     nominal = torch.tensor([0.5, 0.5])
 
-    assert isinstance(KLAmbiguitySet(nominal, radius=0.1), AmbiguitySet)
+    ambiguity_set = KLAmbiguitySet(nominal, radius=0.1)
 
-
-# --- Cached constants and warm starts ---------------------------------------
+    assert isinstance(ambiguity_set, AmbiguitySet)
+    assert isinstance(ambiguity_set, TiltedAmbiguitySet)
 
 
 def test_log_nominal_is_cached_as_a_clamped_non_persistent_buffer() -> None:
@@ -225,84 +163,81 @@ def test_log_nominal_buffer_moves_with_the_module() -> None:
     assert ambiguity_set.log_nominal.dtype == torch.float64
 
 
-def test_initial_dual_point_is_given_in_raw_loss_units() -> None:
-    # `initial_log_eta` is a log of a quantity with the units of `loss`. The
-    # solver iterates on the loss standardized to unit spread (2.0 here), so
-    # it must receive log(eta / 2.0), not the configured value.
-    nominal = torch.tensor([0.5, 0.5], dtype=torch.float64)
-    fake_solver = _RecordingSolver(log_eta=1.0)
-    ambiguity_set = KLAmbiguitySet(
-        nominal, radius=0.3, dual_solver=fake_solver, initial_log_eta=-0.75
+# --- The tilt path -----------------------------------------------------------
+
+
+def test_repeated_calls_are_deterministic() -> None:
+    # The bisection carries no state between calls, so there is no warm
+    # start that could make a repeat solve differ from the first one.
+    ambiguity_set = KLAmbiguitySet(NOMINAL, radius=0.2)
+
+    first = ambiguity_set.worst_case_expectation(LOSS)
+    second = ambiguity_set.worst_case_expectation(LOSS)
+
+    assert first == second
+
+
+def test_the_tilt_is_an_exponential_reweighting_of_the_nominal() -> None:
+    # q ∝ nominal * exp(beta * loss) means the log-ratio log(q / nominal) is
+    # affine in the loss, which pins the whole shape of the maximizer.
+    radius = 0.4
+    ambiguity_set = KLAmbiguitySet(NOMINAL, radius=radius)
+    differentiable = LOSS.clone().requires_grad_(True)
+
+    ambiguity_set.worst_case_expectation(differentiable).backward()
+
+    assert differentiable.grad is not None
+    log_ratio = torch.log(differentiable.grad / NOMINAL)
+    slopes = torch.diff(log_ratio) / torch.diff(LOSS)
+    assert torch.allclose(slopes, slopes[0].expand_as(slopes), atol=1e-9)
+
+
+@pytest.mark.parametrize("fraction", [1e-12, 1e-6, 0.01, 0.5, 0.9, 0.999])
+def test_the_returned_distribution_stays_inside_the_radius(fraction: float) -> None:
+    # Bisection keeps the feasible endpoint, so the reported value is always
+    # a primal objective value at a distribution the set actually contains.
+    # Below saturation the radius constraint is tight, so the slack is
+    # checked relatively: the divergence may sit on the boundary but must
+    # never cross it by more than the rounding of its own evaluation.
+    radius = fraction * _kl_saturation_radius(NOMINAL, LOSS)
+    ambiguity_set = KLAmbiguitySet(NOMINAL, radius=radius)
+    differentiable = LOSS.clone().requires_grad_(True)
+
+    ambiguity_set.worst_case_expectation(differentiable).backward()
+
+    assert differentiable.grad is not None
+    divergence = ambiguity_set.divergence(differentiable.grad, NOMINAL)
+    assert float(divergence) <= radius * (1.0 + 1e-9)
+
+
+@pytest.mark.parametrize("support_size", [1, 2, 100, 1000, 10000])
+def test_a_large_support_stays_finite_and_bounded(support_size: int) -> None:
+    nominal = torch.full((support_size,), 1.0 / support_size, dtype=torch.float64)
+    loss = torch.linspace(0.0, 1.0, support_size, dtype=torch.float64)
+    radii = torch.tensor([0.1, 0.5, 1.0, 2.0], dtype=torch.float64) * max(
+        _kl_saturation_radius(nominal, loss), 1e-12
     )
 
-    ambiguity_set.worst_case_expectation(torch.tensor([0.0, 2.0], dtype=torch.float64))
+    values = KLAmbiguitySet(nominal, radius=radii).worst_case_expectation(loss)
 
-    assert fake_solver.received_problem is not None
-    assert torch.allclose(
-        fake_solver.received_problem.initial_point,
-        torch.tensor(-0.75 - math.log(2.0), dtype=torch.float64),
-    )
+    assert torch.all(torch.isfinite(values))
+    assert torch.all(values <= loss.max())
+    assert torch.all(values >= torch.sum(nominal * loss) - 1e-12)
 
 
-def test_warm_start_survives_a_change_of_loss_scale() -> None:
-    # The cache holds raw-unit dual variables, so a later call on a loss of a
-    # different spread starts from the same physical (eta, lam), re-expressed
-    # in that call's standardized units, rather than from a stale number.
-    nominal = torch.tensor([0.5, 0.5], dtype=torch.float64)
-    fake_solver = _RecordingSolver(log_eta=1.0)
-    ambiguity_set = KLAmbiguitySet(nominal, radius=0.3, dual_solver=fake_solver)
+@pytest.mark.parametrize("radius", [1e-14, 1e-10, 1e-6])
+def test_a_vanishing_radius_matches_the_quadratic_expansion(radius: float) -> None:
+    # Issue #49. For a small radius the worst case expands as
+    # E_p[loss] + sqrt(2 * radius * Var_p(loss)) + O(radius), so the excess
+    # over the nominal expectation must track sqrt(radius) to high relative
+    # accuracy rather than being swamped by a solver's stopping gap.
+    nominal = torch.tensor([0.5, 0.2, 0.2, 0.05, 0.05], dtype=torch.float64)
+    loss = torch.tensor([0.0, 1.0, 2.0, 3.0, 10.0], dtype=torch.float64)
+    nominal_expectation = torch.sum(nominal * loss)
+    variance = torch.sum(nominal * (loss - nominal_expectation) ** 2)
 
-    ambiguity_set.worst_case_expectation(torch.tensor([0.0, 2.0], dtype=torch.float64))
-    ambiguity_set.worst_case_expectation(torch.tensor([0.0, 8.0], dtype=torch.float64))
+    result = KLAmbiguitySet(nominal, radius=radius).worst_case_expectation(loss)
 
-    # First solve ended at log(eta / 2) = 1, i.e. log(eta) = 1 + log 2; on a
-    # spread of 8 that is log(eta / 8) = 1 + log 2 - log 8.
-    assert fake_solver.received_problem is not None
-    assert torch.allclose(
-        fake_solver.received_problem.initial_point,
-        torch.tensor(1.0 + math.log(2.0) - math.log(8.0), dtype=torch.float64),
-    )
-
-
-def test_repeated_calls_warm_start_and_need_fewer_inner_iterations() -> None:
-    # A `MinimaxSolver` outer step perturbs the loss slightly and asks for
-    # the worst case again; the dual optimum barely moves, so restarting
-    # from it must cost less than restarting from `initial_log_eta`.
-    nominal = torch.tensor([0.25, 0.5, 0.25], dtype=torch.float64)
-    base = torch.tensor([0.0, 1.0, 2.0], dtype=torch.float64)
-    losses = [base * (1.0 + 0.05 * step) for step in range(3)]
-
-    warm_solver = _CountingSolver()
-    warm_set = KLAmbiguitySet(nominal, radius=0.2, dual_solver=warm_solver)
-    warm_values = [warm_set.worst_case_expectation(loss) for loss in losses]
-
-    cold_values = []
-    cold_iterations = []
-    for loss in losses:
-        cold_solver = _CountingSolver()
-        cold_set = KLAmbiguitySet(nominal, radius=0.2, dual_solver=cold_solver)
-        cold_values.append(cold_set.worst_case_expectation(loss))
-        cold_iterations.extend(cold_solver.iterations)
-
-    assert warm_solver.iterations[0] == cold_iterations[0]
-    assert all(
-        warm < cold
-        for warm, cold in zip(
-            warm_solver.iterations[1:], cold_iterations[1:], strict=True
-        )
-    )
-    for warm, cold in zip(warm_values, cold_values, strict=True):
-        assert torch.allclose(warm, cold, atol=1e-9)
-
-
-def test_reset_warm_start_restores_the_cold_iteration_count() -> None:
-    nominal = torch.tensor([0.25, 0.5, 0.25], dtype=torch.float64)
-    loss = torch.tensor([0.0, 1.0, 2.0], dtype=torch.float64)
-    solver = _CountingSolver()
-    ambiguity_set = KLAmbiguitySet(nominal, radius=0.2, dual_solver=solver)
-
-    ambiguity_set.worst_case_expectation(loss)
-    ambiguity_set.reset_warm_start()
-    ambiguity_set.worst_case_expectation(loss)
-
-    assert solver.iterations[1] == solver.iterations[0]
+    excess = float(result - nominal_expectation)
+    expected = float(torch.sqrt(2.0 * radius * variance))
+    assert abs(excess - expected) <= 1e-3 * expected

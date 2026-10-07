@@ -110,11 +110,7 @@ def test_root_import_solves_end_to_end() -> None:
 
     nominal = torch.full((4,), 0.25, dtype=torch.float64)
     loss = torch.tensor([1.0, 2.0, 3.0, 10.0], dtype=torch.float64)
-    ambiguity_set = optora.KLAmbiguitySet(
-        nominal=nominal,
-        radius=0.1,
-        dual_solver=optora.GradientDescent(step_size=0.1, max_iter=300, tol=1e-7),
-    )
+    ambiguity_set = optora.KLAmbiguitySet(nominal=nominal, radius=0.1)
 
     worst_case = ambiguity_set.worst_case_expectation(loss)
 
