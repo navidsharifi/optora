@@ -12,6 +12,7 @@
     - [`Divergence`](divergence_base.md#optora.core.divergence_base.Divergence)
 - [`optora.core.dro_base`](dro_base.md)
     - [`AmbiguitySet`](dro_base.md#optora.core.dro_base.AmbiguitySet)
+    - [`TiltedAmbiguitySet`](dro_base.md#optora.core.dro_base.TiltedAmbiguitySet)
     - [`DualAmbiguitySet`](dro_base.md#optora.core.dro_base.DualAmbiguitySet)
 - [`optora.core.solver_base`](solver_base.md)
     - [`Solver`](solver_base.md#optora.core.solver_base.Solver)

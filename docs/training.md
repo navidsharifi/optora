@@ -19,11 +19,7 @@ from optora import GradientDescent, KLAmbiguitySet
 model = nn.Linear(num_features, 1)
 nominal = torch.full((num_scenarios,), 1.0 / num_scenarios)
 
-ambiguity_set = KLAmbiguitySet(
-    nominal=nominal,
-    radius=0.1,
-    dual_solver=GradientDescent(step_size=0.05, max_iter=500, tol=1e-9),
-)
+ambiguity_set = KLAmbiguitySet(nominal=nominal, radius=0.1)
 optimizer = torch.optim.Adam(model.parameters(), lr=1e-2)
 
 for _ in range(num_steps):
@@ -46,23 +42,10 @@ for _ in range(num_steps):
 ## Why this is a correct gradient
 
 The inner supremum is not differentiated through. Each ambiguity set
-reduces its inner problem to a convex dual, solves it in a **detached**
-inner solve, and then re-evaluates the dual objective at that fixed dual
-optimum with the still-attached `loss`. By the envelope theorem the
-derivative of the dual variable with respect to the model parameters
-contributes nothing, because the dual objective is stationary in its own
-dual variable at the optimum:
-
-$$
-\nabla_\theta\, V(\theta)
-= \nabla_\theta\, g\bigl(\eta^\star(\theta), \theta\bigr)
-  + \underbrace{\partial_\eta\, g\bigl(\eta^\star(\theta), \theta\bigr)}_{=\,0}
-    \nabla_\theta\, \eta^\star(\theta)
-= \nabla_\theta\, g\bigl(\eta^\star, \theta\bigr).
-$$
-
-Equivalently, in primal terms the gradient is the worst-case
-distribution's expectation of the per-scenario gradients,
+locates the maximizer $q^\star$ in a **detached** inner solve, then
+reports $\sum_i q^\star_i \ell_i$ with the still-attached `loss`. By
+Danskin's theorem that is already the exact gradient: the optimal value is
+a support function of the loss, so
 
 $$
 \nabla_\theta\, V(\theta)
@@ -71,7 +54,9 @@ $$
 q^\star = \arg\max_{q \in \mathcal{Q}} \; \mathbb{E}_q[\ell(\theta)],
 $$
 
-with $q^\star$ held fixed. This has three practical consequences:
+with $q^\star$ held fixed. The derivative of $q^\star$ with respect to
+$\theta$ contributes nothing, because $q^\star$ already maximizes the
+inner problem. This has three practical consequences:
 
 <div class="grid cards" markdown>
 
@@ -79,23 +64,24 @@ with $q^\star$ held fixed. This has three practical consequences:
 
     ---
 
-    The gradient does not depend on the inner solver's start point,
-    step size, or iteration count, only on where it converged.
+    The gradient depends only on where the inner solve landed, never on
+    the path it took to get there.
 
 -   :material-memory:{ .lg .middle } __Constant memory__
 
     ---
 
-    Inner iterations are never retained for backward, so inner
-    `max_iter` costs time but not autograd memory.
+    Inner iterations are never retained for backward, so the inner solve
+    costs time but not autograd memory.
 
 -   :material-alert-outline:{ .lg .middle } __Accuracy follows the inner solve__
 
     ---
 
-    The identity holds *at* the dual optimum. A loose inner `tol`
-    biases the outer gradient, so tighten it before blaming the
-    optimizer.
+    The identity holds *at* the maximizer. `KLAmbiguitySet` and
+    `ChiSquareAmbiguitySet` bisect to the dtype's precision on every
+    call; a `PhiAmbiguitySet` with a loose inner `tol` biases the outer
+    gradient, so tighten it before blaming the optimizer.
 
 </div>
 
@@ -115,9 +101,8 @@ worst_case_distribution = loss.grad
 
 | Topic | Guidance |
 | --- | --- |
-| Warm starts | Reuse one ambiguity set across steps. Consecutive solves warm-start from the previous dual optimum, so later steps converge in far fewer inner iterations at the same optimum. |
-| Switching problems | Call `reset_warm_start()` before evaluating an unrelated loss, so a stale dual point does not slow the next solve. |
-| Minibatches | Pass a batched loss of shape `(..., n)`; the duals decouple across leading dimensions and are solved jointly in one call. |
+| Inner cost | `KLAmbiguitySet` and `ChiSquareAmbiguitySet` locate the worst case by a bisection whose trip count is fixed by the dtype, so every step costs the same and there is nothing to tune or warm-start. |
+| Minibatches | Pass a batched loss of shape `(..., n)`; the inner problems decouple across leading dimensions and are bisected jointly in one call. |
 | Device and dtype | `ambiguity_set.to(device)` moves `nominal` and every cached buffer; the returned value follows the loss's dtype and device. |
 | Zero radius | `radius=0.0` makes the objective exactly the nominal-weighted empirical risk, which is the natural non-robust baseline to compare against. |
 

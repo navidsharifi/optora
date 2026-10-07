@@ -45,23 +45,17 @@ only sees probabilities. Wasserstein is not.
 
 Every point on every curve is a nested solve — an outer
 [`MinimaxSolver`](../api/dro/minimax_solver.md) whose objective internally
-runs an ambiguity set's own dual solve on each iteration. Iteration counts
-multiply, so the budgets at the top of the script are cut down hard from the
-defaults, and each set gets its own step size.
-
-!!! warning "The $\chi^2$ step size is not arbitrary"
-
-    Its conjugate $\phi^\ast(s) = s + s^2/4$ grows faster than KL's
-    `logsumexp`, and an aggressive step size makes the joint dual solve
-    diverge to `NaN` silently rather than loudly. KL tolerates $0.1$ here;
-    $\chi^2$ gets $0.05$ for a reason.
+runs an ambiguity set's own inner solve on each iteration. Iteration counts
+multiply, so the outer budget at the top of the script is cut down hard
+from the defaults. The inner solves need no budget at all: all four sets
+here are solver-free, so each costs a fixed, identical number of kernels.
 
 Also worth knowing, since it looks like it should not work: the outer
 gradient flows correctly through `worst_case_expectation` even though the
-inner dual variable is solved for under `detach`. That is the envelope
-theorem — at the inner optimum the gradient contribution through the dual
-variable vanishes, so only the final re-evaluation needs to stay attached to
-the graph.
+worst-case distribution is found under `detach`. That is Danskin's theorem
+— the optimal value is a support function of the loss, so its gradient *is*
+that distribution, and only the final re-weighting needs to stay attached
+to the graph.
 
 ## Source
 

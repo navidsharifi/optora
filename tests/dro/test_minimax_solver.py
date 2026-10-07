@@ -109,18 +109,11 @@ def test_mismatched_loss_fn_shape_raises_value_error() -> None:
 def test_worst_case_expectation_gradient_matches_finite_differences() -> None:
     # `MinimaxSolver` relies on `worst_case_expectation` staying differentiable
     # with respect to a decision variable the loss depends on, even though the
-    # ambiguity set solves its own dual variable through a detached inner
-    # `dual_solver`. Verify this envelope-theorem property directly.
+    # ambiguity set locates its own worst-case distribution through a
+    # detached inner bisection. Verify this envelope-theorem property directly.
     nominal = torch.tensor([0.5, 0.5], dtype=torch.float64)
     targets = torch.tensor([1.0, 5.0], dtype=torch.float64)
-    # The dual is solved on the loss standardized to unit spread, so its
-    # curvature does not grow with the loss (spread 24 at x = 0): a step of
-    # order one converges, where 0.1 would need roughly 24 times the budget.
-    ambiguity_set = KLAmbiguitySet(
-        nominal,
-        radius=0.2,
-        dual_solver=GradientDescent(step_size=1.0, max_iter=2000, tol=1e-12),
-    )
+    ambiguity_set = KLAmbiguitySet(nominal, radius=0.2)
 
     def objective(x: torch.Tensor) -> torch.Tensor:
         return ambiguity_set.worst_case_expectation((x - targets) ** 2)
@@ -217,11 +210,7 @@ def test_total_variation_ambiguity_shifts_decision_to_symmetric_midpoint() -> No
 def test_kl_ambiguity_radius_improves_worst_case_over_naive_decision() -> None:
     nominal = torch.tensor([0.3, 0.7], dtype=torch.float64)
     targets = torch.tensor([1.0, 5.0], dtype=torch.float64)
-    ambiguity_set = KLAmbiguitySet(
-        nominal,
-        radius=0.3,
-        dual_solver=GradientDescent(step_size=1.0, max_iter=500, tol=1e-10),
-    )
+    ambiguity_set = KLAmbiguitySet(nominal, radius=0.3)
 
     def loss_fn(x: torch.Tensor) -> torch.Tensor:
         return (x - targets) ** 2
@@ -258,20 +247,16 @@ def test_kl_ambiguity_radius_improves_worst_case_over_naive_decision() -> None:
 # --- Cost of the outer loop --------------------------------------------------
 
 
-def test_every_outer_iteration_costs_exactly_one_inner_dual_solve() -> None:
-    # Regression test: one outer iteration is an entire inner dual solve, so
-    # iterations run after convergence (under the default
+def test_every_outer_iteration_costs_exactly_one_inner_solve() -> None:
+    # Regression test: one outer iteration is an entire inner worst-case
+    # solve, so iterations run after convergence (under the default
     # `check_interval`) and the post-loop final-value evaluation were pure
-    # waste. With `check_interval=1` the inner dual must be solved exactly
+    # waste. With `check_interval=1` the inner set must be evaluated exactly
     # once per reported outer iteration, plus once at the starting point,
     # which every iterative method has to evaluate before it can step.
     nominal = torch.tensor([0.25, 0.5, 0.25], dtype=torch.float64)
     targets = torch.tensor([0.0, 1.0, 2.0], dtype=torch.float64)
-    ambiguity_set = KLAmbiguitySet(
-        nominal,
-        radius=0.2,
-        dual_solver=GradientDescent(step_size=0.3, max_iter=200, tol=1e-10),
-    )
+    ambiguity_set = KLAmbiguitySet(nominal, radius=0.2)
 
     def loss_fn(x: torch.Tensor) -> torch.Tensor:
         return (x - targets) ** 2
@@ -303,18 +288,13 @@ def test_nested_solve_does_not_synchronize_for_inner_diagnostics(
     # Regression test: every inner dual solve used to copy its convergence
     # flag and iteration count back to the host, two synchronizations per
     # outer iteration on the one code path whose stated purpose is to avoid
-    # per-iteration synchronization. Inner diagnostics nobody reads now stay
-    # on the device, so a nested solve whose loops never reach a checkpoint
-    # synchronizes exactly zero times, whatever the outer iteration count.
+    # per-iteration synchronization. The inner worst case is now a bisection
+    # with no diagnostics at all, so a nested solve whose outer loop never
+    # reaches a checkpoint synchronizes exactly zero times, whatever the
+    # outer iteration count.
     nominal = torch.tensor([0.25, 0.5, 0.25], dtype=torch.float64)
     targets = torch.tensor([0.0, 1.0, 2.0], dtype=torch.float64)
-    ambiguity_set = KLAmbiguitySet(
-        nominal,
-        radius=0.2,
-        dual_solver=GradientDescent(
-            step_size=0.3, max_iter=50, tol=1e-10, check_interval=1000
-        ),
-    )
+    ambiguity_set = KLAmbiguitySet(nominal, radius=0.2)
 
     def loss_fn(x: torch.Tensor) -> torch.Tensor:
         return (x - targets) ** 2
@@ -346,11 +326,7 @@ def test_nested_solve_does_not_synchronize_for_inner_diagnostics(
 def test_generic_wiring_for_chi_square_ambiguity_set() -> None:
     nominal = torch.tensor([0.5, 0.5], dtype=torch.float64)
     targets = torch.tensor([1.0, 5.0], dtype=torch.float64)
-    ambiguity_set = ChiSquareAmbiguitySet(
-        nominal,
-        radius=0.3,
-        dual_solver=GradientDescent(step_size=0.02, max_iter=150, tol=1e-7),
-    )
+    ambiguity_set = ChiSquareAmbiguitySet(nominal, radius=0.3)
 
     def loss_fn(x: torch.Tensor) -> torch.Tensor:
         return (x - targets) ** 2

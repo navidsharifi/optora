@@ -53,7 +53,7 @@ def _nominal(dtype: torch.dtype) -> torch.Tensor:
 
 
 def _kl(dtype: torch.dtype) -> AmbiguitySet:
-    return KLAmbiguitySet(_nominal(dtype), radius=RADIUS, dual_solver=_solver())
+    return KLAmbiguitySet(_nominal(dtype), radius=RADIUS)
 
 
 def _phi(dtype: torch.dtype) -> AmbiguitySet:
@@ -67,7 +67,7 @@ def _phi(dtype: torch.dtype) -> AmbiguitySet:
 
 
 def _chi_square(dtype: torch.dtype) -> AmbiguitySet:
-    return ChiSquareAmbiguitySet(_nominal(dtype), radius=RADIUS, dual_solver=_solver())
+    return ChiSquareAmbiguitySet(_nominal(dtype), radius=RADIUS)
 
 
 def _total_variation(dtype: torch.dtype) -> AmbiguitySet:
@@ -156,7 +156,7 @@ def test_cuda_worst_case_expectation_matches_cpu(
 
 
 @requires_cuda
-def test_warm_start_cache_stays_on_the_solving_device(
+def test_tensor_state_stays_on_the_solving_device(
     factory: AmbiguitySetFactory, dtype: torch.dtype
 ) -> None:
     device = torch.device("cuda")

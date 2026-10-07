@@ -25,10 +25,11 @@ pretty picture:
 
 The script asserts the first one to machine precision (Optora special-cases
 $\rho = 0$ and returns the nominal expectation exactly, rather than sending
-the dual variable $\eta \to \infty$ and hoping). The second is only
-*approached*: the dual optimum runs off to the boundary, so a
-finite-iteration solve gets close and stops. That asymmetry is expected, and
-seeing the curve flatten out just below the red line is the point.
+the tilt off to infinity and hoping). The second is reached *exactly*: once
+$\rho$ passes $-\log P^\star$, the nominal mass on the highest-loss
+scenarios, the whole tilt path is feasible and the maximizer is the point
+mass itself. Seeing the curve meet the red line rather than creep toward it
+is the point.
 
 In between, the curve should be nondecreasing — a bigger ball cannot contain
 a less adversarial distribution — and the script checks that too, on the
@@ -48,10 +49,11 @@ Three things to look at:
 
 !!! tip "Everything is `float64` here"
 
-    The tolerances above are only defensible in double precision. In
-    `float32` the gradient norms in the dual solve plateau around
-    $10^{-6}$, which is enough to make a tight convergence check fail even
-    though the iterate is sitting on the answer.
+    The tolerances above are only defensible in double precision. The tilt
+    is bisected to the dtype's precision, which is $2^{-52}$ in `float64`
+    and only $2^{-23}$ in `float32`: enough to make a tight check on the
+    flat part of the curve fail even though the answer is essentially
+    right.
 
 ## Source
 

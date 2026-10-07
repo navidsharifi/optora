@@ -2,38 +2,50 @@
 
 import torch
 
-from optora.core.dro_base import DualAmbiguitySet
-from optora.core.solver_base import (
-    MinimizationProblem,
-    MinimizationResult,
-    Solver,
-)
+from optora.core.dro_base import TiltedAmbiguitySet
 from optora.divergences.kl import KLDivergence
 
 
-class KLAmbiguitySet(DualAmbiguitySet):
+class KLAmbiguitySet(TiltedAmbiguitySet):
     r"""KL-divergence-constrained ambiguity set for KL-DRO.
 
     Bounds every candidate distribution `q` by
     $D_{\mathrm{KL}}(q \,\|\, \mathrm{nominal}) \le \mathrm{radius}$. The
-    worst-case expected loss over this set admits a convex dual (Hu and Hong
-    2013; Ben-Tal et al. 2013):
+    KKT conditions of
 
     $$
     \sup_{q:\, D_{\mathrm{KL}}(q \,\|\, \mathrm{nominal}) \,\le\, \mathrm{radius}}
         \mathbb{E}_q[\mathrm{loss}]
-    = \inf_{\eta > 0} \; \eta \cdot \mathrm{radius}
-        + \eta \log
-        \mathbb{E}_{\mathrm{nominal}}\!\left[\exp\!\left(\frac{\mathrm{loss}}{\eta}\right)\right]
     $$
 
-    reducing the worst-case expectation to a one-dimensional convex
-    minimization over the dual variable $\eta$. `dual_solver` solves this
-    minimization over $\log(\eta)$ rather than $\eta$ directly, so the
-    unconstrained `GradientDescent` solver keeps $\eta$ strictly positive
-    throughout the iteration. This formulation needs no optimal-transport
-    machinery, making it the simplest DRO formulation to build (see
-    `progress/architecture.md`).
+    make the maximizer an exponential (Gibbs) tilt of the nominal
+    (Hu and Hong 2013; Ben-Tal et al. 2013),
+
+    $$
+    q_\beta \propto \mathrm{nominal} \cdot e^{\beta\,\mathrm{loss}},
+        \qquad \beta = 1/\eta \ge 0,
+    $$
+
+    whose divergence $D_{\mathrm{KL}}(q_\beta \,\|\, \mathrm{nominal})$
+    rises monotonically in $\beta$ from $0$ to $-\log P^\star$, the
+    divergence of the nominal restricted to the highest-loss scenarios,
+    where $P^\star$ is the nominal mass those scenarios carry. The radius
+    constraint is therefore tight at the optimum below that threshold and
+    slack at or above it, and either way the tilt is pinned by one monotone
+    scalar root solve rather than by an unconstrained minimization of the
+    convex dual
+
+    $$
+    \inf_{\eta > 0} \; \eta \cdot \mathrm{radius}
+        + \eta \log \mathbb{E}_{\mathrm{nominal}}\!\left[
+            e^{\mathrm{loss}/\eta}\right].
+    $$
+
+    See `optora.core.dro_base.TiltedAmbiguitySet` for the bracketed
+    bisection that runs the root solve, and `docs/formulations.md` for the
+    equivalence between the two. This formulation needs no
+    optimal-transport machinery, making it the simplest DRO formulation to
+    build (see `progress/architecture.md`).
 
     Attributes:
         nominal: Reference distribution the ambiguity set is centered on.
@@ -43,15 +55,10 @@ class KLAmbiguitySet(DualAmbiguitySet):
             inside the ambiguity set from `nominal`, either a float or a
             tensor of radii evaluated as one batch.
         eps: Small positive constant used to clamp `nominal` away from zero
-            before taking the logarithm inside the dual objective.
-        dual_solver: Solver minimizing the dual objective over `log(eta)`.
-        initial_dual_point: Value of `log(eta)` the first dual solve starts
-            from, in the units of the raw loss (`eta` has the units of
-            `loss`); later solves warm-start from the previous optimum (see
-            `optora.core.dro_base.DualAmbiguitySet`).
+            before taking the logarithm inside the tilt.
         log_nominal: Elementwise logarithm of the clamped `nominal`, a
-            constant of the dual objective cached once rather than
-            recomputed on every call.
+            constant of the tilt cached once rather than recomputed on
+            every call.
     """
 
     log_nominal: torch.Tensor
@@ -61,8 +68,6 @@ class KLAmbiguitySet(DualAmbiguitySet):
         nominal: torch.Tensor,
         radius: float | torch.Tensor,
         eps: float = 1e-12,
-        dual_solver: Solver[MinimizationProblem, MinimizationResult] | None = None,
-        initial_log_eta: float | None = None,
         validate: bool = False,
     ) -> None:
         """Initialize the KL-DRO ambiguity set.
@@ -77,17 +82,8 @@ class KLAmbiguitySet(DualAmbiguitySet):
                 `worst_case_expectation`'s `loss`, evaluating a sweep of
                 radii in one solve.
             eps: Small positive constant used to clamp `nominal` away from
-                zero before taking the logarithm inside the dual objective,
-                and passed through to the underlying `KLDivergence`.
-            dual_solver: Solver minimizing the dual objective over
-                `log(eta)`. Required when evaluating a positive-radius set.
-            initial_log_eta: Value of `log(eta)` the first dual solve starts
-                from, in the units of the raw loss (`eta` has the units of
-                `loss`). The default `None` starts at `eta` equal to the
-                loss spread, which is the same point whatever the scale of
-                the loss; pass a value only to start from a known optimum.
-                Later calls warm-start from the previous solve's optimum
-                unless `reset_warm_start()` is called.
+                zero before taking the logarithm inside the tilt, and
+                passed through to the underlying `KLDivergence`.
             validate: Whether to check that `nominal` is nonnegative and
                 sums to one. The check synchronizes with the device, so it
                 is opt-in and off by default.
@@ -101,13 +97,6 @@ class KLAmbiguitySet(DualAmbiguitySet):
             nominal=nominal,
             divergence=KLDivergence(eps=eps),
             radius=radius,
-            dual_solver=dual_solver,
-            initial_dual_point=torch.tensor(
-                0.0 if initial_log_eta is None else initial_log_eta,
-                dtype=nominal.dtype,
-                device=nominal.device,
-            ),
-            initial_in_raw_units=initial_log_eta is not None,
             validate=validate,
         )
         self.eps = eps
@@ -117,53 +106,42 @@ class KLAmbiguitySet(DualAmbiguitySet):
             persistent=False,
         )
 
-    def _dual_objective(
-        self,
-        point: torch.Tensor,
-        loss: torch.Tensor,
-        radius: float | torch.Tensor,
-    ) -> torch.Tensor:
-        r"""Evaluate the KL dual at `point = log(eta)` on the standardized loss.
+    def _tilted_distribution(
+        self, gap: torch.Tensor, tilt: torch.Tensor
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        r"""Evaluate the Gibbs tilt and its KL divergence from `nominal`.
+
+        The tilt is applied to the gap below the maximum loss rather than
+        to the loss itself. The two differ only by the constant factor
+        $e^{\beta \max \ell}$, which the normalization cancels, but the gap
+        form keeps the largest exponent at exactly zero, so no intermediate
+        overflows however extreme $\beta$ becomes.
+
+        The divergence is reported as $-\log
+        \mathbb{E}_{\mathrm{nominal}}[e^{-\beta(\mathrm{gap} -
+        \mathbb{E}_{q_\beta}[\mathrm{gap}])}]$, algebraically the same as
+        $-\beta\,\mathbb{E}_{q_\beta}[\mathrm{gap}] - \log Z$ but with the
+        exponent centered on the tilted mean first. The expectation then
+        sits within $O(\beta^2)$ of one and is read through `expm1` and
+        `log1p`, so a vanishing radius is resolved to full precision
+        instead of being lost to cancellation between two nearly equal
+        $O(\beta)$ terms.
 
         Args:
-            point: `log(eta)` of shape `batch_shape`.
-            loss: Standardized loss of shape `(..., n)`.
-            radius: KL radius, broadcastable against `batch_shape`.
+            gap: Standardized shortfall below the maximum loss, of shape
+                `(..., n)`.
+            tilt: Path parameter in $[0, 1)$ of shape `batch_shape`.
 
         Returns:
-            $\eta \cdot \mathrm{radius} + \eta \log
-            \mathbb{E}_{\mathrm{nominal}}[e^{\mathrm{loss}/\eta}]$ per
-            batch element, with the expectation taken through a stable
-            `logsumexp`.
+            The tilted distribution and its KL divergence from `nominal`.
         """
-        eta = torch.exp(point)
-        log_mgf = torch.logsumexp(self.log_nominal + loss / eta.unsqueeze(-1), dim=-1)
-        return eta * radius + eta * log_mgf
-
-    def _to_standard_units(
-        self, point: torch.Tensor, shift: torch.Tensor, scale: torch.Tensor
-    ) -> torch.Tensor:
-        """Map `log(eta)` to `log(eta / scale)`; `eta` has the units of `loss`."""
-        return point - torch.log(scale)
-
-    def _from_standard_units(
-        self, point: torch.Tensor, shift: torch.Tensor, scale: torch.Tensor
-    ) -> torch.Tensor:
-        """Map `log(eta / scale)` back to `log(eta)`."""
-        return point + torch.log(scale)
-
-    def _saturation_radius(self, top_mass: torch.Tensor) -> torch.Tensor:
-        r"""Return $-\log P^\star$, the KL divergence of the top-loss scenarios.
-
-        The distribution $\mathrm{nominal}$ restricted to the highest-loss
-        scenarios and renormalized sits at KL divergence $-\log P^\star$
-        from the nominal, where $P^\star$ is the nominal mass they carry.
-
-        Args:
-            top_mass: Nominal mass $P^\star$ carried by the highest-loss
-                scenarios.
-
-        Returns:
-            $-\log P^\star$, which is `inf` when that mass is zero.
-        """
-        return -torch.log(top_mass)
+        rate = self._tilt_rate(tilt)
+        log_weight = self.log_nominal - rate * gap
+        log_normalizer = torch.logsumexp(log_weight, dim=-1, keepdim=True)
+        distribution = torch.exp(log_weight - log_normalizer)
+        mean_gap = torch.sum(distribution * gap, dim=-1, keepdim=True)
+        centered = -rate * (gap - mean_gap)
+        divergence = -torch.log1p(
+            torch.sum(self.nominal * torch.expm1(centered), dim=-1)
+        )
+        return distribution, torch.clamp(divergence, min=0.0)

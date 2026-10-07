@@ -68,49 +68,71 @@ $$
     + \eta \log \mathbb{E}_{\mathrm{nominal}}\!\left[\exp\!\left(\frac{\mathrm{loss}}{\eta}\right)\right]
 $$
 
-Solved over `log(eta)` rather than `eta` itself, so the unconstrained
-`GradientDescent` solver can't wander into `eta <= 0`. `radius == 0`
-returns `E_nominal[loss]` exactly, skipping the numerical solve.
+Optora evaluates it from the primal side instead. The same KKT conditions
+make the maximizer an exponential (Gibbs) tilt of the nominal,
 
-### Dual-solved sets: loss scale and saturation
+$$
+q_\beta \propto \mathrm{nominal} \cdot e^{\beta\,\mathrm{loss}},
+    \qquad \beta = 1/\eta \ge 0,
+$$
 
-`KLAmbiguitySet` and `ChiSquareAmbiguitySet` (and any other
-`PhiAmbiguitySet`) share two guarantees, implemented once in
-`optora.core.dro_base.DualAmbiguitySet`.
+so the whole problem reduces to choosing one scalar. `radius == 0` returns
+`E_nominal[loss]` exactly, skipping the solve entirely.
 
-**The dual is solved on a standardized loss.** The set of candidate
+### Tilt-solved sets: a bracketed scalar, not an unconstrained dual
+
+`KLAmbiguitySet` and `ChiSquareAmbiguitySet` share one mechanism,
+implemented once in `optora.core.dro_base.TiltedAmbiguitySet`. Both have a
+maximizer of known shape, a one-parameter *tilt* of the nominal starting at
+the nominal itself, along which the divergence
+$D(q_t \,\|\, \mathrm{nominal})$ increases monotonically up to the
+divergence of the distribution concentrated on the highest-loss scenarios.
+Picking the tilt is therefore a monotone scalar root solve, and optora runs
+it as a bisection.
+
+**The bracket is valid by construction.** The tilt is parameterized by
+$t \in [0,1)$, mapped to the unbounded natural parameter by
+$t \mapsto t/(1-t)$. $[0, 1]$ then brackets the answer for every loss and
+every radius, so the solve cannot stall the way minimizing the dual
+directly can: that minimizer runs off to $\eta \to \infty$ as the radius
+vanishes, and ceases to exist at all once the radius saturates the set.
+
+**The result is feasible, so it is a genuine bound.** Each halving keeps
+the endpoint that satisfied the radius constraint, so the reported value is
+$\mathbb{E}_{q^\star}[\mathrm{loss}]$ at a distribution the set really
+contains. It can never exceed $\max\ell$, and it is never `nan`, whatever
+the support size or loss scale.
+
+**The cost is fixed and synchronization-free.** The number of halvings is
+read off the dtype (52 in float64, 23 in float32), so a solve is a fixed
+sequence of device-side kernels with no convergence flag to read back and
+no tuning knobs. A batch of losses or a sweep of radii costs the same as a
+single element.
+
+**Saturation needs no special case.** Once the radius reaches
+$-\log P^\star$ (KL) or $1/P^\star - 1$ (chi-square), where $P^\star$ is
+the nominal mass on the highest-loss scenarios, every tilt is feasible, the
+bisection drives $t$ to the top of the bracket, and $q_t$ *is* the nominal
+restricted to those scenarios and renormalized. The value is then exactly
+$\max\ell$ and the gradient is that distribution.
+
+**The tilt is computed on a standardized loss.** The set of candidate
 distributions does not depend on `loss`, so for $a > 0$
 
 $$
 \sup_q \mathbb{E}_q[a\,\ell + b] = a \sup_q \mathbb{E}_q[\ell] + b .
 $$
 
-The dual's curvature grows with the squared loss spread, so a step size
-tuned on an order-one loss diverges on a wide one (`eta` overflows and
-the objective becomes `nan`). The dual is therefore minimized on
-$(\ell - \min\ell)/(\max\ell - \min\ell)$ with a detached shift and scale.
-For any fixed constants this is the same function of `loss`, so values
-and gradients are unchanged; only the conditioning is.
+The maximizer of an affinely rescaled loss is therefore the same
+distribution, and optora finds it on
+$(\max\ell - \ell)/(\max\ell - \min\ell)$ with a detached shift and scale.
+Values and gradients are unchanged; only the conditioning is.
 
-!!! note "Dual-solver step sizes are relative to a unit-spread loss"
-    Because the solver iterates on the standardized loss, a step size
-    means the same thing at every loss scale: order one (up to about 2)
-    for KL, and at most about 0.3 for the stiffer chi-square dual. A step
-    tuned on a raw loss with spread $S$ should be multiplied by roughly
-    $S$. `initial_log_eta` and `initial_lam` are still read in the units of
-    the raw loss when given; left at `None` they start at `eta` equal to the
-    loss spread (and `lam` equal to the minimum loss), the same standardized
-    point at every scale.
-
-**Saturation returns `max(loss)` exactly.** Once the radius reaches the
-divergence of the distribution concentrated on the highest-loss scenarios,
-that distribution lies in the set and the worst case is $\max\ell$. With
-$P^\star$ the nominal mass on those scenarios, the thresholds are
-$-\log P^\star$ for KL and $1/P^\star - 1$ for chi-square. Past them the
-dual has no minimizer (its infimum is approached only as `eta` goes to
-zero), so no solver converges; the sets return $\max\ell$ directly, using
-device reductions only. The gradient there is the nominal restricted to
-those scenarios and renormalized, which lies inside the set.
+!!! note "Gradients come from Danskin's theorem, not from the bisection"
+    $\sup_{q \in \mathcal{U}} \mathbb{E}_q[\ell]$ is a support function of
+    $\ell$, so its gradient is exactly the maximizer $q^\star$. Optora
+    reports the value as `sum(q*.detach() * loss)`: the backward pass is
+    exact, and the bisection never enters the autograd graph.
 
 ### `PhiAmbiguitySet`, `ChiSquareAmbiguitySet`, `TotalVariationAmbiguitySet`
 
@@ -126,9 +148,31 @@ $$
     + \eta \, \mathbb{E}_{\mathrm{nominal}}\!\left[\phi^*\!\left(\frac{\mathrm{loss} - \lambda}{\eta}\right)\right]
 $$
 
-where `phi*` is `phi`'s convex conjugate. `ChiSquareAmbiguitySet` plugs in
-the closed-form chi-square conjugate, smooth everywhere. Total
-variation's conjugate is *not* smooth everywhere (it has a hard
+where `phi*` is `phi`'s convex conjugate. This is the fallback for a
+generator optora does not recognize: it needs an injected `dual_solver`,
+and it inherits both failure modes the bracketed bisection avoids, so keep
+its radius well inside the saturation threshold.
+
+!!! warning "`PhiAmbiguitySet` step sizes are relative to a unit-spread loss"
+    The dual is minimized on the standardized loss, so a step size means
+    the same thing at every loss scale: order one (up to about 2) for a
+    KL-like generator, and far less for a stiffer one. A step tuned on a
+    raw loss with spread $S$ should be multiplied by roughly $S$.
+
+`ChiSquareAmbiguitySet` does not use that dual. Its KKT conditions give a
+*linear* tilt truncated at a cut level $c$,
+
+$$
+q^\star \propto \mathrm{nominal} \cdot (\mathrm{loss} - c)_+ ,
+$$
+
+which the bracketed bisection above pins exactly. Away from the truncated
+regime this reproduces the familiar closed form
+$\mathbb{E}_{\mathrm{nominal}}[\ell] + \sqrt{\mathrm{radius} \cdot
+\mathrm{Var}_{\mathrm{nominal}}(\ell)}$, and unlike that formula it stays
+correct once scenarios start being truncated to $q_i = 0$.
+
+Total variation's conjugate is *not* smooth everywhere (it has a hard
 boundary), so `TotalVariationAmbiguitySet` skips the dual entirely and
 computes the worst case directly from a closed-form combinatorial
 solution: sort the scenarios by loss and shift probability mass, from

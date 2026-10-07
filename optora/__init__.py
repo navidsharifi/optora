@@ -16,6 +16,7 @@ from optora.core import (
     MinimizationProblem,
     MinimizationResult,
     Solver,
+    TiltedAmbiguitySet,
 )
 from optora.divergences import (
     ChiSquareDivergence,
@@ -62,6 +63,7 @@ __all__ = [
     "SaddlePointSolver",
     "SinkhornDivergence",
     "Solver",
+    "TiltedAmbiguitySet",
     "TotalVariationAmbiguitySet",
     "TotalVariationDivergence",
     "WassersteinAmbiguitySet",

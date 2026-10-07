@@ -59,19 +59,12 @@ import torch
 from _plotting import save_figure
 
 from optora.dro import ChiSquareAmbiguitySet
-from optora.solvers import GradientDescent
 
 CONFIDENCE_LEVELS = (0.50, 0.80, 0.90, 0.95, 0.99)
 SAMPLE_SIZES = (10, 40, 160)
 NUM_REPLICATIONS = 200
 SEED = 20260915
 POPULATION_MEAN = 1.0
-POPULATION_VARIANCE = 1.0
-# The whole radius-by-replication grid is one joint solve that starts from a
-# single shared point, so it runs until the *slowest* element is stationary;
-# a larger budget than a lone solve needs is cheap per iteration and keeps
-# every element at solver precision.
-DUAL_SOLVER = GradientDescent(step_size=0.2, max_iter=2000, tol=1e-7)
 
 
 def chi_square_quantile(confidence: float) -> float:
@@ -132,14 +125,10 @@ def build_ambiguity_sets(
 ) -> tuple[ChiSquareAmbiguitySet, ChiSquareAmbiguitySet]:
     """Build the two ambiguity sets that produce a two-sided mean interval.
 
-    Both sets are identical as sets; they differ only in where their dual
-    solve starts, because the lower bound is computed on the negated loss
-    and its multiplier `lam` therefore sits near `-mean` rather than
-    `mean`. The starting point is the asymptotic interior optimum implied
-    by the *population* moments, which is a good guess without reading
-    anything off the sample. A dual solve starts from one point shared by
-    the whole batch, so a sweep of radii starts from the interior optimum
-    at their geometric mean.
+    The two are the same set: one is applied to the loss and the other to
+    its negation, which is what turns a one-sided worst case into a
+    two-sided interval. They are built separately only so the caller can
+    name them.
 
     Args:
         nominal: Uniform empirical distribution over the support.
@@ -149,22 +138,8 @@ def build_ambiguity_sets(
     Returns:
         The `(lower, upper)` ambiguity sets.
     """
-    typical_radius = float(torch.exp(torch.mean(torch.log(radius))))
-    initial_log_eta = 0.5 * math.log(POPULATION_VARIANCE / (4.0 * typical_radius))
-    lower = ChiSquareAmbiguitySet(
-        nominal=nominal,
-        radius=radius,
-        dual_solver=DUAL_SOLVER,
-        initial_log_eta=initial_log_eta,
-        initial_lam=-POPULATION_MEAN,
-    )
-    upper = ChiSquareAmbiguitySet(
-        nominal=nominal,
-        radius=radius,
-        dual_solver=DUAL_SOLVER,
-        initial_log_eta=initial_log_eta,
-        initial_lam=POPULATION_MEAN,
-    )
+    lower = ChiSquareAmbiguitySet(nominal=nominal, radius=radius)
+    upper = ChiSquareAmbiguitySet(nominal=nominal, radius=radius)
     return lower, upper
 
 

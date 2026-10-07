@@ -14,15 +14,20 @@ The sets fall into two groups:
   combinatorial solutions (a sorted cumulative sweep, a bisection on a
   monotone piecewise-constant derivative), and match their oracles to
   machine precision at every radius from zero to far past saturation.
-- `KLAmbiguitySet` and `ChiSquareAmbiguitySet` minimize a smooth dual with
-  an injected first-order solver. Writing $P^\star$ for the nominal mass on
-  the highest-loss scenarios, that dual has a finite minimizer only below
-  the saturation radius $-\log P^\star$ (KL) or $1/P^\star - 1$
-  (chi-square); from there the worst case is exactly `max(loss)`, which the
-  sets return directly. They match their oracles to machine precision from
-  a small radius up through saturation and beyond, on a loss of any scale.
-  The one remaining gap, a vanishing radius, is covered by a strict `xfail`
-  that will fail as soon as it is closed.
+- `KLAmbiguitySet` and `ChiSquareAmbiguitySet` pin a monotone tilt of the
+  nominal by bisection. Writing $P^\star$ for the nominal mass on the
+  highest-loss scenarios, the radius constraint is tight below the
+  saturation radius $-\log P^\star$ (KL) or $1/P^\star - 1$ (chi-square);
+  from there the whole tilt path is feasible and the worst case is exactly
+  `max(loss)`. They match their oracles to machine precision across that
+  whole range, on a loss of any scale, and down to a vanishing radius.
+
+Because these two sets are now solved in the primal, the oracles share the
+*derivation* of the maximizer with them, where before they shared nothing.
+They remain independent implementations — SciPy `brentq` and an active-set
+scan over NumPy arrays, against a bracketed torch bisection — and the
+per-set modules add fine-grid cross-checks against the convex duals, which
+the primal path never touches.
 """
 
 from dataclasses import dataclass
@@ -34,7 +39,6 @@ import torch
 from optora.dro.kl_dro import KLAmbiguitySet
 from optora.dro.phi_dro import ChiSquareAmbiguitySet, TotalVariationAmbiguitySet
 from optora.dro.wasserstein_dro import WassersteinAmbiguitySet
-from optora.solvers.gradient_descent import GradientDescent
 from tests.dro.oracles import (
     chi_square_worst_case,
     kl_worst_case,
@@ -49,9 +53,11 @@ ORACLE_TOLERANCE = 1e-9
 # saturates at max(loss), and far beyond it.
 EXACT_RADII = (0.0, 1e-8, 1e-3, 0.1, 0.5, 1.0, 2.0, 1e3)
 
-# Fractions of a set's saturation radius, the range over which its dual has
-# a finite minimizer and a first-order solver can find it.
-DUAL_RADIUS_FRACTIONS = (0.01, 0.1, 0.3, 0.6, 0.9, 0.99)
+# Fractions of a set's saturation radius, the range over which the radius
+# constraint is tight and the tilt is pinned strictly inside its bracket.
+# The leading entries are the vanishing-radius regime of issue #49, where
+# the equivalent dual's minimizer runs off to infinity.
+TILT_RADIUS_FRACTIONS = (1e-10, 1e-6, 0.01, 0.1, 0.3, 0.6, 0.9, 0.99)
 
 # Multiples of the saturation radius from exactly at it to far beyond it,
 # where the worst case is the maximum loss.
@@ -141,11 +147,11 @@ INSTANCES = (
 )
 
 # Instances with positive nominal mass strictly between zero and one on the
-# highest-loss scenarios, so the KL and chi-square duals have a finite
-# minimizer below the saturation radius. A highest-loss scenario with zero
-# nominal mass never saturates, and one carrying all the mass saturates at
-# radius zero; both are covered by their own tests below.
-DUAL_INSTANCES = tuple(
+# highest-loss scenarios, so the radius constraint is tight below the
+# saturation radius. A highest-loss scenario with zero nominal mass never
+# saturates, and one carrying all the mass saturates at radius zero; both
+# are covered by their own tests below.
+TILT_INSTANCES = tuple(
     instance
     for instance in INSTANCES
     if instance.name
@@ -153,41 +159,15 @@ DUAL_INSTANCES = tuple(
 )
 
 # Instances for which the worst case saturates at some finite radius.
-SATURATING_INSTANCES = DUAL_INSTANCES + tuple(
+SATURATING_INSTANCES = TILT_INSTANCES + tuple(
     instance for instance in INSTANCES if instance.name == "single_point"
 )
 
 INSTANCE_IDS = [instance.name for instance in INSTANCES]
-DUAL_INSTANCE_IDS = [instance.name for instance in DUAL_INSTANCES]
+TILT_INSTANCE_IDS = [instance.name for instance in TILT_INSTANCES]
 SATURATING_INSTANCE_IDS = [instance.name for instance in SATURATING_INSTANCES]
 
 ASYMMETRIC = next(instance for instance in INSTANCES if instance.name == "asymmetric")
-
-
-def dual_solver(max_iter: int = 20_000) -> GradientDescent:
-    """Return the first-order dual solver the KL / chi-square checks use.
-
-    The step size is order one because the dual is solved on the loss
-    standardized to unit spread, so it does not have to be tuned to the
-    scale of the loss. 0.2 sits inside the range where the chi-square dual
-    is stable.
-
-    Args:
-        max_iter: Gradient-step budget. The default is generous enough that
-            an agreement check measures the formulation rather than the
-            solver; a check at a vanishing radius lowers it, since there
-            the minimizer sits at infinity and no budget reaches it.
-
-    Returns:
-        A configured `GradientDescent` instance.
-    """
-    return GradientDescent(step_size=0.2, max_iter=max_iter, tol=1e-11)
-
-
-# Budget used where the dual minimizer is known to be unattainable, so the
-# check costs a few milliseconds instead of exhausting a budget that cannot
-# help.
-DEGENERATE_MAX_ITER = 2_000
 
 
 def saturation_mass(instance: Instance) -> float:
@@ -283,17 +263,17 @@ def test_batched_radius_sweep_matches_the_oracles_elementwise(
         )
 
 
-# --- Dual-solved sets: KL and chi-square -----------------------------------
+# --- Tilt-solved sets: KL and chi-square -----------------------------------
 
 
-@pytest.mark.parametrize("instance", DUAL_INSTANCES, ids=DUAL_INSTANCE_IDS)
-@pytest.mark.parametrize("fraction", DUAL_RADIUS_FRACTIONS)
+@pytest.mark.parametrize("instance", TILT_INSTANCES, ids=TILT_INSTANCE_IDS)
+@pytest.mark.parametrize("fraction", TILT_RADIUS_FRACTIONS)
 def test_kl_matches_the_exponential_tilt_closed_form(
     instance: Instance, fraction: float
 ) -> None:
     nominal, loss, _ = instance.tensors()
     radius = fraction * kl_saturation_radius(instance)
-    ambiguity_set = KLAmbiguitySet(nominal, radius=radius, dual_solver=dual_solver())
+    ambiguity_set = KLAmbiguitySet(nominal, radius=radius)
 
     result = ambiguity_set.worst_case_expectation(loss)
 
@@ -301,16 +281,14 @@ def test_kl_matches_the_exponential_tilt_closed_form(
     assert abs(float(result) - reference) <= ORACLE_TOLERANCE
 
 
-@pytest.mark.parametrize("instance", DUAL_INSTANCES, ids=DUAL_INSTANCE_IDS)
-@pytest.mark.parametrize("fraction", DUAL_RADIUS_FRACTIONS)
+@pytest.mark.parametrize("instance", TILT_INSTANCES, ids=TILT_INSTANCE_IDS)
+@pytest.mark.parametrize("fraction", TILT_RADIUS_FRACTIONS)
 def test_chi_square_matches_the_active_set_closed_form(
     instance: Instance, fraction: float
 ) -> None:
     nominal, loss, _ = instance.tensors()
     radius = fraction * chi_square_saturation_radius(instance)
-    ambiguity_set = ChiSquareAmbiguitySet(
-        nominal, radius=radius, dual_solver=dual_solver()
-    )
+    ambiguity_set = ChiSquareAmbiguitySet(nominal, radius=radius)
 
     result = ambiguity_set.worst_case_expectation(loss)
 
@@ -327,7 +305,7 @@ def test_kl_at_and_beyond_its_saturation_radius_is_the_maximum_loss(
 ) -> None:
     nominal, loss, _ = instance.tensors()
     radius = multiple * kl_saturation_radius(instance)
-    ambiguity_set = KLAmbiguitySet(nominal, radius=radius, dual_solver=dual_solver())
+    ambiguity_set = KLAmbiguitySet(nominal, radius=radius)
 
     result = ambiguity_set.worst_case_expectation(loss)
 
@@ -342,9 +320,7 @@ def test_chi_square_at_and_beyond_its_saturation_radius_is_the_maximum_loss(
 ) -> None:
     nominal, loss, _ = instance.tensors()
     radius = multiple * chi_square_saturation_radius(instance)
-    ambiguity_set = ChiSquareAmbiguitySet(
-        nominal, radius=radius, dual_solver=dual_solver()
-    )
+    ambiguity_set = ChiSquareAmbiguitySet(nominal, radius=radius)
 
     result = ambiguity_set.worst_case_expectation(loss)
 
@@ -353,7 +329,7 @@ def test_chi_square_at_and_beyond_its_saturation_radius_is_the_maximum_loss(
 
 @pytest.mark.parametrize("scale", [1e-6, 1e-3, 1.0, 1e3, 1e6])
 @pytest.mark.parametrize("offset", [0.0, 1e6])
-def test_dual_solved_sets_are_exact_on_a_loss_of_any_scale_and_offset(
+def test_tilt_solved_sets_are_exact_on_a_loss_of_any_scale_and_offset(
     scale: float, offset: float
 ) -> None:
     # One step size serves every scale because the dual is solved on the
@@ -365,11 +341,9 @@ def test_dual_solved_sets_are_exact_on_a_loss_of_any_scale_and_offset(
     kl_radius = 0.5 * kl_saturation_radius(ASYMMETRIC)
     chi_square_radius = 0.5 * chi_square_saturation_radius(ASYMMETRIC)
 
-    kl = KLAmbiguitySet(
-        nominal, radius=kl_radius, dual_solver=dual_solver()
-    ).worst_case_expectation(loss)
+    kl = KLAmbiguitySet(nominal, radius=kl_radius).worst_case_expectation(loss)
     chi_square = ChiSquareAmbiguitySet(
-        nominal, radius=chi_square_radius, dual_solver=dual_solver()
+        nominal, radius=chi_square_radius
     ).worst_case_expectation(loss)
 
     tolerance = ORACLE_TOLERANCE * max(1.0, abs(offset) + scale)
@@ -388,7 +362,7 @@ def test_dual_solved_sets_are_exact_on_a_loss_of_any_scale_and_offset(
     )
 
 
-@pytest.mark.parametrize("instance", DUAL_INSTANCES, ids=DUAL_INSTANCE_IDS)
+@pytest.mark.parametrize("instance", TILT_INSTANCES, ids=TILT_INSTANCE_IDS)
 def test_zero_radius_matches_the_oracles_exactly(instance: Instance) -> None:
     nominal, loss, _ = instance.tensors()
     nominal_array, loss_array = instance.nominal_array, instance.loss_array
@@ -411,10 +385,10 @@ def test_batched_kl_radius_sweep_matches_the_closed_form_elementwise() -> None:
     nominal, loss, _ = ASYMMETRIC.tensors()
     radii_list = [
         multiple * kl_saturation_radius(ASYMMETRIC)
-        for multiple in (*DUAL_RADIUS_FRACTIONS, 1.0, 4.0)
+        for multiple in (*TILT_RADIUS_FRACTIONS, 1.0, 4.0)
     ]
     radii = torch.tensor(radii_list, dtype=torch.float64)
-    ambiguity_set = KLAmbiguitySet(nominal, radius=radii, dual_solver=dual_solver())
+    ambiguity_set = KLAmbiguitySet(nominal, radius=radii)
 
     result = ambiguity_set.worst_case_expectation(loss)
 
@@ -429,12 +403,10 @@ def test_batched_chi_square_radius_sweep_matches_the_closed_form_elementwise() -
     nominal, loss, _ = ASYMMETRIC.tensors()
     radii_list = [
         multiple * chi_square_saturation_radius(ASYMMETRIC)
-        for multiple in (*DUAL_RADIUS_FRACTIONS, 1.0, 20.0)
+        for multiple in (*TILT_RADIUS_FRACTIONS, 1.0, 20.0)
     ]
     radii = torch.tensor(radii_list, dtype=torch.float64)
-    ambiguity_set = ChiSquareAmbiguitySet(
-        nominal, radius=radii, dual_solver=dual_solver()
-    )
+    ambiguity_set = ChiSquareAmbiguitySet(nominal, radius=radii)
 
     result = ambiguity_set.worst_case_expectation(loss)
 
@@ -445,25 +417,37 @@ def test_batched_chi_square_radius_sweep_matches_the_closed_form_elementwise() -
         assert abs(float(result[index]) - reference) <= ORACLE_TOLERANCE
 
 
-# --- The remaining gap -------------------------------------------------------
+# --- A vanishing radius (issue #49) ------------------------------------------
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "as the radius vanishes the KL dual minimizer runs to eta -> infinity, "
-        "so a gradient-norm stopping test leaves a gap far larger than the "
-        "radius itself (issue #49)"
-    ),
-)
-def test_kl_at_a_vanishing_radius_matches_the_closed_form() -> None:
-    nominal, loss, _ = ASYMMETRIC.tensors()
-    radius = 1e-10
-    ambiguity_set = KLAmbiguitySet(
-        nominal, radius=radius, dual_solver=dual_solver(max_iter=DEGENERATE_MAX_ITER)
+@pytest.mark.parametrize("instance", TILT_INSTANCES, ids=TILT_INSTANCE_IDS)
+@pytest.mark.parametrize("radius", [1e-10, 1e-8, 1e-6])
+def test_a_vanishing_radius_matches_the_oracles(
+    instance: Instance, radius: float
+) -> None:
+    # A radius this small leaves a worst case within O(sqrt(radius)) of the
+    # nominal expectation, so the tolerance is checked against the excess
+    # rather than against the value: an absolute check would pass on a
+    # solver that simply returned the nominal expectation.
+    #
+    # 1e-10 is the floor of what the oracles can referee, not of what the
+    # sets can do. Below it the oracles lose accuracy first: `brentq` roots
+    # a divergence of order `radius` that NumPy evaluates by direct
+    # summation, so its own noise swamps the answer. The regime below this
+    # is pinned instead against the exact small-radius expansion, in
+    # `tests/dro/test_kl_dro.py` and `tests/dro/test_phi_dro.py`.
+    nominal, loss, _ = instance.tensors()
+    nominal_array, loss_array = instance.nominal_array, instance.loss_array
+    nominal_expectation = float(np.sum(nominal_array * loss_array))
+
+    kl = KLAmbiguitySet(nominal, radius=radius).worst_case_expectation(loss)
+    chi_square = ChiSquareAmbiguitySet(nominal, radius=radius).worst_case_expectation(
+        loss
     )
 
-    result = ambiguity_set.worst_case_expectation(loss)
-
-    reference = kl_worst_case(ASYMMETRIC.nominal_array, ASYMMETRIC.loss_array, radius)
-    assert abs(float(result) - reference) <= ORACLE_TOLERANCE
+    kl_reference = kl_worst_case(nominal_array, loss_array, radius)
+    chi_square_reference = chi_square_worst_case(nominal_array, loss_array, radius)
+    kl_excess = kl_reference - nominal_expectation
+    chi_square_excess = chi_square_reference - nominal_expectation
+    assert abs(float(kl) - kl_reference) <= 1e-6 * kl_excess
+    assert abs(float(chi_square) - chi_square_reference) <= 1e-6 * chi_square_excess

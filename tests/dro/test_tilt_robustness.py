@@ -1,11 +1,13 @@
-r"""Tests for the loss standardization and saturation shortcut of dual-solved sets.
+r"""Tests for the tilt bisection shared by the KL and chi-square ambiguity sets.
 
-`optora.core.dro_base.DualAmbiguitySet` solves the KL and chi-square duals on
-the loss standardized to unit spread and returns `max(loss)` once the radius
-reaches the saturation radius. These tests pin the properties that make that
-safe, using the real formulations: exact affine equivariance, no `nan` on any
-loss scale (issue #48), saturated elements that cannot poison the rest of a
-batch, and gradients that stay valid distributions inside the ambiguity set.
+`optora.core.dro_base.TiltedAmbiguitySet` locates the worst-case distribution
+by bisecting a monotone tilt path on the loss standardized to unit spread.
+These tests pin the properties that make that safe, using the real
+formulations: exact affine equivariance, no `nan` on any loss scale or
+support size (issues #48 and #51), a value that never exceeds `max(loss)`,
+accuracy that survives a vanishing radius (issue #49), saturated elements
+that cannot disturb the rest of a batch, and gradients that stay valid
+distributions inside the ambiguity set.
 """
 
 import math
@@ -13,16 +15,9 @@ import math
 import pytest
 import torch
 
-from optora.core.convergence import ConvergenceStatus
-from optora.core.dro_base import DualAmbiguitySet
-from optora.core.solver_base import (
-    MinimizationProblem,
-    MinimizationResult,
-    Solver,
-)
+from optora.core.dro_base import TiltedAmbiguitySet
 from optora.dro.kl_dro import KLAmbiguitySet
 from optora.dro.phi_dro import ChiSquareAmbiguitySet
-from optora.solvers.gradient_descent import GradientDescent
 from tests.dro.oracles import chi_square_worst_case, kl_worst_case
 
 NOMINAL = torch.tensor([0.1, 0.2, 0.3, 0.4], dtype=torch.float64)
@@ -33,34 +28,15 @@ KL_SATURATION = -math.log(0.4)
 CHI_SQUARE_SATURATION = 1.0 / 0.4 - 1.0
 
 
-def _solver() -> GradientDescent:
-    return GradientDescent(step_size=0.2, max_iter=20_000, tol=1e-11)
-
-
 def _kl(radius: float | torch.Tensor) -> KLAmbiguitySet:
-    return KLAmbiguitySet(NOMINAL, radius=radius, dual_solver=_solver())
+    return KLAmbiguitySet(NOMINAL, radius=radius)
 
 
 def _chi_square(radius: float | torch.Tensor) -> ChiSquareAmbiguitySet:
-    return ChiSquareAmbiguitySet(NOMINAL, radius=radius, dual_solver=_solver())
+    return ChiSquareAmbiguitySet(NOMINAL, radius=radius)
 
 
-class _RecordingSolver(Solver[MinimizationProblem, MinimizationResult]):
-    """Fake dual solver recording the point it is asked to start from."""
-
-    def __init__(self) -> None:
-        self.initial_point: torch.Tensor | None = None
-
-    def solve(self, problem: MinimizationProblem) -> MinimizationResult:
-        self.initial_point = problem.initial_point.clone()
-        return MinimizationResult(
-            point=problem.initial_point,
-            value=problem.objective(problem.initial_point),
-            status=ConvergenceStatus(torch.tensor(True), torch.tensor(0)),
-        )
-
-
-# --- Issue #48: no nan on any loss scale or radius ---------------------------
+# --- Issue #48: no nan on any loss scale -------------------------------------
 
 
 @pytest.mark.parametrize("scale", [1e-6, 1.0, 100.0, 1e6])
@@ -81,6 +57,73 @@ def test_chi_square_is_finite_at_and_beyond_its_saturation_radius(
     result = _chi_square(multiple * CHI_SQUARE_SATURATION).worst_case_expectation(LOSS)
 
     assert float(result) == float(LOSS.max())
+
+
+# --- Issue #51: no nan and no overshoot on a large support -------------------
+
+
+@pytest.mark.parametrize("support_size", [2, 10, 50, 100, 1000, 10000])
+@pytest.mark.parametrize("fraction", [1e-6, 0.1, 0.5, 0.9, 1.0, 2.0])
+def test_a_large_support_stays_finite_and_below_the_maximum_loss(
+    support_size: int, fraction: float
+) -> None:
+    # The old first-order dual solve overshot on a support this large: the
+    # chi-square set returned values above max(loss) from n = 10 and nan
+    # from n = 50. Bisection keeps the feasible endpoint at every step, so
+    # both bounds hold by construction rather than by tuning.
+    nominal = torch.full((support_size,), 1.0 / support_size, dtype=torch.float64)
+    loss = torch.linspace(0.0, 1.0, support_size, dtype=torch.float64)
+    nominal_expectation = torch.sum(nominal * loss)
+
+    kl = KLAmbiguitySet(
+        nominal, radius=fraction * math.log(support_size)
+    ).worst_case_expectation(loss)
+    chi_square = ChiSquareAmbiguitySet(
+        nominal, radius=fraction * (support_size - 1.0)
+    ).worst_case_expectation(loss)
+
+    for result in (kl, chi_square):
+        assert torch.isfinite(result)
+        assert result <= loss.max()
+        assert result >= nominal_expectation
+    if fraction >= 1.0:
+        assert float(kl) == float(loss.max())
+        assert float(chi_square) == float(loss.max())
+
+
+# --- Issue #49: accuracy at a vanishing radius -------------------------------
+
+
+@pytest.mark.parametrize("radius", [1e-16, 1e-14, 1e-12, 1e-10, 1e-8])
+def test_a_vanishing_radius_tracks_the_square_root_expansion(radius: float) -> None:
+    # Both worst cases expand as `E_p[loss] + sqrt(k * radius * Var_p(loss))`
+    # for small radius, with `k = 2` for KL and `k = 1` for chi-square. The
+    # excess over the nominal expectation is what must stay accurate: the
+    # value itself is within O(sqrt(radius)) of the nominal expectation, so
+    # an absolute check would pass on a solver that never moved at all.
+    mean = torch.sum(NOMINAL * LOSS)
+    variance = torch.sum(NOMINAL * (LOSS - mean) ** 2)
+
+    kl_excess = float(_kl(radius).worst_case_expectation(LOSS) - mean)
+    chi_square_excess = float(_chi_square(radius).worst_case_expectation(LOSS) - mean)
+
+    assert kl_excess == pytest.approx(float(torch.sqrt(2.0 * radius * variance)), 1e-3)
+    assert chi_square_excess == pytest.approx(
+        float(torch.sqrt(radius * variance)), 1e-6
+    )
+
+
+@pytest.mark.parametrize("radius", [1e-16, 1e-12, 1e-8])
+def test_a_vanishing_radius_is_strictly_above_the_nominal_expectation(
+    radius: float,
+) -> None:
+    # The bisection must resolve a tilt this small rather than collapsing to
+    # the zero-radius answer, which is what a gradient-norm stopping test on
+    # the dual did once its minimizer ran off to infinity.
+    mean = torch.sum(NOMINAL * LOSS)
+
+    assert _kl(radius).worst_case_expectation(LOSS) > mean
+    assert _chi_square(radius).worst_case_expectation(LOSS) > mean
 
 
 # --- Exact equivariance of the standardization -------------------------------
@@ -105,10 +148,10 @@ def test_worst_case_is_equivariant_under_a_positive_affine_loss_transform(
         assert torch.allclose(transformed, scale * base + offset, atol=tolerance)
 
 
-# --- A saturated element cannot poison the rest of its batch -----------------
+# --- A saturated element cannot disturb the rest of its batch ----------------
 
 
-def test_a_saturated_element_does_not_poison_the_batch() -> None:
+def test_a_saturated_element_does_not_disturb_the_batch() -> None:
     solved_radius = 0.5 * CHI_SQUARE_SATURATION
     radii = torch.tensor(
         [solved_radius, 20.0 * CHI_SQUARE_SATURATION], dtype=torch.float64
@@ -119,9 +162,8 @@ def test_a_saturated_element_does_not_poison_the_batch() -> None:
 
     assert torch.isfinite(result).all()
     alone = _chi_square(solved_radius).worst_case_expectation(LOSS)
-    assert abs(float(result[0]) - float(alone)) <= 1e-12
+    assert float(result[0]) == float(alone)
     assert float(result[1]) == float(LOSS.max())
-    # The cached warm start must stay usable for the next call.
     again = ambiguity_set.worst_case_expectation(LOSS)
     assert torch.equal(again, result)
 
@@ -145,30 +187,32 @@ def test_batch_of_losses_mixes_saturated_and_solved_elements() -> None:
 
 
 @pytest.mark.parametrize("make", [_kl, _chi_square], ids=["kl", "chi_square"])
-@pytest.mark.parametrize("multiple", [0.3, 0.9, 1.0, 4.0])
+@pytest.mark.parametrize("multiple", [1e-8, 0.3, 0.9, 1.0, 4.0])
 def test_gradient_is_a_distribution_inside_the_ambiguity_set(
     make: type[KLAmbiguitySet] | type[ChiSquareAmbiguitySet], multiple: float
 ) -> None:
-    # The gradient of the worst case with respect to the loss is the
-    # worst-case distribution, solved or saturated alike.
+    # By Danskin's theorem the gradient of the worst case with respect to
+    # the loss is the worst-case distribution itself, tilted or saturated
+    # alike, so it must be a probability vector the set contains.
     saturation = KL_SATURATION if make is _kl else CHI_SQUARE_SATURATION
-    ambiguity_set = make(multiple * saturation)  # type: ignore[operator]
+    radius = multiple * saturation
+    ambiguity_set = make(radius)  # type: ignore[operator]
     loss = LOSS.clone().requires_grad_(True)
 
     (gradient,) = torch.autograd.grad(ambiguity_set.worst_case_expectation(loss), loss)
 
     assert torch.isfinite(gradient).all()
-    assert bool((gradient >= -1e-12).all())
-    assert abs(float(gradient.sum()) - 1.0) <= 1e-9
-    assert bool(ambiguity_set.contains(gradient.detach().clamp_min(0.0)))
+    assert bool((gradient >= 0.0).all())
+    assert abs(float(gradient.sum()) - 1.0) <= 1e-12
+    divergence = float(ambiguity_set.divergence(gradient, NOMINAL))
+    assert divergence <= radius * (1.0 + 1e-9)
 
 
 def test_saturated_gradient_is_the_nominal_restricted_to_the_top_scenarios() -> None:
     # Tied maxima: an even split across the ties would leave the set, while
     # the restricted nominal is the worst-case distribution at the boundary.
-    nominal = NOMINAL
     loss = torch.tensor([0.0, 1.0, 5.0, 5.0], dtype=torch.float64, requires_grad=True)
-    ambiguity_set = KLAmbiguitySet(nominal, radius=2.0, dual_solver=_solver())
+    ambiguity_set = KLAmbiguitySet(NOMINAL, radius=2.0)
 
     value = ambiguity_set.worst_case_expectation(loss)
     (gradient,) = torch.autograd.grad(value, loss)
@@ -217,69 +261,28 @@ def test_a_constant_loss_returns_the_constant(
     assert torch.allclose(gradient, NOMINAL, atol=1e-15)
 
 
-def test_float32_wide_spread_is_finite() -> None:
+@pytest.mark.parametrize("make", [_kl, _chi_square], ids=["kl", "chi_square"])
+def test_float32_wide_spread_is_finite(
+    make: type[KLAmbiguitySet] | type[ChiSquareAmbiguitySet],
+) -> None:
     nominal = NOMINAL.to(torch.float32)
     loss = (1e4 * LOSS).to(torch.float32)
-    ambiguity_set = ChiSquareAmbiguitySet(
-        nominal, radius=0.3 * CHI_SQUARE_SATURATION, dual_solver=_solver()
-    )
+    saturation = KL_SATURATION if make is _kl else CHI_SQUARE_SATURATION
+    radius = 0.3 * saturation
+    ambiguity_set = type(make(0.1))(nominal, radius=radius)
 
     result = ambiguity_set.worst_case_expectation(loss)
 
-    reference = chi_square_worst_case(
-        NOMINAL.numpy(), 1e4 * LOSS.numpy(), 0.3 * CHI_SQUARE_SATURATION
-    )
+    reference_fn = kl_worst_case if make is _kl else chi_square_worst_case
+    reference = reference_fn(NOMINAL.numpy(), 1e4 * LOSS.numpy(), radius)
     assert torch.isfinite(result)
-    assert abs(float(result) - reference) <= 1e-3 * reference
+    assert abs(float(result) - reference) <= 1e-3 * abs(reference)
 
 
-# --- Starting point ----------------------------------------------------------
-
-
-@pytest.mark.parametrize("scale", [1e-6, 1.0, 1e6])
-def test_default_start_is_the_same_standardized_point_on_any_scale(
-    scale: float,
-) -> None:
-    # A raw-unit default of eta = 1 would sit far from the optimum of a loss
-    # of spread 1e6, which is what made a wide spread overflow.
-    solver = _RecordingSolver()
-    ambiguity_set = ChiSquareAmbiguitySet(NOMINAL, radius=0.5, dual_solver=solver)
-
-    ambiguity_set.worst_case_expectation(scale * LOSS + 3.0)
-
-    assert solver.initial_point is not None
-    assert torch.equal(solver.initial_point, torch.zeros(2, dtype=torch.float64))
-
-
-def test_explicit_start_values_are_read_in_raw_loss_units() -> None:
-    solver = _RecordingSolver()
-    ambiguity_set = KLAmbiguitySet(
-        NOMINAL, radius=0.5, dual_solver=solver, initial_log_eta=math.log(10.0)
-    )
-
-    ambiguity_set.worst_case_expectation(10.0 * LOSS)
-
-    # eta = 10 on a loss of spread 50 is eta / spread = 0.2 once standardized.
-    assert solver.initial_point is not None
-    assert torch.allclose(
-        solver.initial_point,
-        torch.tensor(math.log(10.0 / 50.0), dtype=torch.float64),
-    )
-
-
-def test_chi_square_initial_values_must_be_given_together() -> None:
-    with pytest.raises(ValueError, match="together"):
-        ChiSquareAmbiguitySet(NOMINAL, radius=0.5, initial_log_eta=0.0)
-    with pytest.raises(ValueError, match="together"):
-        ChiSquareAmbiguitySet(NOMINAL, radius=0.5, initial_lam=0.0)
-
-
-def test_dual_ambiguity_set_is_abstract_over_its_formulation() -> None:
+def test_tilted_ambiguity_set_is_abstract_over_its_formulation() -> None:
     with pytest.raises(TypeError):
-        DualAmbiguitySet(  # type: ignore[abstract]
+        TiltedAmbiguitySet(  # type: ignore[abstract]
             NOMINAL,
             divergence=KLAmbiguitySet(NOMINAL, radius=0.1).divergence,
             radius=0.1,
-            dual_solver=None,
-            initial_dual_point=torch.tensor(0.0),
         )

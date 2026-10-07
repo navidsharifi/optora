@@ -7,7 +7,7 @@ DRO: *what radius should I use?*
 
 Left to intuition, the answer is bad in both directions. Too small and the
 robust value collapses onto the empirical mean, so you have paid for a
-nested dual solve and bought nothing. Too large and it saturates at
+nested worst-case solve and bought nothing. Too large and it saturates at
 $\max_i \ell_i$, which is a statement about your worst observation rather
 than about your problem. Neither failure announces itself.
 
@@ -135,7 +135,7 @@ error you can name and watch decay.
 
 ## Where the closed form gives up
 
-There is a reason this page solves the dual instead of evaluating
+There is a reason this page asks the ambiguity set instead of evaluating
 $\bar{Z} + \sqrt{\rho\, s_n^2}$ directly. That formula is the *interior*
 optimum: it corresponds to the worst-case distribution
 
@@ -145,7 +145,8 @@ $$
 
 which stops being a distribution as soon as $\rho$ is large enough to drive
 some $q_i$ negative. Past that point the true worst case is *smaller* than
-the closed form, and only the dual knows it.
+the closed form, because the maximizer truncates to
+$q \propto \hat{p}\,(\ell - c)_+$ and the closed form does not.
 
 The script prints the most negative discrepancy over all replications, and
 it is a clean indicator function:
@@ -157,7 +158,7 @@ it is a clean indicator function:
 | 0.99 | $-2.1 \times 10^{-2}$ | $\approx 0$ | $\approx 0$ |
 
 Entries marked $\approx 0$ are floating-point rounding, a few times
-$10^{-16}$: the dual solve is exact to working precision there and simply
+$10^{-16}$: the set is exact to working precision there and simply
 reproduces the closed form. The two negative ones are real: at
 $n = 10$ and high confidence the calibrated radius is large enough
 ($\rho = 0.38$ and $\rho = 0.66$) to hit the boundary of the simplex. That
@@ -181,8 +182,8 @@ told which one it is in.
 !!! note "One batched solve per side"
 
     Coverage is a Monte Carlo quantity, so the experiment needs
-    $3 \times 5 \times 200 \times 2 = 6000$ dual solves. They are not run
-    one by one: `worst_case_expectation` accepts a loss of shape
+    $3 \times 5 \times 200 \times 2 = 6000$ worst-case solves. They are not
+    run one by one: `worst_case_expectation` accepts a loss of shape
     $(\dots, n)$ and a tensor radius that broadcasts against the batch, so
     the five confidence levels form a $(5, 1)$ column of radii and the 200
     replications a $(200, n)$ loss, and one call returns all
@@ -190,13 +191,12 @@ told which one it is in.
     per side of the interval, and the whole script runs in about ten
     seconds.
 
-    A batched dual solve starts every element from one shared point, here
-    the population asymptotic optimum at the geometric mean of the radii,
-    which is a legitimate guess because it uses no information from the
-    sample being solved. It also runs until the slowest element is
-    stationary, so the script gives `GradientDescent` a generous iteration
-    budget; a smaller one leaves the extreme radii a few $10^{-4}$ short of
-    the optimum, enough to move a coverage estimate.
+    Every element of that batch is bisected independently through
+    elementwise `torch.where`, to the same fixed depth, so the extreme
+    radii are resolved exactly as well as the mild ones. There is no shared
+    starting point to choose and no iteration budget that could leave one
+    corner of the grid short of its optimum, which matters here because a
+    few $10^{-4}$ of error is enough to move a coverage estimate.
 
 ## Source
 
