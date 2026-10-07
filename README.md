@@ -37,11 +37,7 @@ nominal = torch.tensor([0.25, 0.25, 0.25, 0.25])
 outcomes = torch.tensor([1.0, 2.0, 3.0, 10.0])
 
 problem = MinimaxProblem(
-  ambiguity_set=KLAmbiguitySet(
-    nominal=nominal,
-    radius=0.1,
-    dual_solver=GradientDescent(step_size=1.0, max_iter=300, tol=1e-7),
-  ),
+    ambiguity_set=KLAmbiguitySet(nominal=nominal, radius=0.1),
     loss_fn=lambda x: (outcomes - x) ** 2,
     initial_point=torch.tensor(0.0),
 )

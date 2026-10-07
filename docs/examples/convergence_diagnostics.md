@@ -25,30 +25,34 @@ settled versus one still drifting is obvious in a plot and invisible in a
 final scalar.
 
 Note that each `torch.autograd.grad` call here differentiates *through* a
-complete inner dual solve. It works, and it is cheap enough at this scale,
-but it is worth appreciating that a single outer step is not a single unit of
-work.
+complete inner worst-case solve. It works, and it is cheap enough at this
+scale, but it is worth appreciating that a single outer step is not a single
+unit of work.
 
 ## Inner: brute-force the dual
 
-The second half is the part I trust most. Optora reduces KL-DRO to a
-one-dimensional convex dual,
+The second half is the part I trust most. KL-DRO has a one-dimensional
+convex dual,
 
 $$
 \inf_{\eta > 0} \; \eta \rho
 + \eta \log \mathbb{E}_{\mathrm{nominal}}\!\left[e^{\mathrm{loss}/\eta}\right],
 $$
 
-solved by gradient descent over $\log \eta$ so that $\eta > 0$ holds by
-construction. Instead of believing that solve, the script evaluates the dual
-objective on 400 points of a $\log \eta$ grid spanning
+whose value equals the worst-case expectation by strong duality. Optora
+does not evaluate it: it works in the primal, bisecting the exponential
+tilt $q_\beta \propto \mathrm{nominal} \cdot e^{\beta\,\mathrm{loss}}$ until
+the KL constraint is tight. So the dual is a genuinely independent check,
+and the script evaluates it on 400 points of a $\log \eta$ grid spanning
 $[e^{-6}, e^{4}]$ and compares the grid minimum against what the library
 returns.
 
-Two independent methods, one of which has no tuning parameters at all. If
-they agree, the dual solve is genuinely finding the adversarial
-distribution; if they do not, the printed absolute difference tells you by
-how much.
+Two independent methods, neither of which has a tuning parameter. If they
+agree, the library is genuinely finding the adversarial distribution; if
+they do not, the printed absolute difference tells you by how much. The
+residual difference you see is the grid's own resolution, not the library's:
+400 points over ten $e$-folds cannot resolve the minimum of a smooth curve
+better than about $10^{-5}$.
 
 The grid evaluation is fully vectorized — one broadcast `logsumexp` over the
 whole $(\text{grid} \times \text{scenarios})$ tensor, not a Python loop over

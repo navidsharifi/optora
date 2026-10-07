@@ -41,13 +41,8 @@ COST = (OUTCOMES.unsqueeze(0) - OUTCOMES.unsqueeze(1)) ** 2
 # aggressively from each solver's own defaults; this is a demo of
 # qualitative behavior, not a tight-tolerance convergence test.
 # The outer solver uses `check_interval=1` because one of its steps costs a
-# full inner dual solve, which dwarfs the synchronization a check costs.
-# The dual is solved on the loss standardized to unit spread, so the dual
-# step sizes below do not depend on the scale of `loss`: order one for KL,
-# and at most about 0.3 for chi-square, whose dual is stiffer.
+# full inner worst-case solve, which dwarfs the synchronization a check costs.
 OUTER_SOLVER = GradientDescent(step_size=0.01, max_iter=120, tol=1e-7, check_interval=1)
-KL_DUAL_SOLVER = GradientDescent(step_size=1.0, max_iter=200, tol=1e-8)
-CHI_SQUARE_DUAL_SOLVER = GradientDescent(step_size=0.2, max_iter=300, tol=1e-8)
 
 
 def loss_fn(x: torch.Tensor) -> torch.Tensor:
@@ -71,11 +66,9 @@ def main() -> None:
     )
 
     families: dict[str, Callable[[float], object]] = {
-        "KL": lambda radius: KLAmbiguitySet(
-            nominal=NOMINAL, radius=radius, dual_solver=KL_DUAL_SOLVER
-        ),
+        "KL": lambda radius: KLAmbiguitySet(nominal=NOMINAL, radius=radius),
         "chi-square": lambda radius: ChiSquareAmbiguitySet(
-            nominal=NOMINAL, radius=radius, dual_solver=CHI_SQUARE_DUAL_SOLVER
+            nominal=NOMINAL, radius=radius
         ),
         "total variation": lambda radius: TotalVariationAmbiguitySet(
             nominal=NOMINAL, radius=radius

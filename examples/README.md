@@ -37,7 +37,7 @@ embeds the same source and explains what each experiment is checking.
 | [`01_kl_dro_radius_sweep.py`](01_kl_dro_radius_sweep.py) | The core DRO primitive in isolation: how `KLAmbiguitySet.worst_case_expectation` grows with the ambiguity radius, checked against its two closed-form limits (`radius = 0` and `radius -> inf`). |
 | [`02_worst_case_distribution_shift.py`](02_worst_case_distribution_shift.py) | Reconstructs the actual worst-case candidate distribution `q*` inside a total-variation ambiguity set (not just its expectation) and visualizes probability mass migrating toward the worst-case scenario as the radius grows — convergence *across probability space*, not just of a scalar. |
 | [`03_robust_decision_across_ambiguity_sets.py`](03_robust_decision_across_ambiguity_sets.py) | Solves the same robust decision problem with `MinimaxSolver` under all four ambiguity-set geometries (KL, chi-square, total variation, Wasserstein) and compares how the robust decision diverges from the empirical-risk baseline as radius grows. |
-| [`04_convergence_diagnostics.py`](04_convergence_diagnostics.py) | Manually unrolls the outer gradient trajectory of a robust decision problem, then independently verifies the inner KL-DRO dual solve against a fine grid search over the dual variable. |
+| [`04_convergence_diagnostics.py`](04_convergence_diagnostics.py) | Manually unrolls the outer gradient trajectory of a robust decision problem, then independently verifies the inner KL-DRO solve against a fine grid search over the dual variable. |
 | [`05_wasserstein_lipschitz_equivalence.py`](05_wasserstein_lipschitz_equivalence.py) | Measures the Wasserstein-DRO / Lipschitz-regularization equivalence numerically: the exact dual value of `WassersteinAmbiguitySet` against the linear surrogate `E_nominal[loss] + radius * Lip(loss)`, as the radius shrinks and as the sample refines. |
 | [`06_calibrated_ambiguity_radius.py`](06_calibrated_ambiguity_radius.py) | Replaces the hand-picked radius with the Duchi-Namkoong finite-sample calibration `radius = chi2_{1, 1 - alpha} / n`, then measures how often the resulting `ChiSquareAmbiguitySet` interval really covers the true mean, across nominal confidence levels and sample sizes. |
 | [`07_subpopulation_shift_training.py`](07_subpopulation_shift_training.py) | Trains a linear model with `torch.optim.Adam` on the KL-DRO objective and compares it with ERM, a ridge control and a noise-only negative control under subpopulation shift, using exact group risks, paired seeds and convergence checks against closed-form and L-BFGS references. |
@@ -75,10 +75,10 @@ To add a real visual to this README:
 ## Notes on solver tuning
 
 Several examples nest an outer `MinimaxSolver`/`GradientDescent` around an
-ambiguity set's own inner dual solve. That composition multiplies
-iteration counts fast in eager PyTorch, so the scripts here deliberately
-use small, tuned-down `max_iter`/`step_size` budgets rather than each
-component's own defaults, and check qualitative behavior (monotonicity,
-closed-form limits, cross-checked reconstructions) rather than
-tight-tolerance convergence. See `progress/decisions.md` for the
-underlying numerical background.
+ambiguity set's own inner solve. That composition multiplies iteration
+counts fast in eager PyTorch, so the scripts here deliberately use small,
+tuned-down outer `max_iter`/`step_size` budgets rather than the solver's
+own defaults, and check qualitative behavior (monotonicity, closed-form
+limits, cross-checked reconstructions) rather than tight-tolerance
+convergence. See `progress/decisions.md` for the underlying numerical
+background.

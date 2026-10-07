@@ -74,13 +74,12 @@ What to watch for:
   groups instead of trading one for the other. Measured against ERM, DRO
   moves mostly along the path `w*(pi)` and ridge mostly off it.
 
-Training and convergence. The inner dual of each step is warm-started and
-capped at 100 iterations, so it converges across steps while the Adam learning
-rate decays; the gradient is then re-taken with a tightly solved dual
-(`docs/training.md`: a loose inner `tol` biases the outer gradient). The
-script asserts that ERM and ridge match their closed forms, that every
-model's outer gradient is near zero, and that one DRO model matches an
-independent joint L-BFGS solve over `(w, b, log eta)`.
+Training and convergence. The inner worst case is a bracketed bisection, so
+every Adam step solves it exactly at a fixed cost and the outer gradient is
+never biased by an inner tolerance (`docs/training.md`). The script asserts
+that ERM and ridge match their closed forms, that every model's outer
+gradient is near zero, and that one DRO model matches an independent joint
+L-BFGS solve over `(w, b, log eta)`.
 
 Honest caveats. Every radius above zero costs in-distribution performance
 (`pi = 0.1`), and DRO only wins once the test share of group B exceeds
@@ -116,7 +115,6 @@ from _plotting import save_figure
 from torch import nn
 
 from optora.dro import KLAmbiguitySet
-from optora.solvers import GradientDescent
 
 DTYPE = torch.float64
 SEED = 20261004
@@ -148,12 +146,6 @@ NOISE_ONLY_SLACK = 1e-3
 LEARNING_RATE = 0.2
 LEARNING_RATE_DECAY = 0.98
 NUM_STEPS = 300
-INITIAL_LOG_ETA = 2.5
-# The dual is not solved to convergence at every outer step: it is warm-started
-# from the previous step, so it converges across steps while the learning rate
-# decays. The final gradient is always taken with the precise solver below.
-TRAINING_DUAL_SOLVER = GradientDescent(step_size=0.05, max_iter=100, tol=1e-9)
-PRECISE_DUAL_SOLVER = GradientDescent(step_size=0.05, max_iter=20_000, tol=1e-12)
 
 MODEL_NAMES = ("ERM", "ridge") + tuple(f"KL {radius}" for radius in RADII)
 ERM, RIDGE = 0, 1
@@ -408,12 +400,7 @@ def train(scenario: Scenario, generator: torch.Generator) -> Fit:
     model = BatchedLinear(NUM_SEEDS, len(MODEL_NAMES), generator)
     nominal = torch.full((NUM_TRAIN,), 1.0 / NUM_TRAIN, dtype=DTYPE)
     erm_set = KLAmbiguitySet(nominal, radius=0.0)
-    dro_set = KLAmbiguitySet(
-        nominal,
-        radius=torch.tensor(RADII, dtype=DTYPE),
-        dual_solver=TRAINING_DUAL_SOLVER,
-        initial_log_eta=INITIAL_LOG_ETA,
-    )
+    dro_set = KLAmbiguitySet(nominal, radius=torch.tensor(RADII, dtype=DTYPE))
     optimizer = torch.optim.Adam(model.parameters(), lr=LEARNING_RATE)
     scheduler = torch.optim.lr_scheduler.ExponentialLR(optimizer, LEARNING_RATE_DECAY)
     for _ in range(NUM_STEPS):
@@ -423,7 +410,6 @@ def train(scenario: Scenario, generator: torch.Generator) -> Fit:
         optimizer.step()
         scheduler.step()
 
-    dro_set.dual_solver = PRECISE_DUAL_SOLVER
     optimizer.zero_grad()
     objective, dro_loss = training_objective(model, x, y, erm_set, dro_set)
     dro_loss.retain_grad()

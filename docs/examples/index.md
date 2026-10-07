@@ -4,12 +4,13 @@ icon: lucide/play
 
 # Examples
 
-Reading a dual formula and believing it are two different things. Every
+Reading a formulation and believing it are two different things. Every
 script in this section exists because, at some point while building Optora,
 I wanted to *see* a formulation behave before trusting it: does the
 worst-case expectation really saturate at $\max_i \mathrm{loss}_i$, does the
 adversary really move mass the way the derivation claims, does the inner
-dual solve really land where a brute-force grid search says it should?
+solve really land where a brute-force grid search over the dual says it
+should?
 
 So the scripts under `examples/` are less "look how easy the API is" and
 more small numerical experiments. Each one runs end to end, prints the
@@ -60,17 +61,16 @@ radius as a free parameter at all, and the last one trains a model with
 !!! warning "These scripts are tuned down on purpose"
 
     Examples 3 and 4 nest an outer gradient descent around an ambiguity
-    set's own inner dual solve, and in eager PyTorch that composition
-    multiplies iteration counts unpleasantly fast. The budgets in those
-    scripts are much smaller than each solver's defaults. They are chosen
-    to show qualitative behaviour — monotonicity, limits, ordering — not to
-    hit tight tolerances. Example 6 is slow for a
-    different reason: estimating a coverage probability needs thousands of
-    independent dual solves, not deeper ones. Example 7 is the slowest
-    (about half a minute on a CPU) because it trains a model: it batches all
-    seeds and radii into one joint solve per step and caps each inner dual
-    solve, relying on warm starts, and then verifies the trained models
-    against closed-form and L-BFGS references with a precisely solved dual.
+    set's own inner solve, and in eager PyTorch that composition multiplies
+    iteration counts unpleasantly fast. The outer budgets in those scripts
+    are much smaller than the solver's defaults. They are chosen to show
+    qualitative behaviour — monotonicity, limits, ordering — not to hit
+    tight tolerances. Example 6 is slow for a different reason: estimating
+    a coverage probability needs thousands of independent inner solves, not
+    deeper ones. Example 7 is the slowest (about ten seconds on a CPU)
+    because it trains a model, batching all seeds and radii into one joint
+    solve per step, and then verifies the trained models against
+    closed-form and L-BFGS references.
 
 ## The shared plotting helper
 

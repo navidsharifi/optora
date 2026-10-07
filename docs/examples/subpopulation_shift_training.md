@@ -82,11 +82,9 @@ never sees the labels, so it reaches only part of that.
 !!! note "One joint solve per step"
 
     The loss has shape `(seeds, models, n)` with the radii as a tensor that
-    broadcasts against it, so every step is one batched dual solve for all
-    10 seeds and all three radii. Models are independent and Adam is
-    elementwise, so this is the same as training them one by one. The
-    ambiguity set is reused across steps, so each solve warm-starts from the
-    previous dual optimum.
+    broadcasts against it, so every step is one batched tilt bisection for
+    all 10 seeds and all three radii. Models are independent and Adam is
+    elementwise, so this is the same as training them one by one.
 
 ## Is it converged?
 
@@ -97,23 +95,25 @@ following before it reports anything:
 | --- | --- |
 | Adam ERM vs closed-form least squares | $2.3 \times 10^{-5}$ |
 | Adam ridge vs closed-form ridge | $1.1 \times 10^{-5}$ |
-| Outer gradient norm of every model, dual solved precisely | $\le 1.6 \times 10^{-4}$ |
+| Outer gradient norm of every model | $\le 1.6 \times 10^{-4}$ |
 | KL-DRO ($\rho = 0.2$, seed 0) vs an independent joint L-BFGS over $(w, b, \log\eta)$ | $3.6 \times 10^{-7}$ |
 
-The dual solve inside each Adam step is warm-started and capped at 100
-iterations; it converges *across* steps while the learning rate decays, and
-the final gradient is taken with a dual solved to $10^{-12}$. The L-BFGS
-reference minimizes the dual jointly (it is jointly convex in $(w, b,
-\eta)$), from a different starting point, so agreement is not an artefact of
-shared code.
+Only the outer loop has to converge. The inner worst case is a bracketed
+bisection resolved to the dtype's precision on every call, so there is no
+inner tolerance left to bias the outer gradient and nothing to warm up
+across steps. The L-BFGS reference minimizes the *dual* jointly (it is
+jointly convex in $(w, b, \eta)$), from a different starting point and by a
+different route, so agreement is not an artefact of shared code.
 
-!!! tip "Why the inner solver is cautious"
+!!! tip "Why the inner solve needs no tuning"
 
-    The dual is solved over $\log\eta$ by fixed-step gradient descent. At the
-    random initialization the per-sample losses are heavy-tailed (maximum
-    around 100), and a larger step sends $\log\eta$ to a flat region it
-    cannot leave. A step of $0.05$ is stable throughout, at the price of
-    spreading the dual solve over many outer steps.
+    At the random initialization the per-sample losses are heavy-tailed
+    (maximum around 100). Minimizing the KL dual over $\log\eta$ by
+    fixed-step gradient descent would need a step small enough not to send
+    the iterate into a flat region it cannot leave, which would spread the
+    inner solve over many outer steps. The bisection instead brackets the
+    exponential tilt on $[0, 1]$ by construction, so the heavy tail costs
+    it nothing and the first Adam step is already exact.
 
 ## The evidence
 

@@ -21,12 +21,10 @@ import torch
 from _plotting import save_figure
 
 from optora.dro import KLAmbiguitySet
-from optora.solvers import GradientDescent
 
 OUTCOMES = torch.tensor([1.0, 2.0, 3.0, 10.0], dtype=torch.float64)
 NOMINAL = torch.full_like(OUTCOMES, 1.0 / OUTCOMES.numel())
 RADIUS = 0.15
-DUAL_SOLVER = GradientDescent(step_size=1.0, max_iter=2000, tol=1e-9)
 
 
 def track_outer_convergence(
@@ -67,9 +65,7 @@ def kl_dual_grid_search(
 
 
 def main() -> None:
-    ambiguity_set = KLAmbiguitySet(
-        nominal=NOMINAL, radius=RADIUS, dual_solver=DUAL_SOLVER
-    )
+    ambiguity_set = KLAmbiguitySet(nominal=NOMINAL, radius=RADIUS)
 
     x_history, value_history = track_outer_convergence(
         ambiguity_set,
