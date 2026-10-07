@@ -12,8 +12,10 @@ and both are checked numerically below rather than only asserted:
   exactly the nominal expectation `sum(nominal * loss)`.
 - radius -> inf: the ball eventually contains a distribution putting all
   its mass on the single worst-case scenario, so the worst case saturates
-  at `loss.max()` (approached in the limit, never exactly attained by a
-  finite-iteration dual solve -- see `progress/decisions.md`).
+  at `loss.max()`. That happens exactly, not only in the limit: from
+  `radius = -log(nominal mass of that scenario)` on, the worst case is
+  `loss.max()`, and `KLAmbiguitySet` returns it directly instead of
+  chasing a dual minimizer that sits at infinity.
 
 Run:
     python examples/01_kl_dro_radius_sweep.py
@@ -28,7 +30,7 @@ from optora.solvers import GradientDescent
 
 NOMINAL = torch.tensor([0.4, 0.3, 0.2, 0.1], dtype=torch.float64)
 LOSS = torch.tensor([0.5, 1.5, 3.0, 8.0], dtype=torch.float64)
-DUAL_SOLVER = GradientDescent(step_size=0.1, max_iter=2000, tol=1e-9)
+DUAL_SOLVER = GradientDescent(step_size=1.0, max_iter=2000, tol=1e-9)
 
 
 def main() -> None:

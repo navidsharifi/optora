@@ -1,5 +1,7 @@
 """Tests for `KLAmbiguitySet`."""
 
+import math
+
 import pytest
 import torch
 
@@ -78,10 +80,15 @@ def test_worst_case_expectation_uses_custom_dual_solver() -> None:
 
     result = ambiguity_set.worst_case_expectation(loss)
 
+    # The solver iterates on the loss standardized to unit spread, so its
+    # returned point is read in those units and the dual value is rescaled
+    # by the spread (2.0 here) with no shift (the minimum loss is 0.0).
     assert fake_solver.received_problem is not None
     eta = torch.exp(torch.tensor(1.0))
-    expected = eta * 0.3 + eta * torch.logsumexp(
-        torch.log(nominal) + loss / eta, dim=-1
+    standardized = loss / 2.0
+    expected = 2.0 * (
+        eta * 0.3
+        + eta * torch.logsumexp(torch.log(nominal) + standardized / eta, dim=-1)
     )
     assert torch.allclose(result, expected, atol=1e-6)
 
@@ -218,7 +225,10 @@ def test_log_nominal_buffer_moves_with_the_module() -> None:
     assert ambiguity_set.log_nominal.dtype == torch.float64
 
 
-def test_initial_dual_point_is_built_once_from_the_configured_log_eta() -> None:
+def test_initial_dual_point_is_given_in_raw_loss_units() -> None:
+    # `initial_log_eta` is a log of a quantity with the units of `loss`. The
+    # solver iterates on the loss standardized to unit spread (2.0 here), so
+    # it must receive log(eta / 2.0), not the configured value.
     nominal = torch.tensor([0.5, 0.5], dtype=torch.float64)
     fake_solver = _RecordingSolver(log_eta=1.0)
     ambiguity_set = KLAmbiguitySet(
@@ -228,9 +238,29 @@ def test_initial_dual_point_is_built_once_from_the_configured_log_eta() -> None:
     ambiguity_set.worst_case_expectation(torch.tensor([0.0, 2.0], dtype=torch.float64))
 
     assert fake_solver.received_problem is not None
-    assert torch.equal(
+    assert torch.allclose(
         fake_solver.received_problem.initial_point,
-        torch.tensor(-0.75, dtype=torch.float64),
+        torch.tensor(-0.75 - math.log(2.0), dtype=torch.float64),
+    )
+
+
+def test_warm_start_survives_a_change_of_loss_scale() -> None:
+    # The cache holds raw-unit dual variables, so a later call on a loss of a
+    # different spread starts from the same physical (eta, lam), re-expressed
+    # in that call's standardized units, rather than from a stale number.
+    nominal = torch.tensor([0.5, 0.5], dtype=torch.float64)
+    fake_solver = _RecordingSolver(log_eta=1.0)
+    ambiguity_set = KLAmbiguitySet(nominal, radius=0.3, dual_solver=fake_solver)
+
+    ambiguity_set.worst_case_expectation(torch.tensor([0.0, 2.0], dtype=torch.float64))
+    ambiguity_set.worst_case_expectation(torch.tensor([0.0, 8.0], dtype=torch.float64))
+
+    # First solve ended at log(eta / 2) = 1, i.e. log(eta) = 1 + log 2; on a
+    # spread of 8 that is log(eta / 8) = 1 + log 2 - log 8.
+    assert fake_solver.received_problem is not None
+    assert torch.allclose(
+        fake_solver.received_problem.initial_point,
+        torch.tensor(1.0 + math.log(2.0) - math.log(8.0), dtype=torch.float64),
     )
 
 

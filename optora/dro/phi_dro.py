@@ -91,8 +91,9 @@ class PhiAmbiguitySet(DualAmbiguitySet):
         dual_solver: Solver minimizing the dual objective over
             `(log(eta), lam)`.
         initial_dual_point: Values of `(log(eta), lam)` the first dual solve
-            starts from; later solves warm-start from the previous optimum
-            (see `optora.core.dro_base.DualAmbiguitySet`).
+            starts from, in the units of the raw loss (`eta` and `lam` have
+            the units of `loss`); later solves warm-start from the previous
+            optimum (see `optora.core.dro_base.DualAmbiguitySet`).
     """
 
     def __init__(
@@ -102,8 +103,8 @@ class PhiAmbiguitySet(DualAmbiguitySet):
         radius: float | torch.Tensor,
         phi_conjugate: Callable[[torch.Tensor], torch.Tensor],
         dual_solver: Solver[MinimizationProblem, MinimizationResult] | None = None,
-        initial_log_eta: float = 0.0,
-        initial_lam: float = 0.0,
+        initial_log_eta: float | None = None,
+        initial_lam: float | None = None,
         validate: bool = False,
     ) -> None:
         """Initialize the phi-divergence ambiguity set.
@@ -124,70 +125,88 @@ class PhiAmbiguitySet(DualAmbiguitySet):
                 `(log(eta), lam)`. Required when evaluating a positive-radius
                 set.
             initial_log_eta: Value of `log(eta)` the first dual solve starts
-                from. Later calls warm-start from the previous solve's
+                from, in the units of the raw loss (`eta` has the units of
+                `loss`). Later calls warm-start from the previous solve's
                 optimum unless `reset_warm_start()` is called.
-            initial_lam: Value of `lam` the first dual solve starts from,
-                warm-started on later calls alongside `initial_log_eta`.
+            initial_lam: Value of `lam` the first dual solve starts from, in
+                the units of the raw loss, warm-started on later calls
+                alongside `initial_log_eta`. Give both or neither: when
+                both are `None`, the default, the solve starts at `eta`
+                equal to the loss spread and `lam` equal to the minimum
+                loss, which is the same point whatever the scale or offset
+                of the loss.
             validate: Whether to check that `nominal` is nonnegative and
                 sums to one. The check synchronizes with the device, so it
                 is opt-in and off by default.
 
         Raises:
-            ValueError: If `radius` is a negative float, or if `validate`
-                is set and `nominal` is not a valid probability
+            ValueError: If `radius` is a negative float, if only one of
+                `initial_log_eta` and `initial_lam` is given, or if
+                `validate` is set and `nominal` is not a valid probability
                 distribution.
         """
+        if (initial_log_eta is None) != (initial_lam is None):
+            raise ValueError(
+                "initial_log_eta and initial_lam must be given together or not at all."
+            )
         super().__init__(
             nominal=nominal,
             divergence=divergence,
             radius=radius,
             dual_solver=dual_solver,
             initial_dual_point=torch.tensor(
-                [initial_log_eta, initial_lam],
+                [0.0, 0.0]
+                if initial_log_eta is None
+                else [initial_log_eta, initial_lam],
                 dtype=nominal.dtype,
                 device=nominal.device,
             ),
+            initial_in_raw_units=initial_log_eta is not None,
             validate=validate,
         )
         self.phi_conjugate = phi_conjugate
 
-    def worst_case_expectation(self, loss: torch.Tensor) -> torch.Tensor:
-        """Compute the worst-case expected loss over the phi-divergence ambiguity set.
+    def _dual_objective(
+        self,
+        point: torch.Tensor,
+        loss: torch.Tensor,
+        radius: float | torch.Tensor,
+    ) -> torch.Tensor:
+        r"""Evaluate the phi dual at `point = (log(eta), lam)` on the standardized loss.
 
         Args:
-            loss: Per-scenario loss values of shape `(..., n)`, one trailing
-                entry per element of `nominal`'s support. Leading dimensions
-                are a batch of independent loss vectors, each solved with
-                its own dual pair `(log(eta), lam)` in a single joint solve.
+            point: Dual variables `(log(eta), lam)` of shape
+                `batch_shape + (2,)`.
+            loss: Standardized loss of shape `(..., n)`.
+            radius: Phi-divergence radius, broadcastable against
+                `batch_shape`.
 
         Returns:
-            A tensor of shape `(...)` holding the worst-case expected loss:
-            the exact `sum(nominal * loss)` when `radius` is zero (the
-            ambiguity set then contains only `nominal`), otherwise the
-            convex dual objective evaluated at the `(log(eta), lam)` found
-            by `dual_solver`.
-
-        Raises:
-            ValueError: If `loss`'s trailing dimension does not match
-                `nominal`'s support size, or its batch shape does not
-                broadcast against `nominal` and `radius`.
-            RuntimeError: If `radius` is positive and `dual_solver` is
-                `None`.
+            $\eta \cdot \mathrm{radius} + \lambda + \eta\,
+            \mathbb{E}_{\mathrm{nominal}}[\phi^*((\mathrm{loss} - \lambda)
+            / \eta)]$ per batch element.
         """
-        batch_shape = self._batch_shape(loss)
-        if self._radius_is_zero:
-            return self._nominal_expectation(loss, batch_shape)
+        eta = torch.exp(point[..., 0])
+        lam = point[..., 1]
+        scaled_shift = (loss - lam.unsqueeze(-1)) / eta.unsqueeze(-1)
+        conjugate_term = torch.sum(
+            self.nominal * self.phi_conjugate(scaled_shift), dim=-1
+        )
+        return eta * radius + lam + eta * conjugate_term
 
-        def dual_objective(params: torch.Tensor) -> torch.Tensor:
-            eta = torch.exp(params[..., 0])
-            lam = params[..., 1]
-            scaled_shift = (loss - lam.unsqueeze(-1)) / eta.unsqueeze(-1)
-            conjugate_term = torch.sum(
-                self.nominal * self.phi_conjugate(scaled_shift), dim=-1
-            )
-            return eta * self.radius + lam + eta * conjugate_term
+    def _to_standard_units(
+        self, point: torch.Tensor, shift: torch.Tensor, scale: torch.Tensor
+    ) -> torch.Tensor:
+        """Map `(log(eta), lam)` to `(log(eta / scale), (lam - shift) / scale)`."""
+        log_eta, lam = point.unbind(-1)
+        return torch.stack((log_eta - torch.log(scale), (lam - shift) / scale), dim=-1)
 
-        return self._solve_dual(dual_objective, batch_shape)
+    def _from_standard_units(
+        self, point: torch.Tensor, shift: torch.Tensor, scale: torch.Tensor
+    ) -> torch.Tensor:
+        """Map `(log(eta / scale), (lam - shift) / scale)` back to `(log(eta), lam)`."""
+        log_eta, lam = point.unbind(-1)
+        return torch.stack((log_eta + torch.log(scale), lam * scale + shift), dim=-1)
 
 
 class ChiSquareAmbiguitySet(PhiAmbiguitySet):
@@ -225,8 +244,8 @@ class ChiSquareAmbiguitySet(PhiAmbiguitySet):
         radius: float | torch.Tensor,
         eps: float = 1e-12,
         dual_solver: Solver[MinimizationProblem, MinimizationResult] | None = None,
-        initial_log_eta: float = 0.0,
-        initial_lam: float = 0.0,
+        initial_log_eta: float | None = None,
+        initial_lam: float | None = None,
         validate: bool = False,
     ) -> None:
         """Initialize the chi-square ambiguity set.
@@ -246,17 +265,22 @@ class ChiSquareAmbiguitySet(PhiAmbiguitySet):
                 `(log(eta), lam)`. Required when evaluating a positive-radius
                 set.
             initial_log_eta: Value of `log(eta)` the first dual solve starts
-                from. Later calls warm-start from the previous solve's
-                optimum unless `reset_warm_start()` is called.
-            initial_lam: Value of `lam` the first dual solve starts from,
-                warm-started on later calls alongside `initial_log_eta`.
+                from, in the units of the raw loss. Later calls warm-start
+                from the previous solve's optimum unless `reset_warm_start()`
+                is called.
+            initial_lam: Value of `lam` the first dual solve starts from, in
+                the units of the raw loss, warm-started on later calls
+                alongside `initial_log_eta`. Give both or neither; the
+                default `None` starts at `eta` equal to the loss spread and
+                `lam` equal to the minimum loss, whatever their scale.
             validate: Whether to check that `nominal` is nonnegative and
                 sums to one. The check synchronizes with the device, so it
                 is opt-in and off by default.
 
         Raises:
             ValueError: If `radius` is a negative float, if `eps` is not
-                positive, or if `validate` is set and `nominal` is not a
+                positive, if only one of `initial_log_eta` and `initial_lam`
+                is given, or if `validate` is set and `nominal` is not a
                 valid probability distribution.
         """
         super().__init__(
@@ -269,6 +293,23 @@ class ChiSquareAmbiguitySet(PhiAmbiguitySet):
             initial_lam=initial_lam,
             validate=validate,
         )
+
+    def _saturation_radius(self, top_mass: torch.Tensor) -> torch.Tensor:
+        r"""Return $1/P^\star - 1$, the chi-square divergence of the top-loss scenarios.
+
+        The nominal restricted to the highest-loss scenarios and
+        renormalized has chi-square divergence
+        $(1 - P^\star)/P^\star = 1/P^\star - 1$ from the nominal, where
+        $P^\star$ is the nominal mass they carry.
+
+        Args:
+            top_mass: Nominal mass $P^\star$ carried by the highest-loss
+                scenarios.
+
+        Returns:
+            $1/P^\star - 1$, which is `inf` when that mass is zero.
+        """
+        return 1.0 / top_mass - 1.0
 
 
 class TotalVariationAmbiguitySet(AmbiguitySet):

@@ -72,6 +72,46 @@ Solved over `log(eta)` rather than `eta` itself, so the unconstrained
 `GradientDescent` solver can't wander into `eta <= 0`. `radius == 0`
 returns `E_nominal[loss]` exactly, skipping the numerical solve.
 
+### Dual-solved sets: loss scale and saturation
+
+`KLAmbiguitySet` and `ChiSquareAmbiguitySet` (and any other
+`PhiAmbiguitySet`) share two guarantees, implemented once in
+`optora.core.dro_base.DualAmbiguitySet`.
+
+**The dual is solved on a standardized loss.** The set of candidate
+distributions does not depend on `loss`, so for $a > 0$
+
+$$
+\sup_q \mathbb{E}_q[a\,\ell + b] = a \sup_q \mathbb{E}_q[\ell] + b .
+$$
+
+The dual's curvature grows with the squared loss spread, so a step size
+tuned on an order-one loss diverges on a wide one (`eta` overflows and
+the objective becomes `nan`). The dual is therefore minimized on
+$(\ell - \min\ell)/(\max\ell - \min\ell)$ with a detached shift and scale.
+For any fixed constants this is the same function of `loss`, so values
+and gradients are unchanged; only the conditioning is.
+
+!!! note "Dual-solver step sizes are relative to a unit-spread loss"
+    Because the solver iterates on the standardized loss, a step size
+    means the same thing at every loss scale: order one (up to about 2)
+    for KL, and at most about 0.3 for the stiffer chi-square dual. A step
+    tuned on a raw loss with spread $S$ should be multiplied by roughly
+    $S$. `initial_log_eta` and `initial_lam` are still read in the units of
+    the raw loss when given; left at `None` they start at `eta` equal to the
+    loss spread (and `lam` equal to the minimum loss), the same standardized
+    point at every scale.
+
+**Saturation returns `max(loss)` exactly.** Once the radius reaches the
+divergence of the distribution concentrated on the highest-loss scenarios,
+that distribution lies in the set and the worst case is $\max\ell$. With
+$P^\star$ the nominal mass on those scenarios, the thresholds are
+$-\log P^\star$ for KL and $1/P^\star - 1$ for chi-square. Past them the
+dual has no minimizer (its infimum is approached only as `eta` goes to
+zero), so no solver converges; the sets return $\max\ell$ directly, using
+device reductions only. The gradient there is the nominal restricted to
+those scenarios and renormalized, which lies inside the set.
+
 ### `PhiAmbiguitySet`, `ChiSquareAmbiguitySet`, `TotalVariationAmbiguitySet`
 
 The general phi-divergence-ball case, plus two named instances.

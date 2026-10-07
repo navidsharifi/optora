@@ -113,10 +113,13 @@ def test_worst_case_expectation_gradient_matches_finite_differences() -> None:
     # `dual_solver`. Verify this envelope-theorem property directly.
     nominal = torch.tensor([0.5, 0.5], dtype=torch.float64)
     targets = torch.tensor([1.0, 5.0], dtype=torch.float64)
+    # The dual is solved on the loss standardized to unit spread, so its
+    # curvature does not grow with the loss (spread 24 at x = 0): a step of
+    # order one converges, where 0.1 would need roughly 24 times the budget.
     ambiguity_set = KLAmbiguitySet(
         nominal,
         radius=0.2,
-        dual_solver=GradientDescent(step_size=0.1, max_iter=500, tol=1e-9),
+        dual_solver=GradientDescent(step_size=1.0, max_iter=2000, tol=1e-12),
     )
 
     def objective(x: torch.Tensor) -> torch.Tensor:
@@ -217,7 +220,7 @@ def test_kl_ambiguity_radius_improves_worst_case_over_naive_decision() -> None:
     ambiguity_set = KLAmbiguitySet(
         nominal,
         radius=0.3,
-        dual_solver=GradientDescent(step_size=0.3, max_iter=150, tol=1e-8),
+        dual_solver=GradientDescent(step_size=1.0, max_iter=500, tol=1e-10),
     )
 
     def loss_fn(x: torch.Tensor) -> torch.Tensor:
