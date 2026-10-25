@@ -116,6 +116,11 @@ bisection drives $t$ to the top of the bracket, and $q_t$ *is* the nominal
 restricted to those scenarios and renormalized. The value is then exactly
 $\max\ell$ and the gradient is that distribution.
 
+Here and below, $\max\ell$ and $\min\ell$ range over the nominal's
+support only. Both divergences are infinite off it, and every tilt
+reweights the nominal, so a scenario with zero nominal mass is unreachable
+however large its loss or the radius.
+
 **The tilt is computed on a standardized loss.** The set of candidate
 distributions does not depend on `loss`, so for $a > 0$
 

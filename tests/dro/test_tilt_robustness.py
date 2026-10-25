@@ -6,8 +6,9 @@ These tests pin the properties that make that safe, using the real
 formulations: exact affine equivariance, no `nan` on any loss scale or
 support size (issues #48 and #51), a value that never exceeds `max(loss)`,
 accuracy that survives a vanishing radius (issue #49), saturated elements
-that cannot disturb the rest of a batch, and gradients that stay valid
-distributions inside the ambiguity set.
+that cannot disturb the rest of a batch, gradients that stay valid
+distributions inside the ambiguity set, and no mass ever placed on a
+scenario the nominal gives zero weight.
 """
 
 import math
@@ -259,6 +260,34 @@ def test_a_constant_loss_returns_the_constant(
 
     assert float(value.detach()) == 3.5
     assert torch.allclose(gradient, NOMINAL, atol=1e-15)
+
+
+@pytest.mark.parametrize(
+    "ambiguity_type", [KLAmbiguitySet, ChiSquareAmbiguitySet], ids=["kl", "chi_square"]
+)
+@pytest.mark.parametrize("radius", [1e-10, 0.3, 30.0, 1e3])
+def test_a_zero_weight_maximum_is_unreachable_at_any_radius(
+    ambiguity_type: type[KLAmbiguitySet] | type[ChiSquareAmbiguitySet],
+    radius: float,
+) -> None:
+    # Both divergences are infinite off the nominal's support, so the loss of
+    # 9 on the zero-mass scenario must never enter the worst case. KL used to
+    # clamp that mass to 1e-12 and leak onto the scenario once the tilt was
+    # steep enough, reporting nearly 9 at radius 1e3; the exact answer there
+    # is the largest loss on the support, 5.
+    nominal = torch.tensor([0.0, 0.3, 0.3, 0.4], dtype=torch.float64)
+    loss = torch.tensor([9.0, 1.0, 2.0, 5.0], dtype=torch.float64, requires_grad=True)
+    ambiguity_set = ambiguity_type(nominal, radius=radius)
+
+    value = ambiguity_set.worst_case_expectation(loss)
+    (gradient,) = torch.autograd.grad(value, loss)
+
+    reference_fn = (
+        kl_worst_case if ambiguity_type is KLAmbiguitySet else (chi_square_worst_case)
+    )
+    reference = reference_fn(nominal.numpy(), loss.detach().numpy(), radius)
+    assert abs(float(value.detach()) - reference) <= 1e-9
+    assert float(gradient[0]) == 0.0
 
 
 @pytest.mark.parametrize("make", [_kl, _chi_square], ids=["kl", "chi_square"])

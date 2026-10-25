@@ -333,6 +333,15 @@ class TiltedAmbiguitySet(AmbiguitySet):
     the same distribution; standardizing only keeps the tilt parameter and
     the divergence well conditioned on a loss of any scale or offset.
 
+    The maximum and minimum are taken over the support of the nominal only.
+    Every tilt is a reweighting $q \propto \mathrm{nominal} \cdot w$, so a
+    scenario with zero nominal mass is unreachable whatever its loss, and
+    letting its loss set the scale would both misreport the saturated value
+    as that unreachable loss and leave no zero gap on the support for the
+    tilt to concentrate on. Such scenarios are given the largest gap, `1`,
+    which keeps every intermediate of the tilt finite while their weight
+    stays exactly zero.
+
     The worst-case expectation is reported as
     $\sum_i q^\star_i \,\mathrm{loss}_i$ with $q^\star$ detached. By
     Danskin's theorem the gradient of $\sup_{q \in \mathcal{U}}
@@ -360,11 +369,12 @@ class TiltedAmbiguitySet(AmbiguitySet):
         step needs the distribution.
 
         Args:
-            gap: Shortfall of each scenario below the maximum loss,
-                standardized to unit spread, of shape `(..., n)` and
-                therefore lying in $[0, 1]$ with at least one zero entry.
-                Parameterizing by the gap rather than by the loss keeps the
-                tilt of the highest-loss scenarios exactly `1` however
+            gap: Shortfall of each scenario below the maximum loss on the
+                nominal's support, standardized to unit spread, of shape
+                `(..., n)` and therefore lying in $[0, 1]$ with at least one
+                zero entry on the support; scenarios off the support carry
+                `1`. Parameterizing by the gap rather than by the loss keeps
+                the tilt of the highest-loss scenarios exactly `1` however
                 extreme the tilt becomes.
             tilt: Path parameter in $[0, 1)$ of shape `batch_shape`, where
                 `0` is `nominal` and the upper end is the distribution
@@ -442,8 +452,8 @@ class TiltedAmbiguitySet(AmbiguitySet):
             the exact `sum(nominal * loss)` when `radius` is a zero float
             (the set then contains only `nominal`), and otherwise the
             expectation of `loss` under the feasible tilted distribution
-            the bisection returned, which is exactly `max(loss)` once the
-            radius saturates the set.
+            the bisection returned, which is exactly the largest loss on
+            the nominal's support once the radius saturates the set.
 
             The expectation is accumulated as a correction to `max(loss)`
             rather than directly. Every term of
@@ -462,10 +472,18 @@ class TiltedAmbiguitySet(AmbiguitySet):
             return self._nominal_expectation(loss, batch_shape)
 
         detached = loss.detach()
-        max_loss = torch.amax(detached, dim=-1, keepdim=True)
-        spread = max_loss - torch.amin(detached, dim=-1, keepdim=True)
-        gap = (max_loss - detached) / torch.where(
-            spread > 0, spread, torch.ones_like(spread)
+        on_support = self.nominal > 0.0
+        max_loss = torch.amax(
+            torch.where(on_support, detached, -torch.inf), dim=-1, keepdim=True
+        )
+        spread = max_loss - torch.amin(
+            torch.where(on_support, detached, torch.inf), dim=-1, keepdim=True
+        )
+        gap = torch.where(
+            on_support,
+            (max_loss - detached)
+            / torch.where(spread > 0, spread, torch.ones_like(spread)),
+            1.0,
         )
         distribution, _ = self._tilted_distribution(
             gap, self._solve_tilt(gap, batch_shape)
