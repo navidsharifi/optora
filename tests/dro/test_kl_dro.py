@@ -144,14 +144,15 @@ def test_is_an_ambiguity_set_instance() -> None:
     assert isinstance(ambiguity_set, TiltedAmbiguitySet)
 
 
-def test_log_nominal_is_cached_as_a_clamped_non_persistent_buffer() -> None:
+def test_log_nominal_is_cached_as_an_exact_non_persistent_buffer() -> None:
     nominal = torch.tensor([0.5, 0.5, 0.0])
     ambiguity_set = KLAmbiguitySet(nominal, radius=0.1, eps=1e-10)
 
     log_nominal = dict(ambiguity_set.named_buffers())["log_nominal"]
 
-    expected = torch.log(torch.tensor([0.5, 0.5, 1e-10]))
-    assert torch.allclose(log_nominal, expected)
+    expected = torch.tensor([0.5, 0.5]).log()
+    assert torch.allclose(log_nominal[:2], expected)
+    assert log_nominal[2] == -torch.inf
     assert "log_nominal" not in ambiguity_set.state_dict()
 
 

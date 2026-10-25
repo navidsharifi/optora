@@ -1,5 +1,6 @@
 """Shared pytest fixtures for the Optora test suite."""
 
+import os
 from collections.abc import Callable, Iterator
 from contextlib import ExitStack, contextmanager
 from typing import Any
@@ -7,8 +8,20 @@ from unittest.mock import patch
 
 import pytest
 import torch
+from hypothesis import settings
 
 FLOAT_DTYPES = (torch.float32, torch.float64)
+
+# Property-based tests run small tensor solves whose first call pays PyTorch's
+# one-off kernel warm-up, so a per-example deadline would report that latency
+# as flakiness rather than measure anything about the code under test. The
+# `thorough` profile is for an occasional deep local search, selected with
+# `HYPOTHESIS_PROFILE=thorough`.
+settings.register_profile("optora", deadline=None, print_blob=True)
+settings.register_profile(
+    "thorough", parent=settings.get_profile("optora"), max_examples=2000
+)
+settings.load_profile(os.environ.get("HYPOTHESIS_PROFILE", "optora"))
 
 
 @pytest.fixture(

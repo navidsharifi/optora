@@ -54,11 +54,13 @@ class KLAmbiguitySet(TiltedAmbiguitySet):
         radius: Nonnegative bound on the KL divergence of any distribution
             inside the ambiguity set from `nominal`, either a float or a
             tensor of radii evaluated as one batch.
-        eps: Small positive constant used to clamp `nominal` away from zero
-            before taking the logarithm inside the tilt.
-        log_nominal: Elementwise logarithm of the clamped `nominal`, a
-            constant of the tilt cached once rather than recomputed on
-            every call.
+        eps: Small positive constant passed through to the underlying
+            `KLDivergence`, which clamps its arguments away from zero.
+        log_nominal: Elementwise logarithm of `nominal`, a constant of the
+            tilt cached once rather than recomputed on every call. It is
+            exactly $-\infty$ on scenarios with zero nominal mass, so the
+            tilt never moves mass off the nominal's support, where the KL
+            divergence is infinite.
     """
 
     log_nominal: torch.Tensor
@@ -81,9 +83,10 @@ class KLAmbiguitySet(TiltedAmbiguitySet):
                 tensor radius is broadcast against the batch shape of
                 `worst_case_expectation`'s `loss`, evaluating a sweep of
                 radii in one solve.
-            eps: Small positive constant used to clamp `nominal` away from
-                zero before taking the logarithm inside the tilt, and
-                passed through to the underlying `KLDivergence`.
+            eps: Small positive constant passed through to the underlying
+                `KLDivergence`, used by `contains(...)`. The tilt itself
+                takes the exact logarithm of `nominal` and needs no
+                clamping.
             validate: Whether to check that `nominal` is nonnegative and
                 sums to one. The check synchronizes with the device, so it
                 is opt-in and off by default.
@@ -100,9 +103,14 @@ class KLAmbiguitySet(TiltedAmbiguitySet):
             validate=validate,
         )
         self.eps = eps
+        on_support = nominal > 0.0
         self.register_buffer(
             "log_nominal",
-            torch.log(torch.clamp(nominal, min=eps)),
+            torch.where(
+                on_support,
+                torch.log(torch.where(on_support, nominal, torch.ones_like(nominal))),
+                -torch.inf,
+            ),
             persistent=False,
         )
 
