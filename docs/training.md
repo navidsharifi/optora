@@ -156,12 +156,90 @@ subgradient is a valid descent signal for a subgradient method or
 finite differences, alongside `gradcheck` and `gradgradcheck` in float64 at
 smooth points.
 
+## Minibatches from a population
+
+The pattern above treats `nominal` as the whole training distribution. When
+the data are instead a stream of i.i.d. minibatches from an unknown
+population $P_0$, running an ambiguity set on each minibatch's uniform
+empirical distribution $\hat P_m$ is a **biased** estimate of the
+population worst case: the supremum is nonlinear in the sample, so
+
+$$
+\mathbb{E}\Big[\sup_{D(q \,\|\, \hat P_m) \le \rho} \mathbb{E}_q[\ell]\Big]
+\neq \sup_{D(q \,\|\, P_0) \le \rho} \mathbb{E}_q[\ell],
+$$
+
+and its gradient is not an unbiased stochastic gradient (for KL, it is the
+log-sum-exp of a subsample). [`optora.dro.minibatch`](api/dro/minibatch.md)
+provides the two standard remedies:
+
+=== "Multilevel Monte Carlo"
+
+    `MultilevelMonteCarloEstimator` keeps the exact solve of any
+    nominal-only ambiguity set and removes its bias up to the largest batch
+    size $n_0 2^L$, at an expected batch size of $n_0 L / (1 - 2^{-L})$
+    (Blanchet and Glynn 2015; Levy et al. 2020). The batch size is drawn
+    per step:
+
+    ```python
+    import functools
+
+    from optora import KLAmbiguitySet, MultilevelMonteCarloEstimator
+
+    estimator = MultilevelMonteCarloEstimator(
+        functools.partial(KLAmbiguitySet, radius=0.1),
+        base_batch_size=32,
+        max_level=4,
+    )
+
+    for _ in range(num_steps):
+        optimizer.zero_grad()
+        features, targets = sample(estimator.sample_batch_size())
+        per_sample_loss = (model(features).squeeze(-1) - targets) ** 2
+        estimator(per_sample_loss).backward()
+        optimizer.step()
+    ```
+
+=== "Stochastic dual"
+
+    `StochasticPhiDual` keeps the phi-divergence dual variables
+    $(\log \eta, \lambda)$ as learnable parameters. For fixed dual
+    variables the dual is an expectation over $P_0$, so its minibatch mean
+    is exactly unbiased with a fixed batch size; the dual variables train
+    with the model (Levy et al. 2020; Jin et al. 2021):
+
+    ```python
+    import torch
+
+    from optora import StochasticPhiDual
+
+    dual = StochasticPhiDual(radius=0.1, phi_conjugate=torch.expm1)  # KL
+    optimizer = torch.optim.Adam([*model.parameters(), *dual.parameters()])
+
+    for features, targets in loader:
+        optimizer.zero_grad()
+        per_sample_loss = (model(features).squeeze(-1) - targets) ** 2
+        dual(per_sample_loss).backward()
+        optimizer.step()
+    ```
+
+    Use `optora.dro.chi_square_conjugate` for the chi-square ball. Start
+    `initial_lam` near the typical loss: KL's exponential conjugate makes
+    the objective's variance sensitive to $\lambda$ trailing the loss.
+
+| | `MultilevelMonteCarloEstimator` | `StochasticPhiDual` |
+| --- | --- | --- |
+| Unbiased for | The plug-in worst case at $n_0 2^L$ samples | The population dual at the current $(\eta, \lambda)$ |
+| Batch size | Random, $n_0 2^J$ | Fixed, any |
+| Ambiguity sets | Any set built from a nominal alone (KL, chi-square, total variation, general phi) | Phi-divergence balls with a finite conjugate (KL, chi-square) |
+| Per-step cost | Three exact solves | One pass over the minibatch, no inner solve |
+
 ## Practical notes
 
 | Topic | Guidance |
 | --- | --- |
 | Inner cost | `KLAmbiguitySet` and `ChiSquareAmbiguitySet` locate the worst case by a bisection whose trip count is fixed by the dtype, so every step costs the same and there is nothing to tune or warm-start. |
-| Minibatches | Pass a batched loss of shape `(..., n)`; the inner problems decouple across leading dimensions and are bisected jointly in one call. |
+| Batched losses | Pass a batched loss of shape `(..., n)`; the inner problems decouple across leading dimensions and are bisected jointly in one call. For minibatches drawn from a population, see [Minibatches from a population](#minibatches-from-a-population). |
 | Device and dtype | `ambiguity_set.to(device)` moves `nominal` and every cached buffer; the returned value follows the loss's dtype and device. Half-precision losses (including under `torch.autocast`) are solved in float32 and rounded once; see [Numerical behaviour](numerics.md). |
 | Debugging | `validate=True` checks `nominal`, a tensor `radius`, and every `loss` for non-finite or invalid values, at one host synchronization per call. |
 | Differentiable inputs | Only `loss`. Treat `nominal` and a tensor `radius` as constants: gradients with respect to them are not supported and are not meaningful. |

@@ -96,6 +96,7 @@ nav = [
     { "DRO" = [
       { "Overview" = "api/dro/index.md" },
       { "KL-DRO" = "api/dro/kl_dro.md" },
+      { "Minibatch" = "api/dro/minibatch.md" },
       { "Minimax Solver" = "api/dro/minimax_solver.md" },
       { "Phi-DRO" = "api/dro/phi_dro.md" },
       { "Wasserstein DRO" = "api/dro/wasserstein_dro.md" },
