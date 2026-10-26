@@ -199,7 +199,10 @@ def test_gradient_is_a_distribution_inside_the_ambiguity_set(
 ) -> None:
     # By Danskin's theorem the gradient of the worst case with respect to
     # the loss is the worst-case distribution itself, tilted or saturated
-    # alike, so it must be a probability vector the set contains.
+    # alike, so it must be a probability vector the set contains. The
+    # reference divergence cancels to ~0 when the gradient is close to the
+    # nominal, so its rounding has an absolute floor of about n * eps that
+    # the relative slack alone cannot absorb at a vanishing radius.
     saturation = KL_SATURATION if make is _kl else CHI_SQUARE_SATURATION
     radius = multiple * saturation
     ambiguity_set = make(radius)  # type: ignore[operator]
@@ -211,7 +214,8 @@ def test_gradient_is_a_distribution_inside_the_ambiguity_set(
     assert bool((gradient >= 0.0).all())
     assert abs(float(gradient.sum()) - 1.0) <= 1e-12
     divergence = float(ambiguity_set.divergence(gradient, NOMINAL))
-    assert divergence <= radius * (1.0 + 1e-9)
+    rounding_floor = NOMINAL.numel() * torch.finfo(NOMINAL.dtype).eps
+    assert divergence <= radius * (1.0 + 1e-9) + rounding_floor
 
 
 def test_saturated_gradient_is_the_nominal_restricted_to_the_top_scenarios() -> None:
