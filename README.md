@@ -99,6 +99,11 @@ python -m build
 python -m tools.smoke
 ```
 
+CI also times the benchmarks in `tests/benchmarks/` against the Pull
+Request's base commit and fails on a large regression; each benchmark's exact
+host-synchronization budget is checked by every `pytest` run (see
+[CONTRIBUTING.md](CONTRIBUTING.md#performance-guard)).
+
 Generate the hierarchical API reference, preview it, or build the complete
 documentation site without maintaining API pages or navigation by hand:
 

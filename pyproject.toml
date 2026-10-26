@@ -48,7 +48,10 @@ dev = [
   "scipy>=1.11",
   # Test-only: property-based tests of the ambiguity-set invariants in
   # tests/dro/test_properties.py. Never a runtime dependency of optora.
-  "hypothesis>=6.100"
+  "hypothesis>=6.100",
+  # Test-only: the performance guard in tests/benchmarks/. Never a runtime
+  # dependency of optora.
+  "pytest-benchmark>=5.1"
 ]
 docs = [
   "zensical>=0.0.11",
@@ -78,7 +81,9 @@ include = ["optora*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-addopts = "-q"
+# Benchmarks run once as plain tests by default, so their host-sync budgets
+# are checked everywhere; `--benchmark-enable` times them (see CONTRIBUTING.md).
+addopts = "-q --benchmark-disable"
 pythonpath = ["."]
 
 # Coverage gate enforced in CI by `pytest --cov`; `fail_under` is its single

@@ -29,8 +29,25 @@ pip install -e ".[dev,docs]"
 4. Format your code (`ruff format .`) and lint it (`ruff check .`).
 5. Type-check with `mypy` (strict mode).
 6. Run the test suite with the coverage gate (`pytest --cov`).
-7. Commit using Conventional Commits.
-8. Open a Pull Request linked to the relevant issue.
+7. If you touched a hot path, time it (see [Performance Guard](#performance-guard)).
+8. Commit using Conventional Commits.
+9. Open a Pull Request linked to the relevant issue.
+
+## Performance Guard
+
+`tests/benchmarks/` holds one representative workload per ambiguity set,
+divergence, and solver. Each pins an exact host-synchronization budget, which
+`pytest` checks on every run, and a wall-clock time, which CI compares
+against the Pull Request's base commit, failing on a regression of the
+minimum time above the `BENCHMARK_MAX_REGRESSION` threshold in
+`.github/workflows/ci.yml`. A change that removes a synchronization must
+lower that benchmark's `host_syncs` budget. To compare locally:
+
+```bash
+pytest tests/benchmarks --benchmark-enable --benchmark-only --benchmark-save=base
+# ...make your change...
+pytest tests/benchmarks --benchmark-enable --benchmark-only --benchmark-compare
+```
 
 ## Dependencies
 

@@ -106,6 +106,52 @@ jobs:
       - run: python -m tools.docs check
       - run: python -m tools.docs build
 
+  # Times tests/benchmarks/ on this commit and, on a pull request, on its base
+  # commit in the same job, failing when the minimum time of a benchmark both
+  # commits define regresses by more than BENCHMARK_MAX_REGRESSION. The
+  # threshold sits above shared-runner noise, so it catches gross regressions;
+  # the exact host-sync budgets are enforced by every job of the test matrix.
+  benchmarks:
+    name: benchmarks
+    runs-on: ubuntu-latest
+    env:
+      BENCHMARK_MAX_REGRESSION: 50%
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: python -m pip install -U pip
+      - run: python -m pip install torch --index-url ${{ env.TORCH_INDEX_URL }}
+      # The base runs its own suite, so a base without one is skipped.
+      - name: Benchmark the base commit
+        if: github.event_name == 'pull_request'
+        shell: bash
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          git worktree add "$RUNNER_TEMP/base" "$BASE_SHA"
+          cd "$RUNNER_TEMP/base"
+          if [ -d tests/benchmarks ]; then
+            python -m pip install -e ".[dev]"
+            python -m pytest tests/benchmarks --benchmark-enable --benchmark-only \
+              --benchmark-storage="file://$RUNNER_TEMP/benchmarks" --benchmark-save=base
+          fi
+      - run: python -m pip install -e ".[dev]"
+      - name: Benchmark this commit against the base
+        shell: bash
+        run: |
+          storage="$RUNNER_TEMP/benchmarks"
+          compare=()
+          if compgen -G "$storage/*/*_base.json" > /dev/null; then
+            compare=(--benchmark-compare "--benchmark-compare-fail=min:$BENCHMARK_MAX_REGRESSION")
+          fi
+          python -m pytest tests/benchmarks --benchmark-enable --benchmark-only \
+            --benchmark-storage="file://$storage" "${compare[@]}"
+
   # Single required status check for branch protection, so the matrix above
   # can change without editing the protection rules.
   gate:
@@ -115,6 +161,7 @@ jobs:
       - tests
       - smoke
       - quality
+      - benchmarks
     runs-on: ubuntu-latest
     steps:
       - name: Require every CI job to succeed
