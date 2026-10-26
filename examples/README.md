@@ -41,6 +41,7 @@ embeds the same source and explains what each experiment is checking.
 | [`05_wasserstein_lipschitz_equivalence.py`](05_wasserstein_lipschitz_equivalence.py) | Measures the Wasserstein-DRO / Lipschitz-regularization equivalence numerically: the exact dual value of `WassersteinAmbiguitySet` against the linear surrogate `E_nominal[loss] + radius * Lip(loss)`, as the radius shrinks and as the sample refines. |
 | [`06_calibrated_ambiguity_radius.py`](06_calibrated_ambiguity_radius.py) | Replaces the hand-picked radius with the Duchi-Namkoong finite-sample calibration `radius = chi2_{1, 1 - alpha} / n` (`optora.dro.chi_square_radius`), then measures how often the resulting `ChiSquareAmbiguitySet` interval really covers the true mean, across nominal confidence levels and sample sizes. |
 | [`07_subpopulation_shift_training.py`](07_subpopulation_shift_training.py) | Trains a linear model with `torch.optim.Adam` on the KL-DRO objective and compares it with ERM, a ridge control and a noise-only negative control under subpopulation shift, using exact group risks, paired seeds and convergence checks against closed-form and L-BFGS references. |
+| [`08_minibatch_dro_training.py`](08_minibatch_dro_training.py) | Measures the bias of the minibatch plug-in KL-DRO estimate against the exact full-batch objective, then trains with the plug-in, `MultilevelMonteCarloEstimator` and `StochasticPhiDual` and compares each to the full-batch L-BFGS optimum. |
 
 ## Media asset policy
 

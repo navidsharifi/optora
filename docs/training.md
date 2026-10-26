@@ -224,8 +224,9 @@ provides the two standard remedies:
     ```
 
     Use `optora.dro.chi_square_conjugate` for the chi-square ball. Start
-    `initial_lam` near the typical loss: KL's exponential conjugate makes
-    the objective's variance sensitive to $\lambda$ trailing the loss.
+    the dual variables on the scale of the loss, for example at the exact
+    dual optimum of a pilot minibatch: with KL's exponential conjugate,
+    the default start can produce gradients large enough to stall Adam.
 
 | | `MultilevelMonteCarloEstimator` | `StochasticPhiDual` |
 | --- | --- | --- |
@@ -233,6 +234,10 @@ provides the two standard remedies:
 | Batch size | Random, $n_0 2^J$ | Fixed, any |
 | Ambiguity sets | Any set built from a nominal alone (KL, chi-square, total variation, general phi) | Phi-divergence balls with a finite conjugate (KL, chi-square) |
 | Per-step cost | Three exact solves | One pass over the minibatch, no inner solve |
+
+[Minibatch DRO against the full batch](examples/minibatch_dro_training.md)
+measures the plug-in's bias and trains with all three estimators against
+the exact full-batch optimum.
 
 ## Practical notes
 

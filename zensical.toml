@@ -75,6 +75,7 @@ nav = [
     { "Wasserstein-DRO and Lipschitz regularization" = "examples/wasserstein_lipschitz_equivalence.md" },
     { "Calibrating the ambiguity radius" = "examples/calibrated_ambiguity_radius.md" },
     { "Training under subpopulation shift" = "examples/subpopulation_shift_training.md" },
+    { "Minibatch DRO against the full batch" = "examples/minibatch_dro_training.md" },
   ] },
   # BEGIN GENERATED API NAVIGATION
   { "API reference" = [
