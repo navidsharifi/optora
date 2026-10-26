@@ -64,6 +64,8 @@ nav = [
   { "Get started" = "index.md" },
   { "Mathematical formulations" = "formulations.md" },
   { "Training with torch.optim" = "training.md" },
+  { "Numerical behaviour" = "numerics.md" },
+  { "API stability" = "stability.md" },
   { "Examples" = [
     { "Overview" = "examples/index.md" },
     { "KL-DRO radius sweep" = "examples/kl_dro_radius_sweep.md" },
@@ -73,6 +75,7 @@ nav = [
     { "Wasserstein-DRO and Lipschitz regularization" = "examples/wasserstein_lipschitz_equivalence.md" },
     { "Calibrating the ambiguity radius" = "examples/calibrated_ambiguity_radius.md" },
     { "Training under subpopulation shift" = "examples/subpopulation_shift_training.md" },
+    { "Minibatch DRO against the full batch" = "examples/minibatch_dro_training.md" },
   ] },
   # BEGIN GENERATED API NAVIGATION
   { "API reference" = [
@@ -82,6 +85,7 @@ nav = [
       { "Convergence" = "api/core/convergence.md" },
       { "Divergence Base" = "api/core/divergence_base.md" },
       { "DRO Base" = "api/core/dro_base.md" },
+      { "Precision" = "api/core/precision.md" },
       { "Solver Base" = "api/core/solver_base.md" },
     ] },
     { "Divergences" = [
@@ -92,7 +96,9 @@ nav = [
     ] },
     { "DRO" = [
       { "Overview" = "api/dro/index.md" },
+      { "Calibration" = "api/dro/calibration.md" },
       { "KL-DRO" = "api/dro/kl_dro.md" },
+      { "Minibatch" = "api/dro/minibatch.md" },
       { "Minimax Solver" = "api/dro/minimax_solver.md" },
       { "Phi-DRO" = "api/dro/phi_dro.md" },
       { "Wasserstein DRO" = "api/dro/wasserstein_dro.md" },

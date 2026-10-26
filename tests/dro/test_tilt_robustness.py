@@ -199,7 +199,10 @@ def test_gradient_is_a_distribution_inside_the_ambiguity_set(
 ) -> None:
     # By Danskin's theorem the gradient of the worst case with respect to
     # the loss is the worst-case distribution itself, tilted or saturated
-    # alike, so it must be a probability vector the set contains.
+    # alike, so it must be a probability vector the set contains. The
+    # reference divergence cancels to ~0 when the gradient is close to the
+    # nominal, so its rounding has an absolute floor of about n * eps that
+    # the relative slack alone cannot absorb at a vanishing radius.
     saturation = KL_SATURATION if make is _kl else CHI_SQUARE_SATURATION
     radius = multiple * saturation
     ambiguity_set = make(radius)  # type: ignore[operator]
@@ -211,7 +214,8 @@ def test_gradient_is_a_distribution_inside_the_ambiguity_set(
     assert bool((gradient >= 0.0).all())
     assert abs(float(gradient.sum()) - 1.0) <= 1e-12
     divergence = float(ambiguity_set.divergence(gradient, NOMINAL))
-    assert divergence <= radius * (1.0 + 1e-9)
+    rounding_floor = NOMINAL.numel() * torch.finfo(NOMINAL.dtype).eps
+    assert divergence <= radius * (1.0 + 1e-9) + rounding_floor
 
 
 def test_saturated_gradient_is_the_nominal_restricted_to_the_top_scenarios() -> None:
@@ -311,6 +315,93 @@ def test_float32_wide_spread_is_finite(
     reference = reference_fn(NOMINAL.numpy(), 1e4 * LOSS.numpy(), radius)
     assert torch.isfinite(result)
     assert abs(float(result) - reference) <= 1e-3 * abs(reference)
+
+
+# --- Plan 8d: KL divergence across its whole range ---------------------------
+
+# Float32 accuracy budgets, in units of float32 epsilon times the larger of the
+# worst case and the loss spread (documented in `docs/numerics.md`). A worst
+# case concentrated on a mass far below epsilon needs a tilt rate near the top
+# of its bracket, where the bisection resolves the rate only to a relative
+# `eps / (1 - t)`, so that regime gets the looser budget.
+FLOAT32_TOLERANCE_EPS = 128.0
+FLOAT32_TAIL_TOLERANCE_EPS = 2048.0
+
+
+def _float32_error(
+    nominal: torch.Tensor, loss: torch.Tensor, radius: float
+) -> tuple[torch.Tensor, float]:
+    """Return a float32 KL worst case and its error in budget units."""
+    value = KLAmbiguitySet(nominal, radius=radius).worst_case_expectation(loss)
+    reference = KLAmbiguitySet(nominal.double(), radius=radius)
+    expected = float(reference.worst_case_expectation(loss.double()))
+    unit = torch.finfo(torch.float32).eps * max(
+        abs(expected), float(torch.amax(loss) - torch.amin(loss))
+    )
+    return value, abs(float(value) - expected) / unit
+
+
+@pytest.mark.parametrize("fraction", [0.3, 0.5, 0.9])
+def test_kl_divergence_far_above_one_is_not_lost_to_cancellation(
+    fraction: float,
+) -> None:
+    # The centered form reads exp(-D) as one plus a sum near -1, which rounds
+    # to exactly -1 once D exceeds about 36 in float64; the saturation radius
+    # here is 230.
+    mass = 1e-100
+    nominal = torch.tensor([1.0 - mass, mass], dtype=torch.float64)
+    loss = torch.tensor([0.0, 1.0], dtype=torch.float64)
+    radius = -fraction * math.log(mass)
+
+    value = KLAmbiguitySet(nominal, radius=radius).worst_case_expectation(loss)
+
+    reference = kl_worst_case(nominal.numpy(), loss.numpy(), radius)
+    assert abs(float(value) - reference) <= 1e-9
+
+
+@pytest.mark.parametrize("fraction", [0.5, 0.8, 0.99])
+def test_float32_kl_near_saturation_on_a_large_support(fraction: float) -> None:
+    # A uniform nominal on 10^5 points saturates at log(10^5) = 11.5, past the
+    # float32 cancellation threshold of the centered form.
+    generator = torch.Generator().manual_seed(0)
+    size = 100_000
+    nominal = torch.full((size,), 1.0 / size)
+    loss = torch.randn(size, generator=generator)
+
+    value, error = _float32_error(nominal, loss, fraction * math.log(size))
+
+    assert torch.isfinite(value)
+    assert error <= FLOAT32_TOLERANCE_EPS
+
+
+@pytest.mark.parametrize("mass", [1e-20, 1e-38, 1e-44], ids=["1e-20", "1e-38", "1e-44"])
+@pytest.mark.parametrize("fraction", [1e-3, 0.5, 0.999])
+def test_float32_kl_with_a_tiny_top_loss_mass(mass: float, fraction: float) -> None:
+    # The highest loss sits on a mass down to a float32 subnormal, so the
+    # centered exponent exceeds the float32 range of expm1 although every
+    # product nominal * exp(exponent) is at most one.
+    nominal = torch.tensor([1.0, mass], dtype=torch.float32)
+    loss = torch.tensor([0.0, 1.0], dtype=torch.float32)
+    saturation = -math.log(float(nominal[1]))
+
+    value, error = _float32_error(nominal, loss, fraction * saturation)
+
+    assert torch.isfinite(value)
+    assert 0.0 <= float(value) <= 1.0
+    assert error <= FLOAT32_TAIL_TOLERANCE_EPS
+
+
+@pytest.mark.parametrize("offset", [-1e20, 1e6, 1e30])
+@pytest.mark.parametrize("radius", [1e-8, 0.1, 3.0])
+def test_float32_kl_on_a_large_offset(offset: float, radius: float) -> None:
+    generator = torch.Generator().manual_seed(1)
+    nominal = torch.softmax(torch.randn(64, generator=generator), dim=0)
+    loss = offset + abs(offset) * 1e-6 * torch.randn(64, generator=generator)
+
+    value, error = _float32_error(nominal, loss, radius)
+
+    assert torch.isfinite(value)
+    assert error <= FLOAT32_TOLERANCE_EPS
 
 
 def test_tilted_ambiguity_set_is_abstract_over_its_formulation() -> None:

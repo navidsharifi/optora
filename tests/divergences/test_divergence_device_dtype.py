@@ -1,5 +1,11 @@
-"""Device and dtype coverage for every divergence."""
+"""Device and dtype coverage for every divergence.
 
+The half-precision tests back the dtype support table in `docs/numerics.md`:
+a divergence of half-precision distributions is exactly the float32 value
+rounded once.
+"""
+
+import math
 from collections.abc import Callable
 
 import pytest
@@ -117,3 +123,38 @@ def test_cuda_output_matches_cpu(
     assert value.dtype == dtype
     assert value.device.type == "cuda"
     torch.testing.assert_close(value.cpu(), cpu_value)
+
+
+def test_half_precision_is_the_float32_value_rounded_once(
+    factory: DivergenceFactory, half_dtype: torch.dtype
+) -> None:
+    p, q = _distributions(half_dtype, torch.device("cpu"))
+
+    value = factory(half_dtype)(p, q)
+
+    expected = factory(torch.float32)(p.float(), q.float())
+    assert value.dtype == half_dtype
+    assert torch.equal(value, expected.to(half_dtype))
+
+
+def test_mixed_precision_arguments_return_the_promoted_dtype(
+    factory: DivergenceFactory, half_dtype: torch.dtype
+) -> None:
+    p, q = _distributions(torch.float32, torch.device("cpu"))
+
+    value = factory(torch.float32)(p.to(half_dtype), q)
+
+    assert value.dtype == torch.float32
+
+
+def test_kl_of_a_zero_entry_is_finite_in_float16() -> None:
+    # The default eps of 1e-12 underflows to zero in float16, so clamping in
+    # float16 would evaluate 0 * log(0) = nan.
+    p = torch.tensor([0.0, 0.5, 0.5], dtype=torch.float16)
+    q = torch.tensor([0.25, 0.5, 0.25], dtype=torch.float16)
+
+    value = KLDivergence()(p, q)
+
+    assert value.dtype == torch.float16
+    assert torch.isfinite(value)
+    assert abs(float(value) - 0.5 * math.log(2.0)) <= 1e-3

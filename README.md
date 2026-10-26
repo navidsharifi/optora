@@ -73,8 +73,16 @@ Convergence diagnostics and helper functions live in `optora.core`.
   `examples` extra (`pip install -e ".[examples]"`).
 - **API reference:** built with Zensical from source docstrings, see
   [`docs/`](docs/index.md).
+- **API stability:** what counts as public API and what may change during
+  `0.x`: [`docs/stability.md`](docs/stability.md).
 - **Contributing:** development workflow, coding style, and the PR
   checklist live in [`CONTRIBUTING.md`](CONTRIBUTING.md).
+
+## Citing Optora
+
+If you use Optora in your research, please cite it. The metadata lives in
+[`CITATION.cff`](CITATION.cff); GitHub's "Cite this repository" button turns
+it into APA or BibTeX.
 
 ## Development
 
@@ -98,6 +106,11 @@ script under `examples/`. Reproduce that smoke test locally with:
 python -m build
 python -m tools.smoke
 ```
+
+CI also times the benchmarks in `tests/benchmarks/` against the Pull
+Request's base commit and fails on a large regression; each benchmark's exact
+host-synchronization budget is checked by every `pytest` run (see
+[CONTRIBUTING.md](CONTRIBUTING.md#performance-guard)).
 
 Generate the hierarchical API reference, preview it, or build the complete
 documentation site without maintaining API pages or navigation by hand:

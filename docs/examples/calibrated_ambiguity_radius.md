@@ -59,10 +59,39 @@ is an asymptotically valid $(1-\alpha)$ confidence interval. The radius has
 stopped being a knob and become a confidence level.
 
 The $\chi^2$ geometry is the one where this is cleanest, because the
-divergence itself is the test statistic. The Wasserstein geometry admits
-the same programme, but the radius there has to be tied to a concentration
-rate rather than to a quantile, and getting a rate that does not collapse
-under the curse of dimensionality is its own research problem[^gao].
+divergence itself is the test statistic, but the same expansion calibrates
+every $\varphi$-divergence smooth at one: the radius picks up a factor
+$\varphi''(1)/2$, which is $1$ for $\chi^2$ and $\tfrac{1}{2}$ for KL. The
+Wasserstein geometry admits the same programme. With the quadratic cost
+$\lVert x - y \rVert_2^2$ on the input space, Blanchet, Kang and
+Murthy[^bkm] show that the robust Wasserstein profile of the true risk is
+again $\chi^2_1$ in the limit, up to the scale
+$\mathrm{Var}(\ell) / \mathbb{E}\lVert \nabla_x \ell \rVert_2^2$, so the
+radius again shrinks like $1/n$ rather than at the dimension-dependent
+concentration rate a uniform guarantee needs[^gao].
+
+## The helpers
+
+`optora.dro` ships the calibration as plain functions, one per geometry:
+
+| Function | Radius | Calibrates |
+| --- | --- | --- |
+| `chi_square_radius(n, confidence)` | $\chi^2_{1,1-\alpha} / n$ | `ChiSquareAmbiguitySet` |
+| `kl_radius(n, confidence)` | $\chi^2_{1,1-\alpha} / (2n)$ | `KLAmbiguitySet` |
+| `phi_divergence_radius(n, confidence, curvature)` | $\varphi''(1)\, \chi^2_{1,1-\alpha} / (2n)$ | A `PhiAmbiguitySet` whose generator is smooth at one |
+| `wasserstein_radius(loss, input_gradient, confidence)` | $\chi^2_{1,1-\alpha}\, \widehat{\mathrm{Var}}(\ell) / (n\, \overline{\lVert \nabla_x \ell \rVert_2^2})$ | Quadratic-cost transport over the input space |
+
+`confidence` is the coverage of the two-sided interval. Pass
+`one_sided=True` when only the upper bound
+$\sup_{q} \mathbb{E}_q[\ell] \ge \mathbb{E}_{P_0}[\ell]$ matters; it uses
+$z_{1-\alpha}^2$ in place of $z_{1-\alpha/2}^2$.
+
+!!! warning "Wasserstein on a finite support"
+
+    `wasserstein_radius` calibrates transport anywhere in the input space.
+    A `WassersteinAmbiguitySet` whose support is the observations alone can
+    only move mass among them, so under the same radius its worst case is
+    no larger, and its coverage no higher, than the calibrated one.
 
 !!! warning "Mind the factor of two"
 
@@ -96,9 +125,10 @@ solver rather than against the algebra, and so does
 
     A $\chi^2$ variable with one degree of freedom is the square of a
     standard normal, so
-    $\chi^2_{1,\,1-\alpha} = \big(\Phi^{-1}(1 - \alpha/2)\big)^2$ and the
-    whole calibration is one call to `torch.special.ndtri`. Optora's only
-    runtime dependency stays `torch`.
+    $\chi^2_{1,\,1-\alpha} = \big(\Phi^{-1}(1 - \alpha/2)\big)^2$, and the
+    helpers read $\Phi^{-1}$ from the standard library's
+    `statistics.NormalDist`. Optora's only runtime dependency stays
+    `torch`, and computing a radius never touches a device.
 
 ## Measuring the coverage
 
@@ -212,6 +242,12 @@ told which one it is in.
     The companion asymptotic theory is Duchi, Glynn and Namkoong,
     "Statistics of Robust Optimization: A Generalized Empirical Likelihood
     Approach", *Mathematics of Operations Research* 46(3), 946–969 (2021).
+
+[^bkm]:
+    Jose Blanchet, Yang Kang and Karthyek Murthy, "Robust Wasserstein
+    Profile Inference and Applications to Machine Learning", *Journal of
+    Applied Probability* 56(3), 830–857 (2019).
+    [arXiv:1610.05627](https://arxiv.org/abs/1610.05627).
 
 [^gao]:
     The same calibration question in the Wasserstein geometry, where the

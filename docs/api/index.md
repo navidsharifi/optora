@@ -16,7 +16,7 @@ defines.
 
     ---
 
-    `convergence`, `divergence_base`, `dro_base`, `solver_base`
+    `convergence`, `divergence_base`, `dro_base`, `precision`, `solver_base`
 
     [:octicons-arrow-right-24: Browse](core/index.md)
 
@@ -32,7 +32,7 @@ defines.
 
     ---
 
-    `kl_dro`, `minimax_solver`, `phi_dro`, `wasserstein_dro`
+    `calibration`, `kl_dro`, `minibatch`, `minimax_solver`, `phi_dro`, `wasserstein_dro`
 
     [:octicons-arrow-right-24: Browse](dro/index.md)
 

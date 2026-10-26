@@ -14,6 +14,8 @@
     - [`AmbiguitySet`](dro_base.md#optora.core.dro_base.AmbiguitySet)
     - [`TiltedAmbiguitySet`](dro_base.md#optora.core.dro_base.TiltedAmbiguitySet)
     - [`DualAmbiguitySet`](dro_base.md#optora.core.dro_base.DualAmbiguitySet)
+- [`optora.core.precision`](precision.md)
+    - [`working_dtype`](precision.md#optora.core.precision.working_dtype)
 - [`optora.core.solver_base`](solver_base.md)
     - [`Solver`](solver_base.md#optora.core.solver_base.Solver)
     - [`MinimizationProblem`](solver_base.md#optora.core.solver_base.MinimizationProblem)

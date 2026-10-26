@@ -21,7 +21,7 @@ region for the true distribution, and the interval it induces on the mean,
 
 an asymptotically valid `(1 - alpha)` confidence interval. Nothing here is
 a new solver: `ChiSquareAmbiguitySet` is used exactly as it ships, and the
-only new ingredient is the radius formula.
+radius comes from `optora.dro.chi_square_radius`.
 
 This script measures whether that promise holds at finite `n`. It draws
 many independent samples from a standard exponential (mean 1, variance 1,
@@ -53,53 +53,19 @@ Run:
 """
 
 import math
+from statistics import NormalDist
 
 import matplotlib.pyplot as plt
 import torch
 from _plotting import save_figure
 
-from optora.dro import ChiSquareAmbiguitySet
+from optora.dro import ChiSquareAmbiguitySet, chi_square_radius
 
 CONFIDENCE_LEVELS = (0.50, 0.80, 0.90, 0.95, 0.99)
 SAMPLE_SIZES = (10, 40, 160)
 NUM_REPLICATIONS = 200
 SEED = 20260915
 POPULATION_MEAN = 1.0
-
-
-def chi_square_quantile(confidence: float) -> float:
-    """Return the `confidence` quantile of the chi-square law with one dof.
-
-    A chi-square variable with one degree of freedom is the square of a
-    standard normal, so its quantile function is the squared two-sided
-    normal quantile and needs no special-function code beyond
-    `torch.special.ndtri`.
-
-    Args:
-        confidence: Probability level in `(0, 1)`.
-
-    Returns:
-        The `confidence` quantile of `chi2_1`.
-    """
-    normal_quantile = torch.special.ndtri(
-        torch.tensor((1.0 + confidence) / 2.0, dtype=torch.float64)
-    )
-    return float(normal_quantile**2)
-
-
-def calibrated_radius(num_samples: int, confidence: float) -> float:
-    """Return the chi-square ambiguity radius that targets `confidence` coverage.
-
-    Args:
-        num_samples: Number of observations in the empirical distribution.
-        confidence: Target coverage level in `(0, 1)`.
-
-    Returns:
-        `chi2_{1, confidence} / num_samples`, the radius under which the
-        ambiguity set is an asymptotically valid confidence region for the
-        data-generating distribution.
-    """
-    return chi_square_quantile(confidence) / num_samples
 
 
 def exponential_samples(num_samples: int, generator: torch.Generator) -> torch.Tensor:
@@ -162,7 +128,7 @@ def main() -> None:
         # against the `(replications,)` batch of losses, so each side of the
         # interval comes back as a `(levels, replications)` tensor.
         radii = torch.tensor(
-            [calibrated_radius(num_samples, level) for level in CONFIDENCE_LEVELS],
+            [chi_square_radius(num_samples, level) for level in CONFIDENCE_LEVELS],
             dtype=torch.float64,
         ).unsqueeze(-1)
         lower_set, upper_set = build_ambiguity_sets(nominal, radii)
@@ -265,13 +231,13 @@ def _assert_calibration_matches_normal_interval() -> None:
     sample = exponential_samples(num_samples, generator)[0]
     nominal = torch.full((num_samples,), 1.0 / num_samples, dtype=torch.float64)
     radius = torch.tensor(
-        calibrated_radius(num_samples, confidence), dtype=torch.float64
+        chi_square_radius(num_samples, confidence), dtype=torch.float64
     )
 
     _, upper_set = build_ambiguity_sets(nominal, radius)
     solved = float(upper_set.worst_case_expectation(sample))
 
-    normal_quantile = math.sqrt(chi_square_quantile(confidence))
+    normal_quantile = NormalDist().inv_cdf(0.5 * (1.0 + confidence))
     standard_error = float(torch.std(sample, unbiased=False)) / math.sqrt(num_samples)
     textbook = float(torch.mean(sample)) + normal_quantile * standard_error
 

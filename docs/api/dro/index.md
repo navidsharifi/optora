@@ -3,13 +3,22 @@
 # `optora.dro`
 
 ## Modules
+- [`optora.dro.calibration`](calibration.md)
+    - [`phi_divergence_radius`](calibration.md#optora.dro.calibration.phi_divergence_radius)
+    - [`kl_radius`](calibration.md#optora.dro.calibration.kl_radius)
+    - [`chi_square_radius`](calibration.md#optora.dro.calibration.chi_square_radius)
+    - [`wasserstein_radius`](calibration.md#optora.dro.calibration.wasserstein_radius)
 - [`optora.dro.kl_dro`](kl_dro.md)
     - [`KLAmbiguitySet`](kl_dro.md#optora.dro.kl_dro.KLAmbiguitySet)
+- [`optora.dro.minibatch`](minibatch.md)
+    - [`MultilevelMonteCarloEstimator`](minibatch.md#optora.dro.minibatch.MultilevelMonteCarloEstimator)
+    - [`StochasticPhiDual`](minibatch.md#optora.dro.minibatch.StochasticPhiDual)
 - [`optora.dro.minimax_solver`](minimax_solver.md)
     - [`MinimaxProblem`](minimax_solver.md#optora.dro.minimax_solver.MinimaxProblem)
     - [`MinimaxResult`](minimax_solver.md#optora.dro.minimax_solver.MinimaxResult)
     - [`MinimaxSolver`](minimax_solver.md#optora.dro.minimax_solver.MinimaxSolver)
 - [`optora.dro.phi_dro`](phi_dro.md)
+    - [`chi_square_conjugate`](phi_dro.md#optora.dro.phi_dro.chi_square_conjugate)
     - [`PhiAmbiguitySet`](phi_dro.md#optora.dro.phi_dro.PhiAmbiguitySet)
     - [`ChiSquareAmbiguitySet`](phi_dro.md#optora.dro.phi_dro.ChiSquareAmbiguitySet)
     - [`TotalVariationAmbiguitySet`](phi_dro.md#optora.dro.phi_dro.TotalVariationAmbiguitySet)

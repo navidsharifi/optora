@@ -8,6 +8,7 @@ from optora.core.convergence import (
     validate_check_interval,
 )
 from optora.core.divergence_base import Divergence
+from optora.core.precision import working_dtype
 
 
 class SinkhornDivergence(Divergence):
@@ -156,7 +157,9 @@ class SinkhornDivergence(Divergence):
         Returns:
             A tensor of shape `batch_shape` holding $S_\epsilon(p, q)$ over
             the broadcast batch, clamped to be nonnegative to absorb
-            floating-point error near zero.
+            floating-point error near zero, computed in
+            `optora.core.working_dtype(p, q, cost)` and returned in the
+            promoted dtype of `p` and `q`.
 
         Raises:
             ValueError: If the shape of `p` or `q` does not match `cost`.
@@ -171,6 +174,9 @@ class SinkhornDivergence(Divergence):
                 f"q must have shape (..., {self.cost.shape[0]}) to index "
                 f"cost, got {tuple(q.shape)}."
             )
+        result_dtype = torch.promote_types(p.dtype, q.dtype)
+        dtype = working_dtype(p, q, self.cost)
+        p, q = p.to(dtype), q.to(dtype)
         # Stacking the three marginal pairs into one batched problem needs
         # `p` and `q` at a common shape; adding a zero of the other's shape
         # broadcasts each to it.
@@ -181,7 +187,7 @@ class SinkhornDivergence(Divergence):
             )
         )
         divergence = cost_pq - 0.5 * cost_pp - 0.5 * cost_qq
-        return torch.clamp(divergence, min=0.0)
+        return torch.clamp(divergence, min=0.0).to(result_dtype)
 
     def _entropic_transport_cost(
         self, p: torch.Tensor, q: torch.Tensor
@@ -200,7 +206,7 @@ class SinkhornDivergence(Divergence):
             `pi` produced by Sinkhorn's algorithm.
         """
         transport_plan = self._sinkhorn(p, q)
-        return torch.sum(transport_plan * self.cost, dim=(-2, -1))
+        return torch.sum(transport_plan * self.cost.to(p.dtype), dim=(-2, -1))
 
     def _sinkhorn(self, p: torch.Tensor, q: torch.Tensor) -> torch.Tensor:
         r"""Run Sinkhorn's algorithm to compute entropic transport plans.
@@ -236,7 +242,7 @@ class SinkhornDivergence(Divergence):
             a tensor of shape `(..., n, n)` whose row sums approximate `p`
             and whose column sums approximate `q`.
         """
-        scaled_cost = self.cost / self.epsilon
+        scaled_cost = self.cost.to(p.dtype) / self.epsilon
         log_p = torch.log(torch.clamp(p, min=self.eps))
         log_q = torch.log(torch.clamp(q, min=self.eps))
         f = torch.zeros_like(p)

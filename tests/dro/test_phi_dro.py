@@ -18,7 +18,7 @@ from optora.dro.phi_dro import (
     ChiSquareAmbiguitySet,
     PhiAmbiguitySet,
     TotalVariationAmbiguitySet,
-    _chi_square_conjugate,
+    chi_square_conjugate,
 )
 from optora.solvers.gradient_descent import GradientDescent
 
@@ -66,7 +66,7 @@ def _grid_search_chi_square_dual_minimum(
     lam = lam_grid.view(1, -1, 1)
     scaled = (loss.view(1, 1, -1) - lam) / eta
     conjugate_term = torch.sum(
-        nominal.view(1, 1, -1) * _chi_square_conjugate(scaled), dim=-1
+        nominal.view(1, 1, -1) * chi_square_conjugate(scaled), dim=-1
     )
     dual_values = (
         eta.squeeze(-1) * radius + lam.squeeze(-1) + eta.squeeze(-1) * conjugate_term

@@ -50,6 +50,7 @@ python examples/01_kl_dro_radius_sweep.py
 | [Wasserstein-DRO and Lipschitz regularization](wasserstein_lipschitz_equivalence.md) | In what sense, exactly, is Wasserstein-DRO "the same as" a Lipschitz penalty? |
 | [Calibrating the ambiguity radius](calibrated_ambiguity_radius.md) | What radius should you actually use, and does the finite-sample theory that answers it hold up at the sample size you have? |
 | [Training under subpopulation shift](subpopulation_shift_training.md) | Does a DRO-trained model really degrade more gracefully than an ERM one when the test mixture of subpopulations changes, and where does it lose? |
+| [Minibatch DRO against the full batch](minibatch_dro_training.md) | How biased is the worst case of a minibatch, and do the multilevel and stochastic-dual estimators train to the full-batch optimum instead? |
 
 They are ordered roughly by how much machinery they involve: the first one
 touches a single [`AmbiguitySet`](../api/core/dro_base.md), the fourth
@@ -57,6 +58,8 @@ pulls a solver apart to inspect its trajectory, the fifth turns the dual
 formula itself into the object under test, the sixth stops treating the
 radius as a free parameter at all, and the last one trains a model with
 `torch.optim` and holds the result against an ERM baseline and two controls.
+The eighth trains on minibatches and holds every estimator against the
+full-batch objective it is meant to estimate.
 
 !!! warning "These scripts are tuned down on purpose"
 
@@ -67,10 +70,12 @@ radius as a free parameter at all, and the last one trains a model with
     qualitative behaviour — monotonicity, limits, ordering — not to hit
     tight tolerances. Example 6 is slow for a different reason: estimating
     a coverage probability needs thousands of independent inner solves, not
-    deeper ones. Example 7 is the slowest (about ten seconds on a CPU)
+    deeper ones. Example 7 takes about ten seconds on a CPU
     because it trains a model, batching all seeds and radii into one joint
     solve per step, and then verifies the trained models against
-    closed-form and L-BFGS references.
+    closed-form and L-BFGS references. Example 8 is the slowest of all
+    (20 to 30 seconds): its training loops run thousands of small inner
+    solves, where kernel-launch overhead dominates.
 
 ## The shared plotting helper
 
