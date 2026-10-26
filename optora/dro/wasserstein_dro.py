@@ -118,6 +118,16 @@ class WassersteinAmbiguitySet(AmbiguitySet):
     holds automatically for a ground cost with a zero diagonal, the
     standard choice, for which $m_i = 0$.
 
+    A zero radius is solved by the same bisection rather than short-circuited
+    to the nominal expectation, as the other ambiguity sets do. The ball
+    $W_c(q, \mathrm{nominal}) \le 0$ reduces to $\{\mathrm{nominal}\}$ only
+    for a metric cost, with $\mathrm{cost}_{ij} > 0$ for $i \ne j$. A
+    pseudometric cost, such as one with duplicated support points, moves
+    mass between zero-cost pairs for free, so the zero-radius worst case is
+    $\sum_i \mathrm{nominal}_i \max_{j:\, \mathrm{cost}_{ij} = m_i}
+    \mathrm{loss}_j$, which the bisection recovers and the nominal
+    expectation underestimates.
+
     Because $\gamma^\star$ is a kink, the worst-case expectation is then
     read off the *primal* solution rather than the dual value. At a kink
     several columns tie for a row's inner maximum, and re-evaluating the
@@ -393,11 +403,10 @@ class WassersteinAmbiguitySet(AmbiguitySet):
                 own dual multiplier `gamma` in one vectorized search.
 
         Returns:
-            A tensor of shape `(...)` holding the worst-case expected loss:
-            the exact `sum(nominal * loss)` when `radius` is zero (the
-            ambiguity set then contains only `nominal`), otherwise the
-            expectation of `loss` under the worst-case distribution
-            recovered from the dual optimum.
+            A tensor of shape `(...)` holding the expectation of `loss`
+            under the worst-case distribution recovered from the dual
+            optimum. For a zero radius and a metric `cost` this is exactly
+            `sum(nominal * loss)`.
 
         Raises:
             ValueError: If `loss`'s trailing dimension does not match
@@ -405,9 +414,6 @@ class WassersteinAmbiguitySet(AmbiguitySet):
                 broadcast against `nominal` and `radius`.
         """
         batch_shape = self._batch_shape(loss)
-        if self._radius_is_zero:
-            return self._nominal_expectation(loss, batch_shape)
-
         detached = loss.detach()
         lower, upper = self._dual_bracket(detached, batch_shape)
         with torch.no_grad():

@@ -14,26 +14,77 @@ concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+env:
+  TORCH_INDEX_URL: https://download.pytorch.org/whl/cpu
+
 jobs:
   tests:
-    name: tests (${{ matrix.python-version }})
-    runs-on: ubuntu-latest
+    name: tests (${{ matrix.os }}, ${{ matrix.python-version }}, torch ${{ matrix.torch }})
+    runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
+        os:
+          - ubuntu-latest
+          - macos-latest
+          - windows-latest
         python-version:
           - "3.10"
           - "3.11"
           - "3.12"
+        torch:
+          - latest
+        include:
+          - os: ubuntu-latest
+            python-version: "3.10"
+            torch: minimum
+          - os: macos-latest
+            python-version: "3.10"
+            torch: minimum
+          - os: windows-latest
+            python-version: "3.10"
+            torch: minimum
     steps:
       - uses: actions/checkout@v6
       - uses: actions/setup-python@v6
         with:
           python-version: ${{ matrix.python-version }}
           cache: pip
+      # The floor is read from pyproject.toml so it has a single source of
+      # truth. PyTorch < 2.3 is built against NumPy 1.x, hence `numpy<2`.
+      - name: Pin the minimum supported PyTorch
+        if: matrix.torch == 'minimum'
+        shell: bash
+        run: |
+          floor=$(sed -n 's/^ *"torch>=\([0-9.]*\)".*/\1/p' pyproject.toml)
+          test -n "$floor"
+          printf 'torch==%s.*\nnumpy<2\n' "$floor" > "$RUNNER_TEMP/minimum.txt"
+          echo "PIP_CONSTRAINT=$RUNNER_TEMP/minimum.txt" >> "$GITHUB_ENV"
       - run: python -m pip install -U pip
+      - run: python -m pip install torch --index-url ${{ env.TORCH_INDEX_URL }}
       - run: python -m pip install -e ".[dev]"
-      - run: pytest
+      - run: python -c "import numpy, torch; print('torch', torch.__version__, 'numpy', numpy.__version__)"
+      - run: pytest --cov
+
+  smoke:
+    name: smoke (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - ubuntu-latest
+          - macos-latest
+          - windows-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: python -m pip install -U pip build
+      - run: python -m build
+      - run: python -m tools.smoke --torch-index-url ${{ env.TORCH_INDEX_URL }}
 
   quality:
     name: quality, package, docs
@@ -45,10 +96,27 @@ jobs:
           python-version: "3.12"
           cache: pip
       - run: python -m pip install -U pip
+      - run: python -m pip install torch --index-url ${{ env.TORCH_INDEX_URL }}
       - run: python -m pip install -e ".[dev,docs]"
       - run: ruff check .
+      - run: ruff format --check .
       - run: mypy optora
       - run: python -m build
       - run: twine check dist/*
       - run: python -m tools.docs check
       - run: python -m tools.docs build
+
+  # Single required status check for branch protection, so the matrix above
+  # can change without editing the protection rules.
+  gate:
+    name: ci gate
+    if: always()
+    needs:
+      - tests
+      - smoke
+      - quality
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require every CI job to succeed
+        if: contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled') || contains(needs.*.result, 'skipped')
+        run: exit 1

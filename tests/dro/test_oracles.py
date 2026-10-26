@@ -30,6 +30,8 @@ per-set modules add fine-grid cross-checks against the convex duals, which
 the primal path never touches.
 """
 
+import math
+
 import numpy as np
 import pytest
 import torch
@@ -118,6 +120,36 @@ def test_total_variation_matches_the_primal_linear_program(
 
     reference = total_variation_worst_case(
         instance.nominal_array, instance.loss_array, radius
+    )
+    assert abs(float(result) - reference) <= ORACLE_TOLERANCE
+
+
+# Coincident support points with different losses: a pseudometric ground
+# cost, under which a zero-radius Wasserstein ball still moves mass between
+# the coincident points. Kept out of the shared `INSTANCES`, whose duplicate
+# support points share their loss so every set sees one geometry.
+ZERO_COST_PAIR = Instance(
+    name="zero_cost_pair",
+    nominal=(0.25, 0.25, 0.5),
+    loss=(0.0, 1.0, 3.0),
+    position=(0.0, 0.0, 1.0),
+)
+
+
+@pytest.mark.parametrize("radius", EXACT_RADII)
+def test_wasserstein_on_a_pseudometric_cost_matches_the_linear_program(
+    radius: float,
+) -> None:
+    nominal, loss, cost = ZERO_COST_PAIR.tensors()
+    ambiguity_set = WassersteinAmbiguitySet(nominal, cost=cost, radius=radius)
+
+    result = ambiguity_set.worst_case_expectation(loss)
+
+    reference = wasserstein_worst_case(
+        ZERO_COST_PAIR.nominal_array,
+        ZERO_COST_PAIR.cost_array,
+        ZERO_COST_PAIR.loss_array,
+        radius,
     )
     assert abs(float(result) - reference) <= ORACLE_TOLERANCE
 
@@ -241,7 +273,14 @@ def test_chi_square_at_and_beyond_its_saturation_radius_is_the_maximum_loss(
 
     result = ambiguity_set.worst_case_expectation(loss)
 
-    assert float(result) == float(instance.loss_array.max())
+    maximum = float(instance.loss_array.max())
+    if multiple > 1.0:
+        assert float(result) == maximum
+    else:
+        # Exactly at saturation the bisection's feasibility test compares two
+        # values equal in exact arithmetic, so reduction order may leave the
+        # result a few rounding steps below the maximum, never above it.
+        assert maximum - 4 * math.ulp(maximum) <= float(result) <= maximum
 
 
 @pytest.mark.parametrize("scale", [1e-6, 1e-3, 1.0, 1e3, 1e6])

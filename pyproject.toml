@@ -39,6 +39,7 @@ dependencies = [
 dev = [
   "build>=1.2",
   "pytest>=8",
+  "pytest-cov>=6",
   "ruff>=0.5",
   "mypy>=1.10",
   "twine>=5",
@@ -79,6 +80,18 @@ include = ["optora*"]
 testpaths = ["tests"]
 addopts = "-q"
 pythonpath = ["."]
+
+# Coverage gate enforced in CI by `pytest --cov`; `fail_under` is its single
+# source of truth.
+[tool.coverage.run]
+source = ["optora"]
+branch = true
+
+[tool.coverage.report]
+fail_under = 98
+show_missing = true
+skip_covered = true
+exclude_also = ["raise NotImplementedError"]
 
 [tool.ruff]
 line-length = 88
