@@ -243,6 +243,7 @@ provides the two standard remedies:
 | Device and dtype | `ambiguity_set.to(device)` moves `nominal` and every cached buffer; the returned value follows the loss's dtype and device. Half-precision losses (including under `torch.autocast`) are solved in float32 and rounded once; see [Numerical behaviour](numerics.md). |
 | Debugging | `validate=True` checks `nominal`, a tensor `radius`, and every `loss` for non-finite or invalid values, at one host synchronization per call. |
 | Differentiable inputs | Only `loss`. Treat `nominal` and a tensor `radius` as constants: gradients with respect to them are not supported and are not meaningful. |
+| Choosing the radius | `optora.dro.kl_radius`, `chi_square_radius`, `phi_divergence_radius` and `wasserstein_radius` turn a confidence level and a sample size into a radius under which the robust value is an asymptotically exact upper confidence bound on the true risk; see [Calibrating the ambiguity radius](examples/calibrated_ambiguity_radius.md). |
 | Zero radius | `radius=0.0` makes the objective exactly the nominal-weighted empirical risk, which is the natural non-robust baseline to compare against. For `WassersteinAmbiguitySet` this needs a metric `cost` (`cost[i, j] > 0` for `i != j`); a zero-cost pair of distinct support points still lets mass move between them at zero radius. |
 
 ## When to use `MinimaxSolver` instead

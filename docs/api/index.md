@@ -32,7 +32,7 @@ defines.
 
     ---
 
-    `kl_dro`, `minibatch`, `minimax_solver`, `phi_dro`, `wasserstein_dro`
+    `calibration`, `kl_dro`, `minibatch`, `minimax_solver`, `phi_dro`, `wasserstein_dro`
 
     [:octicons-arrow-right-24: Browse](dro/index.md)
 

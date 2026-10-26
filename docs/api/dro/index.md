@@ -3,6 +3,11 @@
 # `optora.dro`
 
 ## Modules
+- [`optora.dro.calibration`](calibration.md)
+    - [`phi_divergence_radius`](calibration.md#optora.dro.calibration.phi_divergence_radius)
+    - [`kl_radius`](calibration.md#optora.dro.calibration.kl_radius)
+    - [`chi_square_radius`](calibration.md#optora.dro.calibration.chi_square_radius)
+    - [`wasserstein_radius`](calibration.md#optora.dro.calibration.wasserstein_radius)
 - [`optora.dro.kl_dro`](kl_dro.md)
     - [`KLAmbiguitySet`](kl_dro.md#optora.dro.kl_dro.KLAmbiguitySet)
 - [`optora.dro.minibatch`](minibatch.md)
