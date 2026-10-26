@@ -97,6 +97,11 @@ exclude_also = ["raise NotImplementedError"]
 line-length = 88
 target-version = "py310"
 
+[tool.ruff.format]
+# These pages embed the example scripts through `--8<--` snippet includes
+# inside ```py fences; formatting them as Python would break the includes.
+exclude = ["docs/examples/*.md"]
+
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B", "SIM"]
 
