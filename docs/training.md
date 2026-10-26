@@ -97,6 +97,65 @@ ambiguity_set.worst_case_expectation(loss).backward()
 worst_case_distribution = loss.grad
 ```
 
+## Second derivatives
+
+Hessians and Hessian-vector products of the worst case with respect to
+`loss` are exact too: `create_graph=True`,
+`torch.autograd.functional.hessian`, and `torch.func.hessian` all work.
+
+=== "KL and chi-square"
+
+    The worst case is curved in `loss`, so a detached $q^\star$ alone would
+    report a zero Hessian. A recorded backward pass instead rebuilds
+    $q^\star$ from the solved tilt by one implicit-function step, which has
+    exactly the Jacobian $\partial q^\star / \partial \ell$. A plain
+    `.backward()` never pays for that step.
+
+=== "Total variation and Wasserstein"
+
+    The worst case is piecewise linear in `loss`, so its Hessian is zero
+    wherever it exists, which is exactly what autograd reports.
+
+!!! warning "Unsupported second-order paths"
+
+    - `torch.func.jacfwd(torch.func.jacfwd(...))` on `KLAmbiguitySet` or
+      `ChiSquareAmbiguitySet`: PyTorch does not differentiate a custom
+      forward-mode rule a second time. Use `torch.func.hessian`
+      (forward over reverse) or reverse over reverse.
+    - `PhiAmbiguitySet`: the first derivative is exact once the inner dual
+      solve has converged, but the second derivative ignores how the dual
+      optimum moves with `loss`.
+
+## Non-differentiable points
+
+The worst case $V(\ell) = \sup_{q \in \mathcal{U}} \langle q, \ell \rangle$
+is convex in $\ell$ and differentiable exactly where the maximizer is
+unique. Where several distributions attain the supremum (a *kink*),
+autograd returns one of them. That is always a subgradient: a feasible
+distribution $g$ with $\langle g, \ell \rangle = V(\ell)$, so
+
+$$
+V(\ell + d) \ge V(\ell) + \langle g, d \rangle
+\quad \text{for every } d,
+\qquad
+-V'(\ell; -d) \le \langle g, d \rangle \le V'(\ell; d),
+$$
+
+where $V'(\ell; d)$ is the one-sided directional derivative. Every
+subgradient is a valid descent signal for a subgradient method or
+`torch.optim`; which one is returned is fixed per set:
+
+| Set | Kinks in `loss` | Gradient returned at a kink |
+| --- | --- | --- |
+| `KLAmbiguitySet` | Tied highest losses once the radius saturates the set (it then contains the distribution concentrated on them) | The tied mass split in proportion to `nominal` |
+| `ChiSquareAmbiguitySet` | As KL. Also not twice differentiable where a scenario enters or leaves the support of $q^\star$; the gradient stays continuous there | As KL |
+| `TotalVariationAmbiguitySet` | Ties among the highest losses, and ties among the lowest-loss scenarios that mass is drained from | All reallocated mass on one tied scenario, chosen by sort order |
+| `WassersteinAmbiguitySet` | Ties in a support point's best response $\ell_j - \gamma^\star c_{ij}$, including coincident support points with equal losses | The convex combination of the two extreme transport plans that spends the radius exactly |
+
+`tests/dro/test_gradients.py` checks each of these kinks by one-sided
+finite differences, alongside `gradcheck` and `gradgradcheck` in float64 at
+smooth points.
+
 ## Practical notes
 
 | Topic | Guidance |
@@ -104,6 +163,7 @@ worst_case_distribution = loss.grad
 | Inner cost | `KLAmbiguitySet` and `ChiSquareAmbiguitySet` locate the worst case by a bisection whose trip count is fixed by the dtype, so every step costs the same and there is nothing to tune or warm-start. |
 | Minibatches | Pass a batched loss of shape `(..., n)`; the inner problems decouple across leading dimensions and are bisected jointly in one call. |
 | Device and dtype | `ambiguity_set.to(device)` moves `nominal` and every cached buffer; the returned value follows the loss's dtype and device. |
+| Differentiable inputs | Only `loss`. Treat `nominal` and a tensor `radius` as constants: gradients with respect to them are not supported and are not meaningful. |
 | Zero radius | `radius=0.0` makes the objective exactly the nominal-weighted empirical risk, which is the natural non-robust baseline to compare against. For `WassersteinAmbiguitySet` this needs a metric `cost` (`cost[i, j] > 0` for `i != j`); a zero-cost pair of distinct support points still lets mass move between them at zero radius. |
 
 ## When to use `MinimaxSolver` instead
