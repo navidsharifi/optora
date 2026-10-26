@@ -284,8 +284,10 @@ class StochasticPhiDual(nn.Module):
     exponentially, as KL's does, makes the objective's variance sensitive to
     $\lambda$ trailing the loss scale, and nothing here standardizes the
     loss, since a per-batch shift or scale would reintroduce the bias.
-    Initialize `initial_lam` near the typical loss and `initial_log_eta`
-    near the log of its spread.
+    Start the dual variables on the scale of the loss: a reliable start is
+    the exact dual optimum of a pilot minibatch at the initial model, found
+    by minimizing this module on that batch alone. The defaults
+    `initial_log_eta=0` and `initial_lam=0` can stall training under KL.
 
     Attributes:
         radius: Nonnegative phi-divergence radius $\rho$, a float or a
