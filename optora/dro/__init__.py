@@ -1,5 +1,11 @@
 """DRO formulations wiring a divergence-based ambiguity set into `AmbiguitySet`."""
 
+from optora.dro.calibration import (
+    chi_square_radius,
+    kl_radius,
+    phi_divergence_radius,
+    wasserstein_radius,
+)
 from optora.dro.kl_dro import KLAmbiguitySet
 from optora.dro.minibatch import MultilevelMonteCarloEstimator, StochasticPhiDual
 from optora.dro.minimax_solver import MinimaxProblem, MinimaxResult, MinimaxSolver
@@ -23,4 +29,8 @@ __all__ = [
     "MultilevelMonteCarloEstimator",
     "StochasticPhiDual",
     "chi_square_conjugate",
+    "chi_square_radius",
+    "kl_radius",
+    "phi_divergence_radius",
+    "wasserstein_radius",
 ]
