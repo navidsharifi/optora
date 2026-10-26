@@ -73,8 +73,16 @@ Convergence diagnostics and helper functions live in `optora.core`.
   `examples` extra (`pip install -e ".[examples]"`).
 - **API reference:** built with Zensical from source docstrings, see
   [`docs/`](docs/index.md).
+- **API stability:** what counts as public API and what may change during
+  `0.x`: [`docs/stability.md`](docs/stability.md).
 - **Contributing:** development workflow, coding style, and the PR
   checklist live in [`CONTRIBUTING.md`](CONTRIBUTING.md).
+
+## Citing Optora
+
+If you use Optora in your research, please cite it. The metadata lives in
+[`CITATION.cff`](CITATION.cff); GitHub's "Cite this repository" button turns
+it into APA or BibTeX.
 
 ## Development
 

@@ -65,6 +65,7 @@ nav = [
   { "Mathematical formulations" = "formulations.md" },
   { "Training with torch.optim" = "training.md" },
   { "Numerical behaviour" = "numerics.md" },
+  { "API stability" = "stability.md" },
   { "Examples" = [
     { "Overview" = "examples/index.md" },
     { "KL-DRO radius sweep" = "examples/kl_dro_radius_sweep.md" },

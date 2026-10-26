@@ -10,7 +10,8 @@ Latest release: `v0.1.0`
 
 Optora uses automated SemVer releases. Pull requests preview the next version,
 and merges to `main` perform the release only when the final commit message
-contains `#release`.
+contains `#release`. Which marker a change needs during `0.x` is set by
+[API stability](stability.md).
 
 ## Version markers
 
@@ -54,9 +55,9 @@ repository owner.
 5. In PyPI, add a trusted publisher for the GitHub repository, workflow
    `.github/workflows/release.yml`, and environment `pypi`. Restrict the
    `pypi` environment's deployment branches and tags to the `v*` tag pattern.
-6. Protect `main`: require the CI checks `tests (3.10)`, `tests (3.11)`,
-   `tests (3.12)` and `quality, package, docs`, and disallow force pushes and
-   branch deletion. Leave administrators unenforced, because release
+6. Protect `main`: require the single CI check `ci gate`, which passes only
+   when every other CI job does, and disallow force pushes and branch
+   deletion. Leave administrators unenforced, because release
    preparation pushes its `chore(release)` commit with the `RELEASE_PAT`
    secret (a personal access token of a repository administrator).
 7. Merge changes through pull requests. Use squash merges when you want the
@@ -65,7 +66,15 @@ repository owner.
    publish to PyPI.
 9. Let GitHub Actions build, test, create the release commit and tag, check out
    that tag for publishing, publish the package to PyPI, publish a GitHub
-   release, and redeploy the documentation site.
+   release with notes generated from the merged pull requests, and redeploy
+   the documentation site.
+10. Archive releases on Zenodo once: sign in at
+    [zenodo.org](https://zenodo.org/) with GitHub and switch the repository
+    on under *Account > GitHub*. Every GitHub release published afterwards
+    is archived with a version DOI, using the metadata in `CITATION.cff`.
+    After the first archive, add its concept DOI, which always resolves to
+    the latest version, to `CITATION.cff` as `doi:` and as a badge in
+    `README.md`.
 
 Publishing runs from the `vX.Y.Z` tag created by release preparation. If PyPI
 configuration is wrong on the first attempt, fix the trusted-publisher settings

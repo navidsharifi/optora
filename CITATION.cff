@@ -1,0 +1,22 @@
+# Citation metadata for Optora (https://citation-file-format.github.io/).
+# GitHub renders it as "Cite this repository", and Zenodo reads it when it
+# archives a release. `version` and `date-released` are deliberately absent:
+# Zenodo takes both from the release tag, so nothing here can drift.
+cff-version: 1.2.0
+message: "If you use Optora in your research, please cite it as below."
+type: software
+title: Optora
+abstract: "A small, composable, PyTorch-native library for distributionally robust optimization."
+authors:
+  - family-names: Sharifi
+    given-names: Navid
+  - name: Optora contributors
+repository-code: "https://github.com/navidsharifi/optora"
+url: "https://navidsharifi.github.io/optora/"
+license: MIT
+keywords:
+  - distributionally robust optimization
+  - ambiguity sets
+  - optimal transport
+  - PyTorch
+  - machine learning

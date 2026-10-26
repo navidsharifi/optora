@@ -114,6 +114,18 @@ no root-level workflow functions; run an algorithm with `Solver.solve(problem)`.
     per module, and rewrites the API navigation. Never edit the generated pages
     by hand.
 
+## Versioning
+
+Optora is alpha and follows Semantic Versioning: during `0.x`, a minor
+release may change the public API and a patch release does not. See
+[API stability](stability.md) for what counts as public.
+
+## Citing
+
+If you use Optora in your research, please cite it with the metadata in
+[`CITATION.cff`](https://github.com/navidsharifi/optora/blob/main/CITATION.cff),
+which GitHub's "Cite this repository" button turns into APA or BibTeX.
+
 ## Contributing
 
 Development workflow, coding style, and the pull request checklist live in
