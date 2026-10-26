@@ -83,10 +83,20 @@ environment in the repository root:
 
 ```powershell
 pip install -e ".[dev,docs]"
-pytest
+pytest --cov
 ruff check .
 ruff format --check .
 mypy
+```
+
+CI runs the tests on Linux, macOS, and Windows against both the minimum and
+the latest PyTorch, enforces the coverage gate set in `pyproject.toml`, and
+installs the built wheel into a clean virtual environment to run every
+script under `examples/`. Reproduce that smoke test locally with:
+
+```powershell
+python -m build
+python -m tools.smoke
 ```
 
 Generate the hierarchical API reference, preview it, or build the complete

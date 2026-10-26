@@ -431,8 +431,13 @@ def test_chi_square_on_a_large_support_is_finite_and_bounded(
     assert torch.isfinite(result)
     assert result <= loss.max()
     assert result >= torch.sum(nominal * loss)
-    if fraction >= 1.0:
-        assert result == loss.max()
+    maximum = float(loss.max())
+    if fraction > 1.0:
+        assert float(result) == maximum
+    elif fraction == 1.0:
+        # Exactly at saturation the feasibility test compares two values
+        # equal in exact arithmetic; reduction order may cost a few ulps.
+        assert float(result) >= maximum - 4 * math.ulp(maximum)
 
 
 @pytest.mark.parametrize("radius", [1e-14, 1e-10, 1e-6])

@@ -199,7 +199,10 @@ def test_the_returned_distribution_stays_inside_the_radius(fraction: float) -> N
     # a primal objective value at a distribution the set actually contains.
     # Below saturation the radius constraint is tight, so the slack is
     # checked relatively: the divergence may sit on the boundary but must
-    # never cross it by more than the rounding of its own evaluation.
+    # never cross it by more than the rounding of its own evaluation. That
+    # rounding has an absolute floor of about n * eps, because log(q / p)
+    # cancels to ~0 when q is close to p, so the relative slack alone is
+    # sub-ulp at tiny radii and the outcome depends on PyTorch's kernels.
     radius = fraction * _kl_saturation_radius(NOMINAL, LOSS)
     ambiguity_set = KLAmbiguitySet(NOMINAL, radius=radius)
     differentiable = LOSS.clone().requires_grad_(True)
@@ -208,7 +211,8 @@ def test_the_returned_distribution_stays_inside_the_radius(fraction: float) -> N
 
     assert differentiable.grad is not None
     divergence = ambiguity_set.divergence(differentiable.grad, NOMINAL)
-    assert float(divergence) <= radius * (1.0 + 1e-9)
+    rounding_floor = NOMINAL.numel() * torch.finfo(NOMINAL.dtype).eps
+    assert float(divergence) <= radius * (1.0 + 1e-9) + rounding_floor
 
 
 @pytest.mark.parametrize("support_size", [1, 2, 100, 1000, 10000])

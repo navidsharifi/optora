@@ -87,9 +87,14 @@ def test_a_large_support_stays_finite_and_below_the_maximum_loss(
         assert torch.isfinite(result)
         assert result <= loss.max()
         assert result >= nominal_expectation
-    if fraction >= 1.0:
-        assert float(kl) == float(loss.max())
-        assert float(chi_square) == float(loss.max())
+    maximum = float(loss.max())
+    for result in (kl, chi_square):
+        if fraction > 1.0:
+            assert float(result) == maximum
+        elif fraction == 1.0:
+            # Exactly at saturation the feasibility test compares two values
+            # equal in exact arithmetic; reduction order may cost a few ulps.
+            assert float(result) >= maximum - 4 * math.ulp(maximum)
 
 
 # --- Issue #49: accuracy at a vanishing radius -------------------------------

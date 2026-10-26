@@ -52,6 +52,63 @@ def test_zero_radius_returns_exact_expectation() -> None:
     assert torch.allclose(result, torch.sum(nominal * loss), atol=1e-6)
 
 
+# Two distinct-loss support points at zero transport cost from each other: a
+# pseudometric ground cost, for which a zero-radius ball is not {nominal}.
+ZERO_COST_PAIR_NOMINAL = torch.tensor([0.5, 0.5], dtype=torch.float64)
+ZERO_COST_PAIR_LOSS = torch.tensor([0.0, 1.0], dtype=torch.float64)
+ZERO_COST_PAIR_COST = torch.zeros(2, 2, dtype=torch.float64)
+
+ZERO_RADII = [0.0, torch.tensor(0.0, dtype=torch.float64)]
+ZERO_RADIUS_IDS = ["float", "tensor"]
+
+
+@pytest.mark.parametrize("radius", ZERO_RADII, ids=ZERO_RADIUS_IDS)
+def test_zero_radius_moves_mass_freely_across_a_zero_cost_pair(
+    radius: float | torch.Tensor,
+) -> None:
+    ambiguity_set = WassersteinAmbiguitySet(
+        ZERO_COST_PAIR_NOMINAL, cost=ZERO_COST_PAIR_COST, radius=radius
+    )
+
+    result = ambiguity_set.worst_case_expectation(ZERO_COST_PAIR_LOSS)
+
+    assert torch.equal(result, torch.tensor(1.0, dtype=torch.float64))
+
+
+@pytest.mark.parametrize("radius", ZERO_RADII, ids=ZERO_RADIUS_IDS)
+def test_zero_radius_gradient_on_a_zero_cost_pair_is_the_worst_case_distribution(
+    radius: float | torch.Tensor,
+) -> None:
+    loss = ZERO_COST_PAIR_LOSS.clone().requires_grad_(True)
+    ambiguity_set = WassersteinAmbiguitySet(
+        ZERO_COST_PAIR_NOMINAL, cost=ZERO_COST_PAIR_COST, radius=radius
+    )
+
+    ambiguity_set.worst_case_expectation(loss).backward()
+
+    assert loss.grad is not None
+    assert torch.equal(loss.grad, torch.tensor([0.0, 1.0], dtype=torch.float64))
+
+
+@pytest.mark.parametrize("radius", ZERO_RADII, ids=ZERO_RADIUS_IDS)
+def test_zero_radius_on_a_partly_pseudometric_cost_maximizes_within_zero_cost_rows(
+    radius: float | torch.Tensor,
+) -> None:
+    # Points 0 and 1 coincide but carry different losses; point 2 is one unit
+    # away. At zero radius rows 0 and 1 both reach loss 1 for free, while row
+    # 2 cannot move, so the worst case is 0.25 + 0.25 + 0.5 * 3 = 2.
+    nominal = torch.tensor([0.25, 0.25, 0.5], dtype=torch.float64)
+    loss = torch.tensor([0.0, 1.0, 3.0], dtype=torch.float64)
+    cost = torch.tensor(
+        [[0.0, 0.0, 1.0], [0.0, 0.0, 1.0], [1.0, 1.0, 0.0]], dtype=torch.float64
+    )
+    ambiguity_set = WassersteinAmbiguitySet(nominal, cost=cost, radius=radius)
+
+    result = ambiguity_set.worst_case_expectation(loss)
+
+    assert result.item() == pytest.approx(2.0, abs=1e-12)
+
+
 @pytest.mark.parametrize("radius", [0.05, 0.1, 0.2, 0.5, 1.0, 2.0])
 def test_worst_case_expectation_matches_grid_search_over_dual_variable(
     radius: float,

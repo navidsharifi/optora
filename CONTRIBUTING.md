@@ -28,7 +28,7 @@ pip install -e ".[dev,docs]"
 3. Make your changes.
 4. Format your code (`ruff format .`) and lint it (`ruff check .`).
 5. Type-check with `mypy` (strict mode).
-6. Run the test suite (`pytest`).
+6. Run the test suite with the coverage gate (`pytest --cov`).
 7. Commit using Conventional Commits.
 8. Open a Pull Request linked to the relevant issue.
 
@@ -76,7 +76,7 @@ under `optora/` needs it, and then it must:
 Before opening a Pull Request, ensure that:
 
 - No earlier open Pull Request targets the same issue.
-- Tests pass (`pytest`).
+- Tests pass and coverage meets the gate in `pyproject.toml` (`pytest --cov`).
 - Code is formatted and linted (`ruff format --check .`, `ruff check .`).
 - Type checks pass (`mypy`).
 - Commit messages follow the Conventional Commits format.
