@@ -3,6 +3,7 @@
 import torch
 
 from optora.core.divergence_base import Divergence
+from optora.core.precision import working_dtype
 
 
 class KLDivergence(Divergence):
@@ -49,9 +50,14 @@ class KLDivergence(Divergence):
 
         Returns:
             A scalar tensor holding $D_{\mathrm{KL}}(p \,\|\, q)$, clamped to be
-            nonnegative to absorb floating-point error near zero.
+            nonnegative to absorb floating-point error near zero, computed
+            in `optora.core.working_dtype(p, q)` and returned in the
+            promoted dtype of `p` and `q`.
         """
-        p_safe = torch.clamp(p, min=self.eps)
-        q_safe = torch.clamp(q, min=self.eps)
+        dtype = working_dtype(p, q)
+        p_safe = torch.clamp(p.to(dtype), min=self.eps)
+        q_safe = torch.clamp(q.to(dtype), min=self.eps)
         divergence = torch.sum(p_safe * torch.log(p_safe / q_safe))
-        return torch.clamp(divergence, min=0.0)
+        return torch.clamp(divergence, min=0.0).to(
+            torch.promote_types(p.dtype, q.dtype)
+        )

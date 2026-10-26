@@ -1,9 +1,37 @@
 """KL-divergence-constrained ambiguity set (KL-DRO)."""
 
+import math
+
 import torch
 
 from optora.core.dro_base import TiltedAmbiguitySet
 from optora.divergences.kl import KLDivergence
+
+# Divergence above which the tilt's KL divergence is read from its direct
+# form rather than its centered form. Both are accurate to a few ulps here.
+_LARGE_DIVERGENCE = 1.0
+
+# Lower bound on the centered form's excess, `exp(-D) - 1`, at twice the
+# switching divergence: below `_LARGE_DIVERGENCE` it never binds.
+_NEAR_EXCESS_FLOOR = math.expm1(-2.0 * _LARGE_DIVERGENCE)
+
+
+def _log_on_support(nominal: torch.Tensor) -> torch.Tensor:
+    """Return `log(nominal)`, exactly `-inf` where `nominal` is zero.
+
+    Args:
+        nominal: Reference distribution.
+
+    Returns:
+        The elementwise logarithm of `nominal`, taken without ever
+        evaluating `log(0)`, so the graph holds no infinite derivative.
+    """
+    on_support = nominal > 0.0
+    return torch.where(
+        on_support,
+        torch.log(torch.where(on_support, nominal, torch.ones_like(nominal))),
+        -torch.inf,
+    )
 
 
 class KLAmbiguitySet(TiltedAmbiguitySet):
@@ -103,16 +131,7 @@ class KLAmbiguitySet(TiltedAmbiguitySet):
             validate=validate,
         )
         self.eps = eps
-        on_support = nominal > 0.0
-        self.register_buffer(
-            "log_nominal",
-            torch.where(
-                on_support,
-                torch.log(torch.where(on_support, nominal, torch.ones_like(nominal))),
-                -torch.inf,
-            ),
-            persistent=False,
-        )
+        self.register_buffer("log_nominal", _log_on_support(nominal), persistent=False)
 
     def _tilted_distribution(
         self, gap: torch.Tensor, tilt: torch.Tensor
@@ -125,15 +144,38 @@ class KLAmbiguitySet(TiltedAmbiguitySet):
         form keeps the largest exponent at exactly zero, so no intermediate
         overflows however extreme $\beta$ becomes.
 
-        The divergence is reported as $-\log
-        \mathbb{E}_{\mathrm{nominal}}[e^{-\beta(\mathrm{gap} -
-        \mathbb{E}_{q_\beta}[\mathrm{gap}])}]$, algebraically the same as
-        $-\beta\,\mathbb{E}_{q_\beta}[\mathrm{gap}] - \log Z$ but with the
-        exponent centered on the tilted mean first. The expectation then
-        sits within $O(\beta^2)$ of one and is read through `expm1` and
-        `log1p`, so a vanishing radius is resolved to full precision
-        instead of being lost to cancellation between two nearly equal
-        $O(\beta)$ terms.
+        The divergence has two algebraically equal forms, each accurate in
+        one regime, and the one suited to the regime is returned:
+
+        - **Small divergence.** $-\log
+          \mathbb{E}_{\mathrm{nominal}}[e^{c}]$ with the exponent
+          $c = -\beta(\mathrm{gap} - \mathbb{E}_{q_\beta}[\mathrm{gap}])$
+          centered on the tilted mean. The expectation then sits within
+          $O(\beta^2)$ of one and is read through `expm1` and `log1p`, so a
+          vanishing radius is resolved to full precision instead of being
+          lost to cancellation between two nearly equal $O(\beta)$ terms.
+        - **Large divergence.** $-\beta\,\mathbb{E}_{q_\beta}[\mathrm{gap}]
+          - \log Z$, read off the `logsumexp` normalizer at no extra cost.
+          The centered form represents $e^{-D}$ as one plus a sum near
+          $-1$, which rounds to exactly $-1$ once $D$ exceeds about
+          $-\log \varepsilon$ (16 in float32, 36 in float64) and would
+          report an infinite divergence for a feasible tilt.
+
+        The direct form also takes over when the largest centered exponent,
+        $\beta\,\mathbb{E}_{q_\beta}[\mathrm{gap}]$ (the gap is zero on the
+        highest loss), passes half the dtype's logarithmic range. Every
+        product $\mathrm{nominal}_i e^{c_i} = q_i e^{-D}$ is at most one,
+        but $e^{c_i}$ alone would overflow. That needs a highest-loss mass
+        below $e^{-44}$ in float32, where the direct form is still accurate
+        to the tilt's own resolution.
+
+        The tilt stays in the log domain, normalized by `logsumexp`, so a
+        scenario whose nominal mass and tilt weight would underflow as a
+        product still gets its correct, representable tilted mass. The
+        cached `log_nominal` is used when it is already in `gap`'s working
+        precision; a half-precision set instead takes the logarithm of its
+        nominal in that precision, since a logarithm rounded to a
+        half-precision significand would perturb every tilted weight.
 
         Args:
             gap: Standardized shortfall below the maximum loss, of shape
@@ -143,13 +185,24 @@ class KLAmbiguitySet(TiltedAmbiguitySet):
         Returns:
             The tilted distribution and its KL divergence from `nominal`.
         """
+        log_nominal = self.log_nominal
+        if log_nominal.dtype != gap.dtype:
+            log_nominal = _log_on_support(self.nominal.to(gap.dtype))
         rate = self._tilt_rate(tilt)
-        log_weight = self.log_nominal - rate * gap
+        log_weight = log_nominal - rate * gap
         log_normalizer = torch.logsumexp(log_weight, dim=-1, keepdim=True)
         distribution = torch.exp(log_weight - log_normalizer)
         mean_gap = torch.sum(distribution * gap, dim=-1, keepdim=True)
-        centered = -rate * (gap - mean_gap)
-        divergence = -torch.log1p(
-            torch.sum(self.nominal * torch.expm1(centered), dim=-1)
+        largest_exponent = rate * mean_gap
+        exponent_limit = 0.5 * math.log(torch.finfo(gap.dtype).max)
+        # Both clamps only touch the regime where `near` is discarded; they
+        # keep that branch and its derivative finite.
+        centered = torch.clamp(largest_exponent - rate * gap, max=exponent_limit)
+        excess = torch.sum(self.nominal * torch.expm1(centered), dim=-1)
+        near = -torch.log1p(torch.clamp(excess, min=_NEAR_EXCESS_FLOOR))
+        far = -(largest_exponent + log_normalizer).squeeze(-1)
+        use_far = (far > _LARGE_DIVERGENCE) | (
+            largest_exponent.squeeze(-1) > exponent_limit
         )
+        divergence = torch.where(use_far, far, near)
         return distribution, torch.clamp(divergence, min=0.0)

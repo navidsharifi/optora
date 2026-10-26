@@ -10,6 +10,7 @@ from torch import nn
 from torch.func import jvp
 
 from optora.core.divergence_base import Divergence
+from optora.core.precision import working_dtype
 from optora.core.solver_base import (
     MinimizationProblem,
     MinimizationResult,
@@ -90,6 +91,35 @@ def _validate_nominal(nominal: torch.Tensor) -> None:
         )
 
 
+def _validate_radius(radius: torch.Tensor) -> None:
+    """Check that every entry of a tensor radius is nonnegative.
+
+    Written as `not (minimum >= 0)` so that a `nan` entry, which `torch.amin`
+    propagates and which compares false against everything, fails the check.
+
+    Args:
+        radius: Candidate tensor of radii.
+
+    Raises:
+        ValueError: If `radius` holds a negative or `nan` entry.
+    """
+    if radius.numel() > 0 and not bool(torch.amin(radius) >= 0.0):
+        raise ValueError("radius must be nonnegative and not nan.")
+
+
+def _validate_loss(loss: torch.Tensor) -> None:
+    """Check that every entry of a loss tensor is finite.
+
+    Args:
+        loss: Per-scenario loss values.
+
+    Raises:
+        ValueError: If `loss` holds a `nan` or infinite entry.
+    """
+    if not bool(torch.all(torch.isfinite(loss))):
+        raise ValueError("loss must be finite.")
+
+
 def _broadcast_batch_shapes(**shapes: torch.Size) -> torch.Size:
     """Broadcast named batch shapes together under NumPy broadcasting rules.
 
@@ -132,6 +162,22 @@ class AmbiguitySet(nn.Module, ABC):
     tensor state the divergence holds (for example `SinkhornDivergence`'s
     ground-cost matrix) together, and both surface through `state_dict()`.
 
+    Numerical policy, shared by every subclass through `_prepare_loss` and
+    `_as_result`:
+
+    - **Precision.** The worst case is computed in
+      `optora.core.working_dtype(loss, nominal)`, so half-precision losses
+      or a half-precision set are solved in float32, and the result is
+      returned in `torch.promote_types(loss.dtype, nominal.dtype)`.
+    - **Non-finite losses.** A `nan` or infinite loss entry makes the
+      corresponding batch element of the result non-finite (`nan`, or the
+      infinite value itself), never a finite number; other batch elements
+      are unaffected.
+    - **Validation.** Metadata checks (shapes, a negative or `nan` float
+      radius) always run. Checks that read tensor values back to the host
+      run only with `validate=True`, in the spirit of
+      `torch.distributions`' `validate_args`.
+
     Attributes:
         nominal: Reference distribution the ambiguity set is centered on, a
             nonnegative tensor that sums to one along its last dimension.
@@ -140,6 +186,9 @@ class AmbiguitySet(nn.Module, ABC):
             inside the ambiguity set from `nominal`, either a Python float
             or a tensor of radii broadcastable against the batch shape of
             `worst_case_expectation`'s `loss`.
+        validate: Whether value checks that synchronize with the device run:
+            on `nominal` and a tensor `radius` at construction, and on
+            `loss` at every `worst_case_expectation` call.
     """
 
     nominal: torch.Tensor
@@ -162,22 +211,26 @@ class AmbiguitySet(nn.Module, ABC):
                 inside the ambiguity set from `nominal`. A tensor radius is
                 registered as a buffer and broadcast against the batch
                 shape of `worst_case_expectation`'s `loss`, which evaluates
-                a whole sweep of radii in one call; its entries are not
-                checked for nonnegativity, since reading them on the host
-                would block on the device (the same opt-in policy the
-                divergences apply to their tensor arguments), and a tensor
-                radius never takes the zero-radius shortcut.
-            validate: Whether to check that `nominal` is nonnegative and
-                sums to one along its last dimension. The check reads two
-                reductions over `nominal` on the host, which blocks until
-                the device has produced them, so it is opt-in and off by
-                default to keep construction asynchronous. The shape and
-                hyperparameter checks are metadata-only and always run.
+                a whole sweep of radii in one call; its entries are checked
+                for nonnegativity only when `validate` is set, since reading
+                them on the host would block on the device, and a tensor
+                radius never takes the zero-radius shortcut. An infinite
+                radius is allowed and admits every distribution the
+                divergence can reach.
+            validate: Whether to run the value checks that synchronize with
+                the device: that `nominal` is nonnegative and sums to one
+                along its last dimension, that a tensor `radius` is
+                nonnegative and not `nan`, and, on every
+                `worst_case_expectation` call, that `loss` is finite. They
+                are opt-in and off by default to keep construction and
+                evaluation asynchronous. The shape and hyperparameter
+                checks are metadata-only and always run.
 
         Raises:
             ValueError: If `nominal` is a scalar tensor, if `radius` is a
-                negative float, or if `validate` is set and `nominal` is not
-                a valid probability distribution.
+                negative or `nan` float, or if `validate` is set and
+                `nominal` is not a valid probability distribution or a
+                tensor `radius` holds a negative or `nan` entry.
         """
         super().__init__()
         if nominal.ndim == 0:
@@ -189,11 +242,14 @@ class AmbiguitySet(nn.Module, ABC):
             _validate_nominal(nominal)
         self.register_buffer("nominal", nominal)
         self.divergence = divergence
+        self.validate = validate
         if isinstance(radius, torch.Tensor):
+            if validate:
+                _validate_radius(radius)
             self.register_buffer("radius", radius)
             self._radius_is_zero = False
         else:
-            if radius < 0:
+            if not radius >= 0:
                 raise ValueError(f"radius must be nonnegative, got {radius}.")
             self.radius = radius
             self._radius_is_zero = radius == 0.0
@@ -228,6 +284,44 @@ class AmbiguitySet(nn.Module, ABC):
             nominal=nominal.shape[:-1],
             radius=self._radius_shape,
         )
+
+    def _prepare_loss(self, loss: torch.Tensor) -> tuple[torch.Size, torch.Tensor]:
+        """Check a loss tensor and cast it to the precision the solve runs in.
+
+        Every `worst_case_expectation` starts here and returns through
+        `_as_result`. The cast is differentiable and a no-op for a float32
+        or float64 loss on a set of the same dtype.
+
+        Args:
+            loss: Per-scenario loss values of shape `(..., n)`.
+
+        Returns:
+            The batch shape from `_batch_shape`, and `loss` cast to
+            `optora.core.working_dtype(loss, nominal)`. Buffers of a
+            half-precision set must be cast to that dtype wherever they
+            enter a computation that `loss` does not already promote.
+
+        Raises:
+            ValueError: If `loss`'s shape does not match `nominal` and
+                `radius`, or if `validate` is set and `loss` is not finite.
+        """
+        batch_shape = self._batch_shape(loss)
+        if self.validate:
+            _validate_loss(loss)
+        return batch_shape, loss.to(working_dtype(loss, self.nominal))
+
+    def _as_result(self, value: torch.Tensor, loss: torch.Tensor) -> torch.Tensor:
+        """Cast a working-precision worst case back to the caller's dtype.
+
+        Args:
+            value: Worst-case expectation computed in working precision.
+            loss: The loss as the caller passed it, before `_prepare_loss`.
+
+        Returns:
+            `value` in `torch.promote_types(loss.dtype, nominal.dtype)`, the
+            dtype a plain PyTorch operation on the two would return.
+        """
+        return value.to(torch.promote_types(loss.dtype, self.nominal.dtype))
 
     @property
     def _radius_shape(self) -> torch.Size:
@@ -559,14 +653,17 @@ class TiltedAmbiguitySet(AmbiguitySet):
 
         Raises:
             ValueError: If `loss`'s trailing dimension does not match
-                `nominal`'s support size, or its batch shape does not
-                broadcast against `nominal` and `radius`.
+                `nominal`'s support size, its batch shape does not
+                broadcast against `nominal` and `radius`, or `validate` is
+                set and `loss` is not finite.
         """
-        batch_shape = self._batch_shape(loss)
+        batch_shape, working = self._prepare_loss(loss)
         if self._radius_is_zero:
-            return self._nominal_expectation(loss, batch_shape)
+            return self._as_result(
+                self._nominal_expectation(working, batch_shape), loss
+            )
 
-        detached = loss.detach()
+        detached = working.detach()
         on_support = self.nominal > 0.0
         max_loss = torch.amax(
             torch.where(on_support, detached, -torch.inf), dim=-1, keepdim=True
@@ -579,9 +676,9 @@ class TiltedAmbiguitySet(AmbiguitySet):
         tilt = self._solve_tilt(gap, batch_shape)
         distribution, _ = self._tilted_distribution(gap, tilt)
         value: torch.Tensor = _MaximizerExpectation.apply(
-            loss, distribution, max_loss, scale, tilt, self._implicit_maximizer
+            working, distribution, max_loss, scale, tilt, self._implicit_maximizer
         )
-        return value.expand(batch_shape)
+        return self._as_result(value.expand(batch_shape), loss)
 
     def _implicit_maximizer(
         self,
@@ -856,19 +953,22 @@ class DualAmbiguitySet(AmbiguitySet):
 
         Raises:
             ValueError: If `loss`'s trailing dimension does not match
-                `nominal`'s support size, or its batch shape does not
-                broadcast against `nominal` and `radius`.
+                `nominal`'s support size, its batch shape does not
+                broadcast against `nominal` and `radius`, or `validate` is
+                set and `loss` is not finite.
             RuntimeError: If `radius` is positive and `dual_solver` is
                 `None`.
         """
-        batch_shape = self._batch_shape(loss)
+        batch_shape, working = self._prepare_loss(loss)
         if self._radius_is_zero:
-            return self._nominal_expectation(loss, batch_shape)
+            return self._as_result(
+                self._nominal_expectation(working, batch_shape), loss
+            )
 
-        shift = torch.amin(loss, dim=-1).detach()
-        spread = torch.amax(loss, dim=-1).detach() - shift
+        shift = torch.amin(working, dim=-1).detach()
+        spread = torch.amax(working, dim=-1).detach() - shift
         scale = torch.where(spread > 0, spread, torch.ones_like(spread))
-        standardized = (loss - shift.unsqueeze(-1)) / scale.unsqueeze(-1)
+        standardized = (working - shift.unsqueeze(-1)) / scale.unsqueeze(-1)
 
         dual_value = self._solve_dual(
             lambda point: self._dual_objective(point, standardized, self.radius),
@@ -876,7 +976,7 @@ class DualAmbiguitySet(AmbiguitySet):
             shift,
             scale,
         )
-        return scale * dual_value + shift
+        return self._as_result(scale * dual_value + shift, loss)
 
     def _solve_dual(
         self,
@@ -916,7 +1016,7 @@ class DualAmbiguitySet(AmbiguitySet):
                 "dual_solver is required to evaluate a positive-radius "
                 f"{type(self).__name__}."
             )
-        initial = self.initial_dual_point
+        initial = self.initial_dual_point.to(scale.dtype)
         start_shape = batch_shape + initial.shape
         warm_start = self._dual_warm_start
         if warm_start is not None and warm_start.shape == start_shape:

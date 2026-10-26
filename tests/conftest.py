@@ -12,6 +12,8 @@ from hypothesis import settings
 
 FLOAT_DTYPES = (torch.float32, torch.float64)
 
+HALF_DTYPES = (torch.bfloat16, torch.float16)
+
 # Property-based tests run small tensor solves whose first call pays PyTorch's
 # one-off kernel warm-up, so a per-example deadline would report that latency
 # as flakiness rather than measure anything about the code under test. The
@@ -32,6 +34,17 @@ def dtype(request: pytest.FixtureRequest) -> torch.dtype:
 
     Returns:
         One of `torch.float32` or `torch.float64`.
+    """
+    parameter: torch.dtype = request.param
+    return parameter
+
+
+@pytest.fixture(params=HALF_DTYPES, ids=lambda dtype: str(dtype).removeprefix("torch."))
+def half_dtype(request: pytest.FixtureRequest) -> torch.dtype:
+    """Iterate over the half-precision dtypes Optora solves in float32.
+
+    Returns:
+        One of `torch.bfloat16` or `torch.float16`.
     """
     parameter: torch.dtype = request.param
     return parameter

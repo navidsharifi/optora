@@ -21,6 +21,7 @@ NOT_REEXPORTED = frozenset(
         "ConvergenceTracker",
         "require_gradient",
         "validate_check_interval",
+        "working_dtype",
     }
 )
 

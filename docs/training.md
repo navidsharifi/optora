@@ -162,7 +162,8 @@ smooth points.
 | --- | --- |
 | Inner cost | `KLAmbiguitySet` and `ChiSquareAmbiguitySet` locate the worst case by a bisection whose trip count is fixed by the dtype, so every step costs the same and there is nothing to tune or warm-start. |
 | Minibatches | Pass a batched loss of shape `(..., n)`; the inner problems decouple across leading dimensions and are bisected jointly in one call. |
-| Device and dtype | `ambiguity_set.to(device)` moves `nominal` and every cached buffer; the returned value follows the loss's dtype and device. |
+| Device and dtype | `ambiguity_set.to(device)` moves `nominal` and every cached buffer; the returned value follows the loss's dtype and device. Half-precision losses (including under `torch.autocast`) are solved in float32 and rounded once; see [Numerical behaviour](numerics.md). |
+| Debugging | `validate=True` checks `nominal`, a tensor `radius`, and every `loss` for non-finite or invalid values, at one host synchronization per call. |
 | Differentiable inputs | Only `loss`. Treat `nominal` and a tensor `radius` as constants: gradients with respect to them are not supported and are not meaningful. |
 | Zero radius | `radius=0.0` makes the objective exactly the nominal-weighted empirical risk, which is the natural non-robust baseline to compare against. For `WassersteinAmbiguitySet` this needs a metric `cost` (`cost[i, j] > 0` for `i != j`); a zero-cost pair of distinct support points still lets mass move between them at zero radius. |
 

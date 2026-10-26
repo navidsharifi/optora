@@ -445,15 +445,19 @@ class TotalVariationAmbiguitySet(AmbiguitySet):
 
         Raises:
             ValueError: If `loss`'s trailing dimension does not match
-                `nominal`'s support size, or its batch shape does not
-                broadcast against `nominal` and `radius`.
+                `nominal`'s support size, its batch shape does not
+                broadcast against `nominal` and `radius`, or `validate` is
+                set and `loss` is not finite.
         """
-        batch_shape = self._batch_shape(loss)
+        batch_shape, working = self._prepare_loss(loss)
         if self._radius_is_zero:
-            return self._nominal_expectation(loss, batch_shape)
+            return self._as_result(
+                self._nominal_expectation(working, batch_shape), loss
+            )
 
-        sorted_loss, sort_index = torch.sort(loss, dim=-1)
-        sorted_nominal = self.nominal.expand_as(loss).gather(-1, sort_index)
+        nominal = self.nominal.to(working.dtype)
+        sorted_loss, sort_index = torch.sort(working, dim=-1)
+        sorted_nominal = nominal.expand_as(working).gather(-1, sort_index)
 
         rest_nominal = sorted_nominal[..., :-1]
         rest_loss = sorted_loss[..., :-1]
@@ -465,6 +469,8 @@ class TotalVariationAmbiguitySet(AmbiguitySet):
         remaining_budget = torch.clamp(budget - mass_available_before, min=0.0)
         reallocated_mass = torch.minimum(remaining_budget, rest_nominal)
 
-        nominal_expectation = torch.sum(self.nominal * loss, dim=-1)
+        nominal_expectation = torch.sum(nominal * working, dim=-1)
         reallocation_gain = torch.sum(reallocated_mass * (max_loss - rest_loss), dim=-1)
-        return (nominal_expectation + reallocation_gain).expand(batch_shape)
+        return self._as_result(
+            (nominal_expectation + reallocation_gain).expand(batch_shape), loss
+        )

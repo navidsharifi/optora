@@ -267,7 +267,8 @@ class WassersteinAmbiguitySet(AmbiguitySet):
             `batch_shape + (n, 1)`: the support point each unit of nominal
             mass is transported to at this multiplier.
         """
-        shifted = loss.unsqueeze(-2) - gamma[..., None, None] * self.cost
+        cost = self.cost.to(loss.dtype)
+        shifted = loss.unsqueeze(-2) - gamma[..., None, None] * cost
         # A tie is the rounded equality of two independently rounded
         # differences, so an exact test misses ties by a few ulps and leaves
         # the plan undefined precisely where it matters: `_dual_bracket`'s
@@ -276,14 +277,14 @@ class WassersteinAmbiguitySet(AmbiguitySet):
         # overspending plan as if it were the thrifty one. Compare within a
         # tolerance scaled to the magnitude of the terms being differenced.
         loss_scale = torch.amax(torch.abs(loss), dim=-1, keepdim=True).unsqueeze(-1)
-        cost_scale = torch.amax(self.cost, dim=-1, keepdim=True)
+        cost_scale = torch.amax(cost, dim=-1, keepdim=True)
         tolerance = (
             _TIE_TOLERANCE_ULPS
             * torch.finfo(shifted.dtype).eps
             * (loss_scale + gamma[..., None, None] * cost_scale)
         )
         tied = shifted >= torch.amax(shifted, dim=-1, keepdim=True) - tolerance
-        preference = self.cost if prefer_costly else -self.cost
+        preference = cost if prefer_costly else -cost
         return torch.argmax(
             torch.where(tied, preference, torch.full_like(shifted, -torch.inf)),
             dim=-1,
@@ -325,7 +326,7 @@ class WassersteinAmbiguitySet(AmbiguitySet):
             minimizer -- the sign test the bisection needs.
         """
         return self.radius - self._transported(
-            self.cost, self._maximizing_columns(loss, gamma)
+            self.cost.to(loss.dtype), self._maximizing_columns(loss, gamma)
         )
 
     def _dual_upper_bound(self, loss: torch.Tensor) -> torch.Tensor:
@@ -342,7 +343,7 @@ class WassersteinAmbiguitySet(AmbiguitySet):
             The right end of a bracket containing the dual minimizer, of
             shape `loss.shape[:-1]`.
         """
-        cost = self.cost
+        cost = self.cost.to(loss.dtype)
         excess_cost = cost - torch.amin(cost, dim=-1, keepdim=True)
         is_costlier = excess_cost > 0.0
         losses = loss.unsqueeze(-2)
@@ -406,23 +407,24 @@ class WassersteinAmbiguitySet(AmbiguitySet):
             A tensor of shape `(...)` holding the expectation of `loss`
             under the worst-case distribution recovered from the dual
             optimum. For a zero radius and a metric `cost` this is exactly
-            `sum(nominal * loss)`.
+            `sum(nominal * loss)`. A batch element whose loss holds a `nan`
+            or infinite entry is `nan`.
 
         Raises:
             ValueError: If `loss`'s trailing dimension does not match
-                `nominal`'s support size, or its batch shape does not
-                broadcast against `nominal` and `radius`.
+                `nominal`'s support size, its batch shape does not
+                broadcast against `nominal` and `radius`, or `validate` is
+                set and `loss` is not finite.
         """
-        batch_shape = self._batch_shape(loss)
-        detached = loss.detach()
+        batch_shape, working = self._prepare_loss(loss)
+        detached = working.detach()
+        cost = self.cost.to(working.dtype)
         lower, upper = self._dual_bracket(detached, batch_shape)
         with torch.no_grad():
             eager = self._maximizing_columns(detached, lower, prefer_costly=True)
             thrifty = self._maximizing_columns(detached, upper)
-            underspend = self.radius - self._transported(self.cost, thrifty)
-            spread = self._transported(self.cost, eager) - self._transported(
-                self.cost, thrifty
-            )
+            underspend = self.radius - self._transported(cost, thrifty)
+            spread = self._transported(cost, eager) - self._transported(cost, thrifty)
             mixes = spread > 0.0
             weight = torch.clamp(
                 torch.where(
@@ -433,7 +435,11 @@ class WassersteinAmbiguitySet(AmbiguitySet):
                 min=0.0,
                 max=1.0,
             )
-        losses = loss.unsqueeze(-2)
-        return weight * self._transported(losses, eager) + (
+        losses = working.unsqueeze(-2)
+        value = weight * self._transported(losses, eager) + (
             1.0 - weight
         ) * self._transported(losses, thrifty)
+        # The plans select columns by comparison, which silently skips a nan
+        # or infinite loss, so a non-finite input is propagated explicitly.
+        finite = torch.all(torch.isfinite(detached), dim=-1)
+        return self._as_result(torch.where(finite, value, torch.nan), loss)

@@ -1,5 +1,12 @@
-"""Device and dtype coverage for every ambiguity set."""
+"""Device and dtype coverage for every ambiguity set.
 
+The precision tests back the dtype support table in `docs/numerics.md`: a
+half-precision worst case is exactly the float32 solve rounded once, and a
+float32 worst case agrees with a float64 solve of the same rounded inputs to
+within `FLOAT32_TOLERANCE_EPS` units of float32 epsilon.
+"""
+
+import math
 from collections.abc import Callable
 
 import pytest
@@ -15,6 +22,8 @@ from optora.dro.phi_dro import (
 )
 from optora.dro.wasserstein_dro import WassersteinAmbiguitySet
 from optora.solvers.gradient_descent import GradientDescent
+from tests.dro.instances import INSTANCES, Instance
+from tests.dro.specs import SetSpec, spec_parameters
 
 requires_cuda = pytest.mark.skipif(
     not torch.cuda.is_available(), reason="no CUDA device is available"
@@ -29,6 +38,13 @@ LOSS = (0.0, 1.0, 2.0)
 COST = ((0.0, 1.0, 2.0), (1.0, 0.0, 1.0), (2.0, 1.0, 0.0))
 
 RADIUS = 0.2
+
+RADII = (1e-6, 0.1, 1.0, 10.0)
+
+# Documented float32 accuracy, in units of float32 epsilon times the larger of
+# the worst case's magnitude and the loss spread. The worst draw measured over
+# 2400 random problems was 93 (Wasserstein); typical errors are a few units.
+FLOAT32_TOLERANCE_EPS = 128.0
 
 AmbiguitySetFactory = Callable[[torch.dtype], AmbiguitySet]
 
@@ -167,3 +183,159 @@ def test_tensor_state_stays_on_the_solving_device(
 
     for name, buffer in ambiguity_set.named_buffers():
         assert buffer.device.type == "cuda", name
+
+
+def _rounded(instance: Instance, dtype: torch.dtype) -> tuple[torch.Tensor, ...]:
+    """Return `(nominal, loss, cost)` rounded to `dtype`."""
+    return tuple(tensor.to(dtype) for tensor in instance.tensors())
+
+
+def _random_problem(
+    seed: int,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, float]:
+    """Draw a float32 problem spanning support sizes, scales, and radii.
+
+    Returns:
+        `(nominal, loss, cost, radius)`, with nominal masses down to `1e-6`,
+        a loss spread between `1e-3` and `1e3` around an offset of order
+        ten, and a radius between `1e-6` and `10`.
+    """
+    generator = torch.Generator().manual_seed(seed)
+
+    def uniform() -> float:
+        return float(torch.rand((), generator=generator, dtype=torch.float64))
+
+    size = int(torch.randint(1, 200, (), generator=generator))
+    logits = 1.5 * torch.randn(size, generator=generator, dtype=torch.float64)
+    nominal = torch.clamp(torch.softmax(logits, dim=0), min=1e-6)
+    nominal = nominal / torch.sum(nominal)
+    scale = 10.0 ** (6.0 * uniform() - 3.0)
+    offset = 10.0 * (2.0 * uniform() - 1.0)
+    loss = offset + scale * torch.randn(size, generator=generator, dtype=torch.float64)
+    position = torch.rand(size, generator=generator, dtype=torch.float64)
+    cost = torch.abs(position[:, None] - position[None, :])
+    radius = 10.0 ** (7.0 * uniform() - 6.0)
+    return nominal.float(), loss.float(), cost.float(), radius
+
+
+def _assert_float32_accuracy(
+    spec: SetSpec,
+    nominal: torch.Tensor,
+    loss: torch.Tensor,
+    cost: torch.Tensor,
+    radius: float,
+) -> None:
+    """Check a float32 solve against float64 on the same float32 inputs."""
+    value = spec.build(nominal, cost, radius).worst_case_expectation(loss)
+    reference = spec.build(nominal.double(), cost.double(), radius)
+    expected = float(reference.worst_case_expectation(loss.double()))
+    spread = float(torch.amax(loss) - torch.amin(loss))
+    tolerance = (
+        FLOAT32_TOLERANCE_EPS
+        * torch.finfo(torch.float32).eps
+        * max(abs(expected), spread, math.ulp(0.0))
+    )
+
+    assert value.dtype == torch.float32
+    assert abs(float(value) - expected) <= tolerance
+
+
+@spec_parameters
+@pytest.mark.parametrize("instance", INSTANCES, ids=lambda instance: instance.name)
+@pytest.mark.parametrize("radius", RADII)
+def test_float32_matches_float64_on_the_same_inputs(
+    spec: SetSpec, instance: Instance, radius: float
+) -> None:
+    nominal, loss, cost = _rounded(instance, torch.float32)
+
+    _assert_float32_accuracy(spec, nominal, loss, cost, radius)
+
+
+@spec_parameters
+@pytest.mark.parametrize("seed", range(16))
+def test_float32_matches_float64_on_random_problems(spec: SetSpec, seed: int) -> None:
+    nominal, loss, cost, radius = _random_problem(seed)
+
+    _assert_float32_accuracy(spec, nominal, loss, cost, radius)
+
+
+@spec_parameters
+@pytest.mark.parametrize("instance", INSTANCES, ids=lambda instance: instance.name)
+@pytest.mark.parametrize("radius", RADII)
+def test_half_precision_is_the_float32_solve_rounded_once(
+    spec: SetSpec, instance: Instance, radius: float, half_dtype: torch.dtype
+) -> None:
+    nominal, loss, cost = _rounded(instance, half_dtype)
+
+    value = spec.build(nominal, cost, radius).worst_case_expectation(loss)
+
+    float32_set = spec.build(nominal.float(), cost.float(), radius)
+    expected = float32_set.worst_case_expectation(loss.float())
+    assert value.dtype == half_dtype
+    assert torch.equal(value, expected.to(half_dtype))
+
+
+def test_every_set_returns_a_half_precision_result(
+    factory: AmbiguitySetFactory, half_dtype: torch.dtype
+) -> None:
+    ambiguity_set = factory(half_dtype)
+    loss = torch.tensor(LOSS, dtype=half_dtype)
+
+    value = ambiguity_set.worst_case_expectation(loss)
+
+    expected = factory(torch.float32).worst_case_expectation(loss.float())
+    assert value.dtype == half_dtype
+    assert torch.equal(value, expected.to(half_dtype))
+
+
+def test_a_half_precision_loss_on_a_float32_set_returns_float32(
+    factory: AmbiguitySetFactory, half_dtype: torch.dtype
+) -> None:
+    loss = torch.tensor(LOSS, dtype=half_dtype)
+
+    value = factory(torch.float32).worst_case_expectation(loss)
+
+    expected = factory(torch.float32).worst_case_expectation(loss.float())
+    assert value.dtype == torch.float32
+    assert torch.equal(value, expected)
+
+
+def test_a_float64_loss_on_a_float32_set_is_solved_in_float64(
+    factory: AmbiguitySetFactory,
+) -> None:
+    loss = torch.tensor(LOSS, dtype=torch.float64)
+
+    value = factory(torch.float32).worst_case_expectation(loss)
+
+    assert value.dtype == torch.float64
+
+
+@spec_parameters
+def test_half_precision_gradient_is_the_float32_gradient_rounded(
+    spec: SetSpec, half_dtype: torch.dtype
+) -> None:
+    nominal, loss, cost = _rounded(INSTANCES[0], half_dtype)
+    half_loss = loss.clone().requires_grad_(True)
+    float32_loss = loss.float().requires_grad_(True)
+
+    spec.build(nominal, cost, 0.3).worst_case_expectation(half_loss).backward()
+    float32_set = spec.build(nominal.float(), cost.float(), 0.3)
+    float32_set.worst_case_expectation(float32_loss).backward()
+
+    assert half_loss.grad is not None
+    assert float32_loss.grad is not None
+    assert half_loss.grad.dtype == half_dtype
+    assert torch.equal(half_loss.grad, float32_loss.grad.to(half_dtype))
+
+
+@spec_parameters
+def test_cpu_autocast_does_not_change_the_worst_case(spec: SetSpec) -> None:
+    nominal, loss, cost = _rounded(INSTANCES[0], torch.float32)
+    ambiguity_set = spec.build(nominal, cost, 0.3)
+    expected = ambiguity_set.worst_case_expectation(loss)
+
+    with torch.autocast("cpu", dtype=torch.bfloat16):
+        value = ambiguity_set.worst_case_expectation(loss)
+
+    assert value.dtype == torch.float32
+    assert torch.equal(value, expected)

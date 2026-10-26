@@ -8,6 +8,7 @@ from optora.core.convergence import (
 )
 from optora.core.divergence_base import Divergence
 from optora.core.dro_base import AmbiguitySet, DualAmbiguitySet, TiltedAmbiguitySet
+from optora.core.precision import working_dtype
 from optora.core.solver_base import (
     MinimizationProblem,
     MinimizationResult,
@@ -28,4 +29,5 @@ __all__ = [
     "TiltedAmbiguitySet",
     "require_gradient",
     "validate_check_interval",
+    "working_dtype",
 ]

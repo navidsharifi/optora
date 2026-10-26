@@ -64,6 +64,7 @@ nav = [
   { "Get started" = "index.md" },
   { "Mathematical formulations" = "formulations.md" },
   { "Training with torch.optim" = "training.md" },
+  { "Numerical behaviour" = "numerics.md" },
   { "Examples" = [
     { "Overview" = "examples/index.md" },
     { "KL-DRO radius sweep" = "examples/kl_dro_radius_sweep.md" },
@@ -82,6 +83,7 @@ nav = [
       { "Convergence" = "api/core/convergence.md" },
       { "Divergence Base" = "api/core/divergence_base.md" },
       { "DRO Base" = "api/core/dro_base.md" },
+      { "Precision" = "api/core/precision.md" },
       { "Solver Base" = "api/core/solver_base.md" },
     ] },
     { "Divergences" = [
