@@ -13,7 +13,7 @@ import torch
 
 from optora.core.dro_base import AmbiguitySet
 from optora.divergences.f_divergence import ChiSquareDivergence
-from optora.dro.phi_dro import PhiAmbiguitySet, _chi_square_conjugate
+from optora.dro.phi_dro import PhiAmbiguitySet, chi_square_conjugate
 from optora.solvers.gradient_descent import GradientDescent
 from tests.dro.instances import INSTANCES
 from tests.dro.specs import SPECS, SetSpec, spec_parameters
@@ -37,7 +37,7 @@ def _phi(nominal: torch.Tensor, _: torch.Tensor, radius: float) -> AmbiguitySet:
         nominal,
         divergence=ChiSquareDivergence(),
         radius=radius,
-        phi_conjugate=_chi_square_conjugate,
+        phi_conjugate=chi_square_conjugate,
         dual_solver=GradientDescent(step_size=0.1, max_iter=50, tol=1e-8),
     )
 

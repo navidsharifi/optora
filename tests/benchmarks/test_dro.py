@@ -2,11 +2,12 @@
 
 Workloads are batched float32 losses, the shape a training step produces.
 Every exact set runs a trip count fixed by the dtype, so its forward and
-backward passes must issue zero host synchronizations; the general
-`PhiAmbiguitySet` dual and the nested minimax solve pay one per convergence
-checkpoint.
+backward passes must issue zero host synchronizations, and so must the
+minibatch estimators built on them; the general `PhiAmbiguitySet` dual and the
+nested minimax solve pay one per convergence checkpoint.
 """
 
+import functools
 from collections.abc import Callable
 from typing import Any
 
@@ -14,8 +15,9 @@ import torch
 
 from optora.divergences.f_divergence import PhiDivergence
 from optora.dro.kl_dro import KLAmbiguitySet
+from optora.dro.minibatch import MultilevelMonteCarloEstimator, StochasticPhiDual
 from optora.dro.minimax_solver import MinimaxProblem, MinimaxSolver
-from optora.dro.phi_dro import PhiAmbiguitySet
+from optora.dro.phi_dro import PhiAmbiguitySet, chi_square_conjugate
 from optora.solvers.gradient_descent import GradientDescent
 from tests.dro.specs import SetSpec, spec_parameters
 
@@ -117,3 +119,34 @@ def test_minimax_solve(guarded_benchmark: Callable[..., Any]) -> None:
     result = guarded_benchmark(lambda: solver.solve(problem), host_syncs=0)
 
     assert result.point.shape == (features,)
+
+
+def test_multilevel_estimate_gradient(guarded_benchmark: Callable[..., Any]) -> None:
+    # The largest level: three plug-in solves on 32 * 2**3 = SUPPORT samples.
+    estimator = MultilevelMonteCarloEstimator(
+        functools.partial(KLAmbiguitySet, radius=RADIUS),
+        base_batch_size=SUPPORT // 8,
+        max_level=3,
+    )
+    loss = _batched_loss(torch.Generator().manual_seed(0)).requires_grad_()
+
+    def gradient() -> torch.Tensor:
+        (grad,) = torch.autograd.grad(estimator(loss).sum(), loss)
+        return grad
+
+    grad = guarded_benchmark(gradient, host_syncs=0)
+
+    assert grad.shape == loss.shape
+
+
+def test_stochastic_phi_dual_gradient(guarded_benchmark: Callable[..., Any]) -> None:
+    dual = StochasticPhiDual(RADIUS, chi_square_conjugate)
+    loss = _batched_loss(torch.Generator().manual_seed(0)).requires_grad_()
+
+    def gradient() -> torch.Tensor:
+        (grad,) = torch.autograd.grad(dual(loss).sum(), loss)
+        return grad
+
+    grad = guarded_benchmark(gradient, host_syncs=0)
+
+    assert grad.shape == loss.shape

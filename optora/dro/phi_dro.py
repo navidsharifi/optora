@@ -17,7 +17,7 @@ from optora.divergences.f_divergence import (
 )
 
 
-def _chi_square_conjugate(scaled_shift: torch.Tensor) -> torch.Tensor:
+def chi_square_conjugate(scaled_shift: torch.Tensor) -> torch.Tensor:
     r"""Convex conjugate of the chi-square generator $\phi(t) = (t-1)^2$, $t \ge 0$.
 
     $\phi^*(s) = \sup_{t \ge 0} \big(s\,t - \phi(t)\big)$. The unconstrained
@@ -25,7 +25,9 @@ def _chi_square_conjugate(scaled_shift: torch.Tensor) -> torch.Tensor:
     interior branch $s + s^2/4$; otherwise the constrained maximizer sits at
     the boundary $t = 0$, giving the constant $-1$. The two branches agree
     at $s = -2$, and both have zero derivative there, so $\phi^*$ is
-    continuously differentiable everywhere on the real line.
+    continuously differentiable everywhere on the real line. Pass it as
+    `phi_conjugate` to `PhiAmbiguitySet` or
+    `optora.dro.minibatch.StochasticPhiDual` for the chi-square ball.
 
     Args:
         scaled_shift: Elementwise dual argument
@@ -70,7 +72,7 @@ class PhiAmbiguitySet(DualAmbiguitySet):
     throughout the iteration.
 
     This base class assumes `phi_conjugate` is finite everywhere on the real
-    line (true for, for example, `_chi_square_conjugate`). Phi-divergences
+    line (true for, for example, `chi_square_conjugate`). Phi-divergences
     whose conjugate has a hard finite feasibility boundary (for example
     total variation, whose conjugate is `+inf` past a threshold) are not
     solved robustly by this unconstrained joint dual, since gradient

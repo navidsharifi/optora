@@ -19,6 +19,7 @@ NOT_REEXPORTED = frozenset(
         "ConvergenceDiagnostics",
         "ConvergenceStatus",
         "ConvergenceTracker",
+        "chi_square_conjugate",
         "require_gradient",
         "validate_check_interval",
         "working_dtype",
