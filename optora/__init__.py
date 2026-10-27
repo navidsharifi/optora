@@ -20,6 +20,7 @@ from optora.core import (
 )
 from optora.divergences import (
     ChiSquareDivergence,
+    EntropicTransportDivergence,
     KLDivergence,
     MaxDivergence,
     PhiDivergence,
@@ -35,6 +36,7 @@ from optora.dro import (
     MinimaxSolver,
     MultilevelMonteCarloEstimator,
     PhiAmbiguitySet,
+    SinkhornAmbiguitySet,
     StochasticPhiDual,
     TotalVariationAmbiguitySet,
     WassersteinAmbiguitySet,
@@ -53,6 +55,7 @@ __all__ = [
     "ChiSquareDivergence",
     "Divergence",
     "DualAmbiguitySet",
+    "EntropicTransportDivergence",
     "GradientDescent",
     "KLAmbiguitySet",
     "KLDivergence",
@@ -68,6 +71,7 @@ __all__ = [
     "SaddlePointProblem",
     "SaddlePointResult",
     "SaddlePointSolver",
+    "SinkhornAmbiguitySet",
     "SinkhornDivergence",
     "Solver",
     "StochasticPhiDual",

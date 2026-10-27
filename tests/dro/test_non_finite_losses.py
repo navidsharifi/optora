@@ -14,6 +14,7 @@ import torch
 from optora.core.dro_base import AmbiguitySet
 from optora.divergences.f_divergence import ChiSquareDivergence
 from optora.dro.phi_dro import PhiAmbiguitySet, chi_square_conjugate
+from optora.dro.sinkhorn_dro import SinkhornAmbiguitySet
 from optora.solvers.gradient_descent import GradientDescent
 from tests.dro.instances import INSTANCES
 from tests.dro.specs import SPECS, SetSpec, spec_parameters
@@ -42,7 +43,14 @@ def _phi(nominal: torch.Tensor, _: torch.Tensor, radius: float) -> AmbiguitySet:
     )
 
 
-BUILDERS: dict[str, Builder] = {spec.name: spec.build for spec in SPECS} | {"phi": _phi}
+def _sinkhorn(nominal: torch.Tensor, cost: torch.Tensor, radius: float) -> AmbiguitySet:
+    return SinkhornAmbiguitySet(nominal, cost, epsilon=0.5, radius=radius)
+
+
+BUILDERS: dict[str, Builder] = {spec.name: spec.build for spec in SPECS} | {
+    "phi": _phi,
+    "sinkhorn": _sinkhorn,
+}
 
 
 def _with_entry(position: int, entry: float) -> torch.Tensor:

@@ -33,6 +33,7 @@ from typing import Final
 import numpy as np
 from numpy.typing import NDArray
 from scipy.optimize import linprog, minimize_scalar
+from scipy.special import logsumexp
 
 Array = NDArray[np.float64]
 
@@ -385,6 +386,84 @@ def wasserstein_dual_minimum(
     return min(
         wasserstein_dual(nominal, cost, loss, radius, float(gamma))
         for gamma in candidates
+    )
+
+
+def sinkhorn_kernel(cost: Array, epsilon: float, reference: Array) -> Array:
+    r"""Return the row-stochastic Gibbs kernel $Q \propto \nu e^{-C/\epsilon}$.
+
+    Args:
+        cost: Ground cost of shape `(n, n)`.
+        epsilon: Positive entropic regularization strength.
+        reference: Nonnegative reference measure of shape `(n,)`.
+
+    Returns:
+        The kernel, each row shifted by its smallest cost before
+        exponentiating so no row underflows entirely.
+    """
+    shifted = cost - cost.min(axis=1, keepdims=True)
+    weights = reference[None, :] * np.exp(-shifted / epsilon)
+    return weights / weights.sum(axis=1, keepdims=True)
+
+
+def sinkhorn_dual(
+    nominal: Array, kernel: Array, loss: Array, radius: float, eta: float
+) -> float:
+    r"""Evaluate the Sinkhorn-DRO dual at a temperature $\eta = \lambda\epsilon > 0$.
+
+    Wang, Gao and Xie's dual, in its form shifted by the entropic bias, is
+    $\inf_{\lambda \ge 0} \lambda \bar\rho + \lambda \epsilon \sum_i p_i
+    \log \sum_j Q_{ij} e^{\ell_j / (\lambda\epsilon)}$. In terms of $\eta$
+    the first term is $\eta \bar\rho / \epsilon$, and the caller passes
+    `radius` $= \bar\rho / \epsilon$. Each row's log-moment generating
+    function is shifted by the largest loss the kernel reaches and read
+    through `log1p` and `expm1`, as in `kl_dual`, while that sum stays
+    away from $-1$, and through `logsumexp` otherwise: when the largest
+    loss carries a tiny kernel mass the sum rounds to $-1$.
+
+    Args:
+        nominal: Nominal distribution of shape `(n,)`.
+        kernel: Row-stochastic kernel of shape `(n, n)`.
+        loss: Per-scenario losses of shape `(n,)`.
+        radius: Budget divided by the regularization strength.
+        eta: Positive temperature.
+
+    Returns:
+        The dual objective, an upper bound on the Sinkhorn worst case.
+    """
+    rows = nominal > 0.0
+    reachable = kernel[rows].sum(axis=0) > 0.0
+    maximum = float(loss[reachable].max())
+    shifted = np.where(reachable, loss - maximum, 0.0)
+    excess = np.sum(kernel[rows] * np.expm1(shifted / eta), axis=1)
+    with np.errstate(divide="ignore"):
+        log_kernel = np.log(kernel[rows])
+    direct = logsumexp(log_kernel + shifted / eta, axis=1)
+    moments = np.where(excess > -0.5, np.log1p(np.maximum(excess, -0.5)), direct)
+    return float(eta * radius + maximum + eta * np.sum(nominal[rows] * moments))
+
+
+def sinkhorn_dual_minimum(
+    nominal: Array, kernel: Array, loss: Array, radius: float
+) -> float:
+    """Minimize `sinkhorn_dual` over the temperature.
+
+    Args:
+        nominal: Nominal distribution of shape `(n,)`.
+        kernel: Row-stochastic kernel of shape `(n, n)`.
+        loss: Per-scenario losses of shape `(n,)`.
+        radius: Budget divided by the regularization strength.
+
+    Returns:
+        The dual minimum, equal to the Sinkhorn worst case by strong
+        duality (Wang, Gao and Xie 2025, Theorem 3.1).
+    """
+    reachable = kernel[nominal > 0.0].sum(axis=0) > 0.0
+    spread = float(loss[reachable].max() - loss[reachable].min())
+    if spread == 0.0:
+        return float(loss[reachable].max())
+    return _minimize_on_log_scale(
+        lambda eta: sinkhorn_dual(nominal, kernel, loss, radius, eta), spread
     )
 
 

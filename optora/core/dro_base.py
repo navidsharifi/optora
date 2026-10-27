@@ -511,8 +511,12 @@ class TiltedAmbiguitySet(AmbiguitySet):
     the same distribution; standardizing only keeps the tilt parameter and
     the divergence well conditioned on a loss of any scale or offset.
 
-    The maximum and minimum are taken over the support of the nominal only.
-    Every tilt is a reweighting $q \propto \mathrm{nominal} \cdot w$, so a
+    The maximum and minimum are taken over the reachable scenarios only
+    (`_reachable`): the support of the nominal by default, or of whatever
+    base distribution a subclass tilts, such as the reference measure of
+    `optora.dro.SinkhornAmbiguitySet`, which also moves the path's start
+    off the nominal (`_center_expectation`). With the default, every tilt
+    is a reweighting $q \propto \mathrm{nominal} \cdot w$, so a
     scenario with zero nominal mass is unreachable whatever its loss, and
     letting its loss set the scale would both misreport the saturated value
     as that unreachable loss and leave no zero gap on the support for the
@@ -574,6 +578,34 @@ class TiltedAmbiguitySet(AmbiguitySet):
             divergence from `nominal`, of shape `batch_shape`.
         """
         raise NotImplementedError
+
+    @property
+    def _reachable(self) -> torch.Tensor:
+        """Boolean mask of the scenarios a tilted distribution can put mass on.
+
+        Every tilt reweights the nominal, so by default these are the
+        scenarios with positive nominal mass. A formulation whose tilt
+        reweights a different base distribution overrides this.
+        """
+        return self.nominal > 0.0
+
+    def _center_expectation(
+        self, loss: torch.Tensor, batch_shape: torch.Size
+    ) -> torch.Tensor:
+        """Return the expectation under the tilt path's start, `tilt = 0`.
+
+        This is the exact worst case of a zero-radius set. It is the nominal
+        expectation by default; a formulation whose path starts elsewhere
+        overrides this.
+
+        Args:
+            loss: Per-scenario loss values of shape `(..., n)`.
+            batch_shape: Shape returned by `_batch_shape` for this `loss`.
+
+        Returns:
+            The expectation, broadcast to `batch_shape`.
+        """
+        return self._nominal_expectation(loss, batch_shape)
 
     @staticmethod
     def _tilt_rate(tilt: torch.Tensor) -> torch.Tensor:
@@ -659,12 +691,10 @@ class TiltedAmbiguitySet(AmbiguitySet):
         """
         batch_shape, working = self._prepare_loss(loss)
         if self._radius_is_zero:
-            return self._as_result(
-                self._nominal_expectation(working, batch_shape), loss
-            )
+            return self._as_result(self._center_expectation(working, batch_shape), loss)
 
         detached = working.detach()
-        on_support = self.nominal > 0.0
+        on_support = self._reachable
         max_loss = torch.amax(
             torch.where(on_support, detached, -torch.inf), dim=-1, keepdim=True
         )
@@ -727,7 +757,7 @@ class TiltedAmbiguitySet(AmbiguitySet):
             The maximizer of shape `batch_shape + (n,)`, equal in value to
             the forward pass's and differentiable with respect to `loss`.
         """
-        gap = torch.where(self.nominal > 0.0, (max_loss - loss) / scale, 1.0)
+        gap = torch.where(self._reachable, (max_loss - loss) / scale, 1.0)
         slope: torch.Tensor = jvp(
             lambda path: self._tilted_distribution(gap.detach(), path)[1],
             (tilt,),

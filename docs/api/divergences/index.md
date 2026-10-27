@@ -3,6 +3,8 @@
 # `optora.divergences`
 
 ## Modules
+- [`optora.divergences.entropic_transport`](entropic_transport.md)
+    - [`EntropicTransportDivergence`](entropic_transport.md#optora.divergences.entropic_transport.EntropicTransportDivergence)
 - [`optora.divergences.f_divergence`](f_divergence.md)
     - [`PhiDivergence`](f_divergence.md#optora.divergences.f_divergence.PhiDivergence)
     - [`ChiSquareDivergence`](f_divergence.md#optora.divergences.f_divergence.ChiSquareDivergence)

@@ -151,6 +151,7 @@ subgradient is a valid descent signal for a subgradient method or
 | `ChiSquareAmbiguitySet` | As KL. Also not twice differentiable where a scenario enters or leaves the support of $q^\star$; the gradient stays continuous there | As KL |
 | `TotalVariationAmbiguitySet` | Ties among the highest losses, and ties among the lowest-loss scenarios that mass is drained from | All reallocated mass on one tied scenario, chosen by sort order |
 | `CVaRAmbiguitySet` | Tied losses that straddle the boundary of the upper $\alpha$-tail | The tail filled in sort order among the tied scenarios |
+| `SinkhornAmbiguitySet` | As KL, with ties among the highest losses on the reference measure's support | Each kernel row's tied mass split in proportion to that row |
 | `WassersteinAmbiguitySet` | Ties in a support point's best response $\ell_j - \gamma^\star c_{ij}$, including coincident support points with equal losses | The convex combination of the two extreme transport plans that spends the radius exactly |
 
 `tests/dro/test_gradients.py` checks each of these kinks by one-sided

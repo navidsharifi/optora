@@ -21,6 +21,7 @@ from optora.dro.phi_dro import (
     PhiAmbiguitySet,
     TotalVariationAmbiguitySet,
 )
+from optora.dro.sinkhorn_dro import SinkhornAmbiguitySet
 from optora.dro.wasserstein_dro import WassersteinAmbiguitySet
 from optora.solvers.gradient_descent import GradientDescent
 from tests.dro.instances import INSTANCES, Instance
@@ -107,9 +108,19 @@ def _wasserstein(dtype: torch.dtype) -> AmbiguitySet:
     )
 
 
+def _sinkhorn(dtype: torch.dtype) -> AmbiguitySet:
+    return SinkhornAmbiguitySet(
+        _nominal(dtype),
+        cost=torch.tensor(COST, dtype=dtype),
+        epsilon=0.5,
+        radius=RADIUS,
+    )
+
+
 FACTORIES: dict[str, AmbiguitySetFactory] = {
     "chi_square": _chi_square,
     "cvar": _cvar,
+    "sinkhorn": _sinkhorn,
     "kl": _kl,
     "phi": _phi,
     "total_variation": _total_variation,

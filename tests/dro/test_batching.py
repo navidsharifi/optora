@@ -13,6 +13,7 @@ from optora.dro.phi_dro import (
     CVaRAmbiguitySet,
     TotalVariationAmbiguitySet,
 )
+from optora.dro.sinkhorn_dro import SinkhornAmbiguitySet
 from optora.dro.wasserstein_dro import WassersteinAmbiguitySet
 from tests.dro.specs import cvar_level
 
@@ -49,12 +50,17 @@ def _wasserstein(radius: float | torch.Tensor) -> AmbiguitySet:
     return WassersteinAmbiguitySet(NOMINAL, cost=COST, radius=radius)
 
 
+def _sinkhorn(radius: float | torch.Tensor) -> AmbiguitySet:
+    return SinkhornAmbiguitySet(NOMINAL, cost=COST, epsilon=0.5, radius=radius)
+
+
 FACTORIES: dict[str, AmbiguitySetFactory] = {
     "kl": _kl,
     "chi_square": _chi_square,
     "total_variation": _total_variation,
     "cvar": _cvar,
     "wasserstein": _wasserstein,
+    "sinkhorn": _sinkhorn,
 }
 
 
@@ -189,8 +195,8 @@ def test_a_later_call_on_a_different_batch_shape_is_unaffected() -> None:
 
 @pytest.mark.parametrize(
     "make",
-    [_kl, _chi_square, _total_variation, _cvar],
-    ids=["kl", "chi_square", "total_variation", "cvar"],
+    [_kl, _chi_square, _total_variation, _cvar, _sinkhorn],
+    ids=["kl", "chi_square", "total_variation", "cvar", "sinkhorn"],
 )
 def test_batched_solver_free_sets_never_synchronize(
     make: AmbiguitySetFactory, host_sync_counter: Callable[[], Any]

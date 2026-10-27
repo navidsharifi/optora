@@ -18,6 +18,7 @@ from optora.dro.kl_dro import KLAmbiguitySet
 from optora.dro.minibatch import MultilevelMonteCarloEstimator, StochasticPhiDual
 from optora.dro.minimax_solver import MinimaxProblem, MinimaxSolver
 from optora.dro.phi_dro import PhiAmbiguitySet, chi_square_conjugate
+from optora.dro.sinkhorn_dro import SinkhornAmbiguitySet
 from optora.solvers.gradient_descent import GradientDescent
 from tests.dro.specs import SetSpec, spec_parameters
 
@@ -61,6 +62,26 @@ def test_worst_case_expectation_gradient(
 ) -> None:
     generator = torch.Generator().manual_seed(0)
     ambiguity_set = spec.build(_nominal(generator), _line_cost(), RADIUS)
+    loss = _batched_loss(generator).requires_grad_()
+
+    def gradient() -> torch.Tensor:
+        value = ambiguity_set.worst_case_expectation(loss).sum()
+        (grad,) = torch.autograd.grad(value, loss)
+        return grad
+
+    grad = guarded_benchmark(gradient, host_syncs=0)
+
+    assert grad.shape == loss.shape
+
+
+def test_sinkhorn_worst_case_expectation_and_gradient(
+    guarded_benchmark: Callable[..., Any],
+) -> None:
+    # A tilt bisection over a batch of (n, n) kernel tilts: no host reads.
+    generator = torch.Generator().manual_seed(0)
+    ambiguity_set = SinkhornAmbiguitySet(
+        _nominal(generator), _line_cost(), epsilon=0.05, radius=RADIUS
+    )
     loss = _batched_loss(generator).requires_grad_()
 
     def gradient() -> torch.Tensor:

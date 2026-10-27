@@ -17,6 +17,7 @@ from optora.dro.phi_dro import (
     chi_square_conjugate,
     cvar_conjugate,
 )
+from optora.dro.sinkhorn_dro import SinkhornAmbiguitySet
 from optora.dro.wasserstein_dro import WassersteinAmbiguitySet
 
 __all__ = [
@@ -25,6 +26,7 @@ __all__ = [
     "ChiSquareAmbiguitySet",
     "TotalVariationAmbiguitySet",
     "CVaRAmbiguitySet",
+    "SinkhornAmbiguitySet",
     "WassersteinAmbiguitySet",
     "MinimaxProblem",
     "MinimaxResult",

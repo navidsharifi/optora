@@ -24,5 +24,7 @@
     - [`ChiSquareAmbiguitySet`](phi_dro.md#optora.dro.phi_dro.ChiSquareAmbiguitySet)
     - [`TotalVariationAmbiguitySet`](phi_dro.md#optora.dro.phi_dro.TotalVariationAmbiguitySet)
     - [`CVaRAmbiguitySet`](phi_dro.md#optora.dro.phi_dro.CVaRAmbiguitySet)
+- [`optora.dro.sinkhorn_dro`](sinkhorn_dro.md)
+    - [`SinkhornAmbiguitySet`](sinkhorn_dro.md#optora.dro.sinkhorn_dro.SinkhornAmbiguitySet)
 - [`optora.dro.wasserstein_dro`](wasserstein_dro.md)
     - [`WassersteinAmbiguitySet`](wasserstein_dro.md#optora.dro.wasserstein_dro.WassersteinAmbiguitySet)
