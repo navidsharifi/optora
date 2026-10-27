@@ -288,20 +288,6 @@ def test_chi_square_zero_radius_returns_exact_expectation() -> None:
     assert torch.allclose(result, torch.sum(nominal * loss), atol=1e-6)
 
 
-def test_chi_square_matches_mean_plus_sqrt_radius_variance_in_interior_regime() -> None:
-    nominal = torch.tensor([0.25, 0.25, 0.25, 0.25], dtype=torch.float64)
-    loss = torch.tensor([0.0, 1.0, 2.0, 3.0], dtype=torch.float64)
-    radius = 0.05
-    ambiguity_set = ChiSquareAmbiguitySet(nominal, radius=radius)
-
-    result = ambiguity_set.worst_case_expectation(loss)
-
-    mean = torch.sum(nominal * loss)
-    variance = torch.sum(nominal * (loss - mean) ** 2)
-    expected = mean + torch.sqrt(torch.tensor(radius, dtype=torch.float64) * variance)
-    assert torch.allclose(result, expected, atol=1e-12)
-
-
 def test_chi_square_calibrated_radius_gives_the_normal_interval() -> None:
     """The Duchi-Namkoong calibration must reproduce the textbook normal interval.
 

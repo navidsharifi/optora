@@ -103,7 +103,9 @@ sample-size axis has something to show.
     at essentially any sample size and the small-radius gap is zero to
     machine precision. That is a much better *unit test* than a plot — and
     it is one, in
-    `tests/dro/test_wasserstein_dro.py::test_small_radius_dual_equals_lipschitz_regularized_expectation`.
+    `tests/dro/test_equivalences.py::test_small_radius_dual_equals_lipschitz_regularized_expectation`,
+    next to the type-2 (squared-distance) counterpart, where the radius
+    buys a gradient-norm penalty instead.
 
 ## Reading the output
 
