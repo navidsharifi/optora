@@ -24,7 +24,7 @@ defines.
 
     ---
 
-    `f_divergence`, `kl`, `wasserstein`
+    `f_divergence`, `kl`, `max_divergence`, `wasserstein`
 
     [:octicons-arrow-right-24: Browse](divergences/index.md)
 

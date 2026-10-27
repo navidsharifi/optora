@@ -150,6 +150,7 @@ subgradient is a valid descent signal for a subgradient method or
 | `KLAmbiguitySet` | Tied highest losses once the radius saturates the set (it then contains the distribution concentrated on them) | The tied mass split in proportion to `nominal` |
 | `ChiSquareAmbiguitySet` | As KL. Also not twice differentiable where a scenario enters or leaves the support of $q^\star$; the gradient stays continuous there | As KL |
 | `TotalVariationAmbiguitySet` | Ties among the highest losses, and ties among the lowest-loss scenarios that mass is drained from | All reallocated mass on one tied scenario, chosen by sort order |
+| `CVaRAmbiguitySet` | Tied losses that straddle the boundary of the upper $\alpha$-tail | The tail filled in sort order among the tied scenarios |
 | `WassersteinAmbiguitySet` | Ties in a support point's best response $\ell_j - \gamma^\star c_{ij}$, including coincident support points with equal losses | The convex combination of the two extreme transport plans that spends the radius exactly |
 
 `tests/dro/test_gradients.py` checks each of these kinks by one-sided
@@ -223,7 +224,12 @@ provides the two standard remedies:
         optimizer.step()
     ```
 
-    Use `optora.dro.chi_square_conjugate` for the chi-square ball. Start
+    Use `optora.dro.chi_square_conjugate` for the chi-square ball. For
+    CVaR at level $\alpha$, pass `radius=0.0` and
+    `functools.partial(optora.dro.cvar_conjugate, alpha=alpha)`: the dual
+    then reduces to the Rockafellar-Uryasev objective
+    $\lambda + \mathbb{E}[(\ell - \lambda)_+] / \alpha$, and $\eta$ drops
+    out. Start
     the dual variables on the scale of the loss, for example at the exact
     dual optimum of a pilot minibatch: with KL's exponential conjugate,
     the default start can produce gradients large enough to stall Adam.
@@ -232,7 +238,7 @@ provides the two standard remedies:
 | --- | --- | --- |
 | Unbiased for | The plug-in worst case at $n_0 2^L$ samples | The population dual at the current $(\eta, \lambda)$ |
 | Batch size | Random, $n_0 2^J$ | Fixed, any |
-| Ambiguity sets | Any set built from a nominal alone (KL, chi-square, total variation, general phi) | Phi-divergence balls with a finite conjugate (KL, chi-square) |
+| Ambiguity sets | Any set built from a nominal alone (KL, chi-square, total variation, CVaR, general phi) | Phi-divergence balls with a finite conjugate (KL, chi-square, CVaR) |
 | Per-step cost | Three exact solves | One pass over the minibatch, no inner solve |
 
 [Minibatch DRO against the full batch](examples/minibatch_dro_training.md)

@@ -22,8 +22,10 @@ from optora.dro.kl_dro import KLAmbiguitySet
 from optora.dro.minibatch import MultilevelMonteCarloEstimator, StochasticPhiDual
 from optora.dro.phi_dro import (
     ChiSquareAmbiguitySet,
+    CVaRAmbiguitySet,
     TotalVariationAmbiguitySet,
     chi_square_conjugate,
+    cvar_conjugate,
 )
 
 DTYPE = torch.float64
@@ -36,6 +38,7 @@ FACTORIES: dict[str, AmbiguitySetFactory] = {
     "kl": functools.partial(KLAmbiguitySet, radius=RADIUS),
     "chi_square": functools.partial(ChiSquareAmbiguitySet, radius=RADIUS),
     "total_variation": functools.partial(TotalVariationAmbiguitySet, radius=RADIUS),
+    "cvar": functools.partial(CVaRAmbiguitySet, alpha=0.3),
 }
 
 EXACT_PHI_SETS: dict[str, tuple[Conjugate, Callable[..., AmbiguitySet]]] = {
@@ -524,6 +527,35 @@ class TestStochasticPhiDual:
 
         assert result.dtype == torch.float32
         assert torch.allclose(result, dual(loss.float()))
+
+    @pytest.mark.parametrize("alpha", [1.0, 0.5, 0.3, 0.05])
+    def test_cvar_conjugate_at_radius_zero_is_the_rockafellar_uryasev_dual(
+        self, alpha: float
+    ) -> None:
+        # The dual is piecewise linear in lam and minimized at the upper
+        # alpha-quantile, where it equals CVaR exactly; any other lam, and
+        # any eta, only bounds it from above.
+        generator = torch.Generator().manual_seed(6)
+        loss = torch.randn(40, generator=generator, dtype=DTYPE)
+        conjugate = functools.partial(cvar_conjugate, alpha=alpha)
+        exact = CVaRAmbiguitySet(_uniform(40), alpha=alpha).worst_case_expectation(loss)
+        quantile = torch.sort(loss, descending=True).values[math.ceil(alpha * 40) - 1]
+
+        for log_eta in (-2.0, 0.0, 3.0):
+            at_quantile = StochasticPhiDual(0.0, conjugate, log_eta, float(quantile))
+            assert torch.allclose(at_quantile.to(DTYPE)(loss), exact, rtol=1e-12)
+            for lam in (-3.0, 0.0, 0.7, 3.0):
+                dual = StochasticPhiDual(0.0, conjugate, log_eta, lam).to(DTYPE)
+                assert dual(loss) >= exact - 1e-12
+
+    def test_cvar_conjugate_broadcasts_a_tensor_level(self) -> None:
+        scaled_shift = torch.tensor([[-1.0, 0.5, 2.0]], dtype=DTYPE)
+        alpha = torch.tensor([[0.5], [0.25]], dtype=DTYPE)
+
+        result = cvar_conjugate(scaled_shift, alpha)
+
+        expected = torch.tensor([[0.0, 1.0, 4.0], [0.0, 2.0, 8.0]], dtype=DTYPE)
+        assert torch.equal(result, expected)
 
     def test_forward_and_backward_never_synchronize(
         self, host_sync_counter: Callable[[], Any]

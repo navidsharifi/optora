@@ -21,6 +21,7 @@ NOT_REEXPORTED = frozenset(
         "ConvergenceTracker",
         "chi_square_conjugate",
         "chi_square_radius",
+        "cvar_conjugate",
         "kl_radius",
         "phi_divergence_radius",
         "wasserstein_radius",

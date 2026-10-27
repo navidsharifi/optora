@@ -1,4 +1,8 @@
-"""Tests for `PhiAmbiguitySet`, `ChiSquareAmbiguitySet`, and `TotalVariationAmbiguitySet`."""  # noqa: E501
+"""Tests for the phi-divergence ambiguity sets in `optora.dro.phi_dro`.
+
+Covers `PhiAmbiguitySet`, `ChiSquareAmbiguitySet`,
+`TotalVariationAmbiguitySet`, and `CVaRAmbiguitySet`.
+"""
 
 import math
 
@@ -13,9 +17,11 @@ from optora.core.solver_base import (
     Solver,
 )
 from optora.divergences.f_divergence import PhiDivergence
+from optora.divergences.max_divergence import MaxDivergence
 from optora.dro.kl_dro import KLAmbiguitySet
 from optora.dro.phi_dro import (
     ChiSquareAmbiguitySet,
+    CVaRAmbiguitySet,
     PhiAmbiguitySet,
     TotalVariationAmbiguitySet,
     chi_square_conjugate,
@@ -604,3 +610,195 @@ def test_total_variation_is_an_ambiguity_set_instance() -> None:
     nominal = torch.tensor([0.5, 0.5])
 
     assert isinstance(TotalVariationAmbiguitySet(nominal, radius=0.1), AmbiguitySet)
+
+
+# --- CVaRAmbiguitySet --------------------------------------------------------
+
+CVAR_NOMINAL = torch.tensor([0.1, 0.2, 0.3, 0.4], dtype=torch.float64)
+CVAR_LOSS = torch.tensor([0.0, 1.0, 2.0, 5.0], dtype=torch.float64)
+
+
+def test_cvar_at_level_one_returns_the_exact_nominal_expectation() -> None:
+    ambiguity_set = CVaRAmbiguitySet(CVAR_NOMINAL, alpha=1.0)
+
+    result = ambiguity_set.worst_case_expectation(CVAR_LOSS)
+
+    assert ambiguity_set.radius == 0.0
+    assert torch.equal(result, torch.sum(CVAR_NOMINAL * CVAR_LOSS))
+
+
+@pytest.mark.parametrize(
+    ("alpha", "expected"),
+    [(0.7, (0.3 * 2.0 + 0.4 * 5.0) / 0.7), (0.5, 4.4), (0.4, 5.0), (0.2, 5.0)],
+)
+def test_cvar_matches_hand_computed_upper_tail_means(
+    alpha: float, expected: float
+) -> None:
+    result = CVaRAmbiguitySet(CVAR_NOMINAL, alpha=alpha).worst_case_expectation(
+        CVAR_LOSS
+    )
+
+    assert float(result) == pytest.approx(expected, abs=1e-12)
+
+
+@pytest.mark.parametrize("tail_size", [1, 3, 5, 8])
+def test_cvar_on_a_uniform_nominal_is_the_mean_of_the_largest_losses(
+    tail_size: int,
+) -> None:
+    loss = torch.tensor([0.3, -1.2, 4.0, 2.2, 0.9, -0.4, 3.1, 1.7], dtype=torch.float64)
+    nominal = torch.full((8,), 1.0 / 8.0, dtype=torch.float64)
+
+    result = CVaRAmbiguitySet(nominal, alpha=tail_size / 8.0).worst_case_expectation(
+        loss
+    )
+
+    largest = torch.sort(loss, descending=True).values[:tail_size]
+    assert float(result) == pytest.approx(float(largest.mean()), abs=1e-12)
+
+
+def test_cvar_at_level_zero_is_the_maximum_loss_on_the_nominal_support() -> None:
+    nominal = torch.tensor([0.0, 0.3, 0.3, 0.4], dtype=torch.float64)
+    loss = torch.tensor([9.0, 1.0, 2.0, 5.0], dtype=torch.float64)
+    ambiguity_set = CVaRAmbiguitySet(nominal, alpha=0.0)
+
+    result = ambiguity_set.worst_case_expectation(loss)
+
+    assert ambiguity_set.radius == math.inf
+    assert float(result) == 5.0
+
+
+def test_cvar_gradient_is_the_tail_maximizer() -> None:
+    loss = CVAR_LOSS.clone().requires_grad_(True)
+
+    CVaRAmbiguitySet(CVAR_NOMINAL, alpha=0.5).worst_case_expectation(loss).backward()
+
+    assert loss.grad is not None
+    expected = torch.tensor([0.0, 0.0, 0.2, 0.8], dtype=torch.float64)
+    torch.testing.assert_close(loss.grad, expected, rtol=0.0, atol=1e-15)
+
+
+def test_cvar_derivative_in_alpha_is_the_quantile_gap_over_alpha() -> None:
+    # d CVaR / d alpha = (VaR - CVaR) / alpha at a level strictly inside a
+    # scenario's mass: here VaR = 2 and CVaR = 4.4 at alpha = 0.5.
+    alpha = torch.tensor(0.5, dtype=torch.float64, requires_grad=True)
+
+    value = CVaRAmbiguitySet(CVAR_NOMINAL, alpha=alpha).worst_case_expectation(
+        CVAR_LOSS
+    )
+    (derivative,) = torch.autograd.grad(value, alpha)
+
+    assert float(derivative) == pytest.approx((2.0 - 4.4) / 0.5, abs=1e-12)
+
+
+def test_cvar_is_nonincreasing_in_alpha() -> None:
+    levels = torch.linspace(0.0, 1.0, 101, dtype=torch.float64)
+
+    values = CVaRAmbiguitySet(CVAR_NOMINAL, alpha=levels).worst_case_expectation(
+        CVAR_LOSS
+    )
+
+    assert bool(torch.all(values[1:] <= values[:-1] + 1e-12))
+    assert float(values[0]) == 5.0
+    assert float(values[-1]) == pytest.approx(float(CVAR_NOMINAL @ CVAR_LOSS))
+
+
+def test_cvar_is_translation_equivariant_and_positively_homogeneous() -> None:
+    ambiguity_set = CVaRAmbiguitySet(CVAR_NOMINAL, alpha=0.35)
+    base = ambiguity_set.worst_case_expectation(CVAR_LOSS)
+
+    shifted = ambiguity_set.worst_case_expectation(CVAR_LOSS + 3.0)
+    scaled = ambiguity_set.worst_case_expectation(2.5 * CVAR_LOSS)
+
+    torch.testing.assert_close(shifted, base + 3.0, rtol=0.0, atol=1e-12)
+    torch.testing.assert_close(scaled, 2.5 * base, rtol=0.0, atol=1e-12)
+
+
+def test_cvar_radius_is_the_max_divergence_radius_of_the_level() -> None:
+    levels = torch.tensor([1.0, 0.5, 0.0], dtype=torch.float64)
+
+    scalar = CVaRAmbiguitySet(CVAR_NOMINAL, alpha=0.25)
+    sweep = CVaRAmbiguitySet(CVAR_NOMINAL, alpha=levels)
+
+    assert scalar.alpha == 0.25
+    assert scalar.radius == pytest.approx(math.log(4.0))
+    assert isinstance(scalar.divergence, MaxDivergence)
+    buffers = dict(sweep.named_buffers())
+    assert buffers["alpha"] is levels
+    torch.testing.assert_close(
+        buffers["radius"],
+        torch.tensor([0.0, math.log(2.0), math.inf], dtype=torch.float64),
+    )
+
+
+def test_cvar_contains_exactly_the_likelihood_ratio_ball() -> None:
+    ambiguity_set = CVaRAmbiguitySet(CVAR_NOMINAL, alpha=0.5)
+
+    inside = torch.tensor([0.0, 0.0, 0.2, 0.8], dtype=torch.float64)
+    outside = torch.tensor([0.0, 0.0, 0.1, 0.9], dtype=torch.float64)
+
+    assert ambiguity_set.contains(CVAR_NOMINAL)
+    assert ambiguity_set.contains(inside)
+    assert not ambiguity_set.contains(outside)
+
+
+@pytest.mark.parametrize("alpha", [-0.1, 1.1, math.nan, -math.inf])
+def test_cvar_rejects_a_float_level_outside_the_unit_interval(alpha: float) -> None:
+    with pytest.raises(ValueError, match=r"alpha must lie in \[0, 1\]"):
+        CVaRAmbiguitySet(CVAR_NOMINAL, alpha=alpha)
+
+
+@pytest.mark.parametrize(
+    "alpha",
+    [
+        torch.tensor(-0.1, dtype=torch.float64),
+        torch.tensor([0.5, 1.5], dtype=torch.float64),
+        torch.tensor([0.5, math.nan], dtype=torch.float64),
+    ],
+    ids=["negative", "above_one", "nan_entry"],
+)
+def test_cvar_validate_rejects_a_tensor_level_outside_the_unit_interval(
+    alpha: torch.Tensor,
+) -> None:
+    with pytest.raises(ValueError, match=r"alpha must lie in \[0, 1\]"):
+        CVaRAmbiguitySet(CVAR_NOMINAL, alpha=alpha, validate=True)
+
+
+@pytest.mark.parametrize(
+    "alpha",
+    [
+        torch.tensor([0.0, 0.5, 1.0], dtype=torch.float64),
+        torch.empty(0, dtype=torch.float64),
+    ],
+    ids=["closed_interval", "empty"],
+)
+def test_cvar_validate_accepts_a_tensor_level_in_the_unit_interval(
+    alpha: torch.Tensor,
+) -> None:
+    ambiguity_set = CVaRAmbiguitySet(CVAR_NOMINAL, alpha=alpha, validate=True)
+
+    assert ambiguity_set.alpha is alpha
+
+
+def test_cvar_accepts_an_invalid_tensor_level_without_validation() -> None:
+    alpha = torch.tensor(1.5, dtype=torch.float64)
+
+    ambiguity_set = CVaRAmbiguitySet(CVAR_NOMINAL, alpha=alpha)
+
+    assert ambiguity_set.alpha is alpha
+
+
+def test_cvar_validate_rejects_a_non_finite_loss() -> None:
+    ambiguity_set = CVaRAmbiguitySet(CVAR_NOMINAL, alpha=0.5, validate=True)
+    loss = torch.tensor([0.0, math.nan, 2.0, 5.0], dtype=torch.float64)
+
+    with pytest.raises(ValueError, match="loss must be finite"):
+        ambiguity_set.worst_case_expectation(loss)
+
+
+def test_cvar_invalid_eps_raises_value_error() -> None:
+    with pytest.raises(ValueError, match="eps"):
+        CVaRAmbiguitySet(CVAR_NOMINAL, alpha=0.5, eps=0.0)
+
+
+def test_cvar_is_an_ambiguity_set_instance() -> None:
+    assert isinstance(CVaRAmbiguitySet(CVAR_NOMINAL, alpha=0.5), AmbiguitySet)

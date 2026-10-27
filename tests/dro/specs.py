@@ -10,6 +10,7 @@ fallback whose accuracy depends on the radius and step size, so it does not
 satisfy the invariants or the gradient checks to a fixed tolerance.
 """
 
+import math
 from collections.abc import Callable
 from dataclasses import dataclass
 
@@ -19,16 +20,23 @@ import torch
 
 from optora.core.dro_base import AmbiguitySet
 from optora.dro.kl_dro import KLAmbiguitySet
-from optora.dro.phi_dro import ChiSquareAmbiguitySet, TotalVariationAmbiguitySet
+from optora.dro.phi_dro import (
+    ChiSquareAmbiguitySet,
+    CVaRAmbiguitySet,
+    TotalVariationAmbiguitySet,
+)
 from optora.dro.wasserstein_dro import WassersteinAmbiguitySet
 from tests.dro.duality import (
     Array,
     chi_square_divergence,
     chi_square_dual,
     chi_square_dual_minimum,
+    cvar_dual,
+    cvar_dual_minimum,
     kl_divergence,
     kl_dual,
     kl_dual_minimum,
+    max_divergence,
     total_variation_distance,
     total_variation_dual,
     total_variation_dual_minimum,
@@ -39,6 +47,13 @@ from tests.dro.duality import (
 from tests.dro.instances import Instance
 
 Radius = float | torch.Tensor
+
+
+def cvar_level(radius: Radius) -> Radius:
+    """Return the CVaR tail probability `exp(-radius)` of a max-divergence radius."""
+    if isinstance(radius, torch.Tensor):
+        return torch.exp(-radius)
+    return math.exp(-radius)
 
 
 @dataclass(frozen=True)
@@ -56,7 +71,8 @@ class SetSpec:
             taking `(instance, candidate)`.
         off_support: Whether the set can move mass onto scenarios with zero
             nominal weight (true for total variation and Wasserstein, false
-            for KL and chi-square, which are infinite off the support).
+            for KL, chi-square, and CVaR, which are infinite off the
+            support).
     """
 
     name: str
@@ -118,6 +134,23 @@ SPECS = (
             candidate, instance.nominal_array
         ),
         off_support=True,
+    ),
+    SetSpec(
+        name="cvar",
+        build=lambda nominal, _, radius: CVaRAmbiguitySet(nominal, cvar_level(radius)),
+        dual=lambda instance, radius, coordinate: cvar_dual(
+            instance.nominal_array,
+            instance.loss_array,
+            radius,
+            float(np.sinh(coordinate)),
+        ),
+        dual_minimum=lambda instance, radius: cvar_dual_minimum(
+            instance.nominal_array, instance.loss_array, radius
+        ),
+        divergence=lambda instance, candidate: max_divergence(
+            candidate, instance.nominal_array
+        ),
+        off_support=False,
     ),
     SetSpec(
         name="wasserstein",

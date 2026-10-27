@@ -11,6 +11,7 @@ from optora.divergences.f_divergence import ChiSquareDivergence
 from optora.dro.kl_dro import KLAmbiguitySet
 from optora.dro.phi_dro import (
     ChiSquareAmbiguitySet,
+    CVaRAmbiguitySet,
     PhiAmbiguitySet,
     TotalVariationAmbiguitySet,
 )
@@ -62,12 +63,17 @@ def _total_variation(nominal: torch.Tensor, validate: bool) -> AmbiguitySet:
     return TotalVariationAmbiguitySet(nominal, radius=0.1, validate=validate)
 
 
+def _cvar(nominal: torch.Tensor, validate: bool) -> AmbiguitySet:
+    return CVaRAmbiguitySet(nominal, alpha=0.5, validate=validate)
+
+
 def _wasserstein(nominal: torch.Tensor, validate: bool) -> AmbiguitySet:
     return WassersteinAmbiguitySet(nominal, cost=COST, radius=0.1, validate=validate)
 
 
 FACTORIES: dict[str, AmbiguitySetFactory] = {
     "chi_square": _chi_square,
+    "cvar": _cvar,
     "kl": _kl,
     "phi": _phi,
     "total_variation": _total_variation,

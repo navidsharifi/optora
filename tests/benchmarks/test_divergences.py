@@ -15,6 +15,7 @@ from optora.divergences.f_divergence import (
     TotalVariationDivergence,
 )
 from optora.divergences.kl import KLDivergence
+from optora.divergences.max_divergence import MaxDivergence
 from optora.divergences.wasserstein import SinkhornDivergence
 
 
@@ -27,7 +28,12 @@ def test_closed_form_divergences(guarded_benchmark: Callable[..., Any]) -> None:
     support = 4096
     generator = torch.Generator().manual_seed(0)
     p, q = _distribution(generator, support), _distribution(generator, support)
-    divergences = (KLDivergence(), ChiSquareDivergence(), TotalVariationDivergence())
+    divergences = (
+        KLDivergence(),
+        ChiSquareDivergence(),
+        TotalVariationDivergence(),
+        MaxDivergence(),
+    )
 
     values = guarded_benchmark(
         lambda: [divergence(p, q) for divergence in divergences], host_syncs=0

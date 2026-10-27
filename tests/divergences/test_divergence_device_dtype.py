@@ -18,6 +18,7 @@ from optora.divergences.f_divergence import (
     TotalVariationDivergence,
 )
 from optora.divergences.kl import KLDivergence
+from optora.divergences.max_divergence import MaxDivergence
 from optora.divergences.wasserstein import SinkhornDivergence
 
 requires_cuda = pytest.mark.skipif(
@@ -54,6 +55,10 @@ def _kl(dtype: torch.dtype) -> Divergence:
     return KLDivergence()
 
 
+def _max(dtype: torch.dtype) -> Divergence:
+    return MaxDivergence()
+
+
 def _sinkhorn(dtype: torch.dtype) -> Divergence:
     return SinkhornDivergence(cost=torch.tensor(COST, dtype=dtype), epsilon=0.1)
 
@@ -61,6 +66,7 @@ def _sinkhorn(dtype: torch.dtype) -> Divergence:
 FACTORIES: dict[str, DivergenceFactory] = {
     "chi_square": _chi_square,
     "kl": _kl,
+    "max": _max,
     "phi": _phi,
     "sinkhorn": _sinkhorn,
     "total_variation": _total_variation,

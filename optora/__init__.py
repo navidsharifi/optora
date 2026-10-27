@@ -21,12 +21,14 @@ from optora.core import (
 from optora.divergences import (
     ChiSquareDivergence,
     KLDivergence,
+    MaxDivergence,
     PhiDivergence,
     SinkhornDivergence,
     TotalVariationDivergence,
 )
 from optora.dro import (
     ChiSquareAmbiguitySet,
+    CVaRAmbiguitySet,
     KLAmbiguitySet,
     MinimaxProblem,
     MinimaxResult,
@@ -46,6 +48,7 @@ from optora.solvers import (
 
 __all__ = [
     "AmbiguitySet",
+    "CVaRAmbiguitySet",
     "ChiSquareAmbiguitySet",
     "ChiSquareDivergence",
     "Divergence",
@@ -53,6 +56,7 @@ __all__ = [
     "GradientDescent",
     "KLAmbiguitySet",
     "KLDivergence",
+    "MaxDivergence",
     "MinimaxProblem",
     "MinimaxResult",
     "MinimaxSolver",

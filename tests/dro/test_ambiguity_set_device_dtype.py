@@ -17,6 +17,7 @@ from optora.divergences.f_divergence import PhiDivergence
 from optora.dro.kl_dro import KLAmbiguitySet
 from optora.dro.phi_dro import (
     ChiSquareAmbiguitySet,
+    CVaRAmbiguitySet,
     PhiAmbiguitySet,
     TotalVariationAmbiguitySet,
 )
@@ -90,6 +91,14 @@ def _total_variation(dtype: torch.dtype) -> AmbiguitySet:
     return TotalVariationAmbiguitySet(_nominal(dtype), radius=RADIUS)
 
 
+def _cvar(dtype: torch.dtype) -> AmbiguitySet:
+    # A tensor level exercises the buffers; its entries are dyadic so every
+    # dtype, half precision included, holds exactly the same levels.
+    return CVaRAmbiguitySet(
+        _nominal(dtype), alpha=torch.tensor([0.75, 0.5, 0.125], dtype=dtype)
+    )
+
+
 def _wasserstein(dtype: torch.dtype) -> AmbiguitySet:
     return WassersteinAmbiguitySet(
         _nominal(dtype),
@@ -100,6 +109,7 @@ def _wasserstein(dtype: torch.dtype) -> AmbiguitySet:
 
 FACTORIES: dict[str, AmbiguitySetFactory] = {
     "chi_square": _chi_square,
+    "cvar": _cvar,
     "kl": _kl,
     "phi": _phi,
     "total_variation": _total_variation,

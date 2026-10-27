@@ -17,7 +17,8 @@ duality gap, written in NumPy and SciPy without importing optora:
 - the primal divergence of a candidate distribution from the nominal, so a
   reported maximizer can be checked for feasibility.
 
-The total-variation and Wasserstein duals are convex and piecewise linear,
+The total-variation, CVaR, and Wasserstein duals are convex and piecewise
+linear,
 so their minima are found exactly by evaluating every breakpoint. The KL
 and chi-square duals are smooth and convex in one scalar, and are minimized
 with a bounded Brent search over a logarithmic reparameterization that
@@ -275,6 +276,62 @@ def total_variation_dual_minimum(nominal: Array, loss: Array, radius: float) -> 
     )
 
 
+def cvar_dual(nominal: Array, loss: Array, radius: float, level: float) -> float:
+    r"""Evaluate the Rockafellar-Uryasev CVaR dual at a level $c$.
+
+    The CVaR set of tail probability $\alpha = e^{-\mathrm{radius}}$ has
+    the dual objective $c + \mathbb{E}_p[(\ell - c)_+] / \alpha$
+    (Rockafellar and Uryasev 2000). Using that `nominal` has unit mass, it
+    is evaluated as
+
+    $$
+    \mathbb{E}_p[\max(\ell, c)]
+        + \left(e^{\mathrm{radius}} - 1\right) \mathbb{E}_p[(\ell - c)_+],
+    $$
+
+    a sum of two terms that never cancel a large $|c|$, with the factor
+    $1/\alpha - 1$ read through `expm1` so a vanishing radius keeps full
+    precision. Past $\mathrm{radius} \approx 709$ that factor overflows
+    to infinity, which is its correct float64 value: the objective is then
+    infinite below the largest reachable loss, as at $\alpha = 0$.
+
+    Args:
+        nominal: Reference distribution of shape `(n,)`.
+        loss: Per-scenario losses of shape `(n,)`.
+        radius: Nonnegative max-divergence radius $\log(1/\alpha)$.
+        level: Real quantile level $c$.
+
+    Returns:
+        The dual objective, an upper bound on the CVaR worst case.
+    """
+    nominal, loss = _positive_support(nominal, loss)
+    clipped = float(np.sum(nominal * np.maximum(loss, level)))
+    tail = float(np.sum(nominal * np.maximum(loss - level, 0.0)))
+    if tail == 0.0:
+        return clipped
+    with np.errstate(over="ignore"):
+        excess_ratio = float(np.expm1(radius))
+    return clipped + excess_ratio * tail
+
+
+def cvar_dual_minimum(nominal: Array, loss: Array, radius: float) -> float:
+    r"""Minimize `cvar_dual` exactly over its breakpoints.
+
+    The dual is convex and piecewise linear in the level with slope
+    $1 - 1/\alpha \le 0$ below every loss and $1$ above every loss, so its
+    minimum is attained at one of the losses.
+
+    Args:
+        nominal: Reference distribution of shape `(n,)`.
+        loss: Per-scenario losses of shape `(n,)`.
+        radius: Nonnegative max-divergence radius.
+
+    Returns:
+        The exact dual minimum.
+    """
+    return min(cvar_dual(nominal, loss, radius, float(level)) for level in loss)
+
+
 def wasserstein_dual(
     nominal: Array, cost: Array, loss: Array, radius: float, gamma: float
 ) -> float:
@@ -363,6 +420,22 @@ def chi_square_divergence(candidate: Array, nominal: Array) -> float:
         return float(np.inf)
     deviation = candidate[support] - nominal[support]
     return float(np.sum(deviation**2 / nominal[support]))
+
+
+def max_divergence(candidate: Array, nominal: Array) -> float:
+    r"""Return $\log \max_i q_i / p_i$, infinite if $q$ leaves the support of $p$.
+
+    Args:
+        candidate: Candidate distribution of shape `(n,)`.
+        nominal: Reference distribution of shape `(n,)`.
+
+    Returns:
+        The max-divergence (Renyi divergence of order infinity) in nats.
+    """
+    support = candidate > 0.0
+    if np.any(nominal[support] == 0.0):
+        return float(np.inf)
+    return float(np.log(np.max(candidate[support] / nominal[support])))
 
 
 def total_variation_distance(candidate: Array, nominal: Array) -> float:

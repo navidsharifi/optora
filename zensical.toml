@@ -92,6 +92,7 @@ nav = [
       { "Overview" = "api/divergences/index.md" },
       { "f-Divergence" = "api/divergences/f_divergence.md" },
       { "KL" = "api/divergences/kl.md" },
+      { "Max Divergence" = "api/divergences/max_divergence.md" },
       { "Wasserstein" = "api/divergences/wasserstein.md" },
     ] },
     { "DRO" = [

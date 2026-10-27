@@ -139,9 +139,9 @@ Values and gradients are unchanged; only the conditioning is.
     reports the value as `sum(q*.detach() * loss)`: the backward pass is
     exact, and the bisection never enters the autograd graph.
 
-### `PhiAmbiguitySet`, `ChiSquareAmbiguitySet`, `TotalVariationAmbiguitySet`
+### `PhiAmbiguitySet`, `ChiSquareAmbiguitySet`, `TotalVariationAmbiguitySet`, `CVaRAmbiguitySet`
 
-The general phi-divergence-ball case, plus two named instances.
+The general phi-divergence-ball case, plus three named instances.
 `PhiAmbiguitySet` generalizes the KL-DRO dual above to any phi-divergence
 (Ben-Tal et al., 2013; Duchi, Glynn, and Namkoong, 2021; Duchi and
 Namkoong, 2021), at the cost of a second dual variable `lam`:
@@ -183,6 +183,37 @@ computes the worst case directly from a closed-form combinatorial
 solution: sort the scenarios by loss and shift probability mass, from
 the cheapest ones, onto the single worst-case scenario until the
 total-variation budget is used up.
+
+Conditional value-at-risk at tail probability $\alpha \in (0, 1]$, the
+mean of the loss's upper $\alpha$-tail, is the worst case over
+distributions whose likelihood ratio to the nominal is at most
+$1/\alpha$ (Artzner et al., 1999; Rockafellar and Uryasev, 2002):
+
+$$
+\mathrm{CVaR}_\alpha(\mathrm{loss})
+= \sup_{q:\, q_i \,\le\, \mathrm{nominal}_i / \alpha} \mathbb{E}_q[\mathrm{loss}]
+= \inf_{\lambda} \; \lambda
+    + \frac{1}{\alpha}\, \mathbb{E}_{\mathrm{nominal}}\big[(\mathrm{loss} - \lambda)_+\big].
+$$
+
+That set is the phi-divergence ball of the indicator generator
+$\phi_\alpha(t) = 0$ on $[0, 1/\alpha]$ and $+\infty$ elsewhere, whose
+conjugate $\phi_\alpha^*(s) = (s)_+/\alpha$ turns the general dual above
+into the Rockafellar-Uryasev formula on the right. `CVaRAmbiguitySet`
+takes `alpha` directly and indexes the same set as the
+max-divergence ball
+
+$$
+D_\infty(q \,\|\, \mathrm{nominal})
+= \log \max_i \frac{q_i}{\mathrm{nominal}_i} \le \log \frac{1}{\alpha},
+$$
+
+so its `radius` is $\log(1/\alpha)$ and its `divergence` is
+`MaxDivergence`. Like total variation, it skips the dual: sort the
+scenarios by loss, give each its full nominal mass from the top until the
+cumulative mass reaches $\alpha$, give the boundary scenario the remainder,
+and divide by $\alpha$. $\alpha = 1$ is the nominal expectation and
+$\alpha = 0$ the maximum loss on the nominal's support.
 
 ### `WassersteinAmbiguitySet`
 

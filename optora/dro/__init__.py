@@ -11,9 +11,11 @@ from optora.dro.minibatch import MultilevelMonteCarloEstimator, StochasticPhiDua
 from optora.dro.minimax_solver import MinimaxProblem, MinimaxResult, MinimaxSolver
 from optora.dro.phi_dro import (
     ChiSquareAmbiguitySet,
+    CVaRAmbiguitySet,
     PhiAmbiguitySet,
     TotalVariationAmbiguitySet,
     chi_square_conjugate,
+    cvar_conjugate,
 )
 from optora.dro.wasserstein_dro import WassersteinAmbiguitySet
 
@@ -22,6 +24,7 @@ __all__ = [
     "PhiAmbiguitySet",
     "ChiSquareAmbiguitySet",
     "TotalVariationAmbiguitySet",
+    "CVaRAmbiguitySet",
     "WassersteinAmbiguitySet",
     "MinimaxProblem",
     "MinimaxResult",
@@ -29,6 +32,7 @@ __all__ = [
     "MultilevelMonteCarloEstimator",
     "StochasticPhiDual",
     "chi_square_conjugate",
+    "cvar_conjugate",
     "chi_square_radius",
     "kl_radius",
     "phi_divergence_radius",

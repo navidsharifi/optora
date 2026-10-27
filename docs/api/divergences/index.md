@@ -9,5 +9,7 @@
     - [`TotalVariationDivergence`](f_divergence.md#optora.divergences.f_divergence.TotalVariationDivergence)
 - [`optora.divergences.kl`](kl.md)
     - [`KLDivergence`](kl.md#optora.divergences.kl.KLDivergence)
+- [`optora.divergences.max_divergence`](max_divergence.md)
+    - [`MaxDivergence`](max_divergence.md#optora.divergences.max_divergence.MaxDivergence)
 - [`optora.divergences.wasserstein`](wasserstein.md)
     - [`SinkhornDivergence`](wasserstein.md#optora.divergences.wasserstein.SinkhornDivergence)
