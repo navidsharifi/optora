@@ -126,6 +126,9 @@ jobs:
           cache: pip
       - run: python -m pip install -U pip
       - run: python -m pip install torch --index-url ${{ env.TORCH_INDEX_URL }}
+      # This commit's toolchain is installed first, so the base keeps every
+      # tool it already accepts and both commits are timed with the same one.
+      - run: python -m pip install -e ".[dev]"
       # The base runs its own suite, so a base without one is skipped.
       - name: Benchmark the base commit
         if: github.event_name == 'pull_request'
@@ -140,6 +143,7 @@ jobs:
             python -m pytest tests/benchmarks --benchmark-enable --benchmark-only \
               --benchmark-storage="file://$RUNNER_TEMP/benchmarks" --benchmark-save=base
           fi
+      # Points the editable install back at this commit after the base run.
       - run: python -m pip install -e ".[dev]"
       - name: Benchmark this commit against the base
         shell: bash
