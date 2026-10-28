@@ -19,6 +19,13 @@ from optora.divergences.kl import KLDivergence
 from optora.divergences.max_divergence import MaxDivergence
 from optora.divergences.wasserstein import SinkhornDivergence
 
+# Small enough that both Sinkhorn loops are still far from converged after
+# `max_iter` iterations (potentials moving by ~1e-4), so they always run to
+# `max_iter`. At 0.1 they reach the float32 noise floor early, and whether
+# rounding then settles on an exact fixed point, ending the loop a checkpoint
+# early, depends on the platform.
+SINKHORN_EPSILON = 0.02
+
 
 def _distribution(generator: torch.Generator, *shape: int) -> torch.Tensor:
     weights = torch.rand(*shape, generator=generator) + 0.5
@@ -50,6 +57,7 @@ def test_sinkhorn_divergence(guarded_benchmark: Callable[..., Any]) -> None:
     points = torch.linspace(0.0, 1.0, support)
     divergence = SinkhornDivergence(
         cost=torch.abs(points[:, None] - points[None, :]),
+        epsilon=SINKHORN_EPSILON,
         max_iter=max_iter,
         tol=1e-30,
         check_interval=check_interval,
@@ -69,7 +77,7 @@ def test_entropic_transport_divergence(guarded_benchmark: Callable[..., Any]) ->
     points = torch.linspace(0.0, 1.0, support)
     divergence = EntropicTransportDivergence(
         cost=torch.abs(points[:, None] - points[None, :]),
-        epsilon=0.1,
+        epsilon=SINKHORN_EPSILON,
         max_iter=max_iter,
         tol=1e-30,
         check_interval=check_interval,
