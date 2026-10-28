@@ -27,6 +27,7 @@ from optora.dro.phi_dro import (
     chi_square_conjugate,
 )
 from optora.solvers.gradient_descent import GradientDescent
+from tests.dro.tolerances import feasibility_bound
 
 
 class _RecordingSolver(Solver[MinimizationProblem, MinimizationResult]):
@@ -467,7 +468,7 @@ def test_chi_square_returned_distribution_stays_inside_the_radius(
 
     assert differentiable.grad is not None
     divergence = ambiguity_set.divergence(differentiable.grad, nominal)
-    assert float(divergence) <= radius * (1.0 + 1e-9)
+    assert float(divergence) <= feasibility_bound(radius, nominal.numel())
 
 
 # --- TotalVariationAmbiguitySet --------------------------------------------
@@ -511,7 +512,9 @@ def test_total_variation_worst_case_expectation_is_attained_by_candidate() -> No
 
     result = ambiguity_set.worst_case_expectation(loss)
 
-    assert ambiguity_set.divergence(candidate, nominal) <= ambiguity_set.radius + 1e-9
+    assert ambiguity_set.divergence(candidate, nominal) <= feasibility_bound(
+        ambiguity_set.radius, nominal.numel()
+    )
     assert torch.allclose(result, torch.sum(candidate * loss), atol=1e-6)
 
 

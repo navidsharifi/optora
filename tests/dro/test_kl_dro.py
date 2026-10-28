@@ -5,6 +5,7 @@ import torch
 
 from optora.core.dro_base import AmbiguitySet, TiltedAmbiguitySet
 from optora.dro.kl_dro import KLAmbiguitySet
+from tests.dro.tolerances import feasibility_bound
 
 NOMINAL = torch.tensor([0.1, 0.2, 0.3, 0.4], dtype=torch.float64)
 LOSS = torch.tensor([0.0, 1.0, 2.0, 5.0], dtype=torch.float64)
@@ -199,10 +200,7 @@ def test_the_returned_distribution_stays_inside_the_radius(fraction: float) -> N
     # a primal objective value at a distribution the set actually contains.
     # Below saturation the radius constraint is tight, so the slack is
     # checked relatively: the divergence may sit on the boundary but must
-    # never cross it by more than the rounding of its own evaluation. That
-    # rounding has an absolute floor of about n * eps, because log(q / p)
-    # cancels to ~0 when q is close to p, so the relative slack alone is
-    # sub-ulp at tiny radii and the outcome depends on PyTorch's kernels.
+    # never cross it by more than the rounding of its own evaluation.
     radius = fraction * _kl_saturation_radius(NOMINAL, LOSS)
     ambiguity_set = KLAmbiguitySet(NOMINAL, radius=radius)
     differentiable = LOSS.clone().requires_grad_(True)
@@ -211,8 +209,9 @@ def test_the_returned_distribution_stays_inside_the_radius(fraction: float) -> N
 
     assert differentiable.grad is not None
     divergence = ambiguity_set.divergence(differentiable.grad, NOMINAL)
-    rounding_floor = NOMINAL.numel() * torch.finfo(NOMINAL.dtype).eps
-    assert float(divergence) <= radius * (1.0 + 1e-9) + rounding_floor
+    assert float(divergence) <= feasibility_bound(
+        radius, NOMINAL.numel(), NOMINAL.dtype
+    )
 
 
 @pytest.mark.parametrize("support_size", [1, 2, 100, 1000, 10000])

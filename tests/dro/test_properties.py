@@ -49,6 +49,7 @@ from tests.dro.strategies import (
     positive_radii,
     radii,
 )
+from tests.dro.tolerances import feasibility_bound
 
 # Relative tolerance on a worst-case value, scaled by the loss magnitude: the
 # 1e-9 float64 target of plan milestone 8a.
@@ -277,7 +278,9 @@ def test_gradient_is_a_feasible_distribution_attaining_the_worst_case(
 
     assert candidate.min() >= -mass_tolerance
     assert candidate.sum() == pytest.approx(1.0, abs=mass_tolerance)
-    assert spec.divergence(instance, candidate) <= radius * (1.0 + 1e-6) + 1e-12
+    assert spec.divergence(instance, candidate) <= feasibility_bound(
+        radius, candidate.size, rtol=1e-6
+    )
     assert float(candidate @ instance.loss_array) == pytest.approx(
         worst_case(spec, instance, radius), abs=tolerance(instance)
     )
