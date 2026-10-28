@@ -34,7 +34,10 @@ class Divergence(nn.Module, ABC):
 
         Returns:
             A scalar tensor holding the divergence value. Implementations
-            must return zero when `p` equals `q` and a nonnegative value
-            otherwise.
+            must return a nonnegative value that vanishes at the
+            divergence's centre. For every divergence except an entropic
+            transport cost the centre is `p == q`; for
+            `optora.divergences.EntropicTransportDivergence` it is the
+            kernel-smoothed reference, as documented there.
         """
         raise NotImplementedError

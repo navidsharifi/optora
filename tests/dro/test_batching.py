@@ -8,8 +8,14 @@ import torch
 
 from optora.core.dro_base import AmbiguitySet
 from optora.dro.kl_dro import KLAmbiguitySet
-from optora.dro.phi_dro import ChiSquareAmbiguitySet, TotalVariationAmbiguitySet
+from optora.dro.phi_dro import (
+    ChiSquareAmbiguitySet,
+    CVaRAmbiguitySet,
+    TotalVariationAmbiguitySet,
+)
+from optora.dro.sinkhorn_dro import SinkhornAmbiguitySet
 from optora.dro.wasserstein_dro import WassersteinAmbiguitySet
+from tests.dro.specs import cvar_level
 
 NOMINAL = torch.tensor([0.25, 0.5, 0.25], dtype=torch.float64)
 
@@ -36,15 +42,25 @@ def _total_variation(radius: float | torch.Tensor) -> AmbiguitySet:
     return TotalVariationAmbiguitySet(NOMINAL, radius=radius)
 
 
+def _cvar(radius: float | torch.Tensor) -> AmbiguitySet:
+    return CVaRAmbiguitySet(NOMINAL, alpha=cvar_level(radius))
+
+
 def _wasserstein(radius: float | torch.Tensor) -> AmbiguitySet:
     return WassersteinAmbiguitySet(NOMINAL, cost=COST, radius=radius)
+
+
+def _sinkhorn(radius: float | torch.Tensor) -> AmbiguitySet:
+    return SinkhornAmbiguitySet(NOMINAL, cost=COST, epsilon=0.5, radius=radius)
 
 
 FACTORIES: dict[str, AmbiguitySetFactory] = {
     "kl": _kl,
     "chi_square": _chi_square,
     "total_variation": _total_variation,
+    "cvar": _cvar,
     "wasserstein": _wasserstein,
+    "sinkhorn": _sinkhorn,
 }
 
 
@@ -179,13 +195,13 @@ def test_a_later_call_on_a_different_batch_shape_is_unaffected() -> None:
 
 @pytest.mark.parametrize(
     "make",
-    [_kl, _chi_square, _total_variation],
-    ids=["kl", "chi_square", "total_variation"],
+    [_kl, _chi_square, _total_variation, _cvar, _sinkhorn],
+    ids=["kl", "chi_square", "total_variation", "cvar", "sinkhorn"],
 )
 def test_batched_solver_free_sets_never_synchronize(
     make: AmbiguitySetFactory, host_sync_counter: Callable[[], Any]
 ) -> None:
-    # The tilt bisection and the total-variation closed form are both
+    # The tilt bisection and the total-variation and CVaR closed forms are
     # solver-free and run a trip count fixed by the dtype, so a batched
     # evaluation must stay a pure sequence of tensor kernels with no
     # device-to-host read at all.

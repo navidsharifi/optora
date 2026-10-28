@@ -24,7 +24,7 @@ defines.
 
     ---
 
-    `f_divergence`, `kl`, `wasserstein`
+    `entropic_transport`, `f_divergence`, `kl`, `max_divergence`, `wasserstein`
 
     [:octicons-arrow-right-24: Browse](divergences/index.md)
 
@@ -32,7 +32,7 @@ defines.
 
     ---
 
-    `calibration`, `kl_dro`, `minibatch`, `minimax_solver`, `phi_dro`, `wasserstein_dro`
+    `calibration`, `kl_dro`, `minibatch`, `minimax_solver`, `phi_dro`, `sinkhorn_dro`, `wasserstein_dro`
 
     [:octicons-arrow-right-24: Browse](dro/index.md)
 

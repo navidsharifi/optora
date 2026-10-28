@@ -139,9 +139,9 @@ Values and gradients are unchanged; only the conditioning is.
     reports the value as `sum(q*.detach() * loss)`: the backward pass is
     exact, and the bisection never enters the autograd graph.
 
-### `PhiAmbiguitySet`, `ChiSquareAmbiguitySet`, `TotalVariationAmbiguitySet`
+### `PhiAmbiguitySet`, `ChiSquareAmbiguitySet`, `TotalVariationAmbiguitySet`, `CVaRAmbiguitySet`
 
-The general phi-divergence-ball case, plus two named instances.
+The general phi-divergence-ball case, plus three named instances.
 `PhiAmbiguitySet` generalizes the KL-DRO dual above to any phi-divergence
 (Ben-Tal et al., 2013; Duchi, Glynn, and Namkoong, 2021; Duchi and
 Namkoong, 2021), at the cost of a second dual variable `lam`:
@@ -184,6 +184,37 @@ solution: sort the scenarios by loss and shift probability mass, from
 the cheapest ones, onto the single worst-case scenario until the
 total-variation budget is used up.
 
+Conditional value-at-risk at tail probability $\alpha \in (0, 1]$, the
+mean of the loss's upper $\alpha$-tail, is the worst case over
+distributions whose likelihood ratio to the nominal is at most
+$1/\alpha$ (Artzner et al., 1999; Rockafellar and Uryasev, 2002):
+
+$$
+\mathrm{CVaR}_\alpha(\mathrm{loss})
+= \sup_{q:\, q_i \,\le\, \mathrm{nominal}_i / \alpha} \mathbb{E}_q[\mathrm{loss}]
+= \inf_{\lambda} \; \lambda
+    + \frac{1}{\alpha}\, \mathbb{E}_{\mathrm{nominal}}\big[(\mathrm{loss} - \lambda)_+\big].
+$$
+
+That set is the phi-divergence ball of the indicator generator
+$\phi_\alpha(t) = 0$ on $[0, 1/\alpha]$ and $+\infty$ elsewhere, whose
+conjugate $\phi_\alpha^*(s) = (s)_+/\alpha$ turns the general dual above
+into the Rockafellar-Uryasev formula on the right. `CVaRAmbiguitySet`
+takes `alpha` directly and indexes the same set as the
+max-divergence ball
+
+$$
+D_\infty(q \,\|\, \mathrm{nominal})
+= \log \max_i \frac{q_i}{\mathrm{nominal}_i} \le \log \frac{1}{\alpha},
+$$
+
+so its `radius` is $\log(1/\alpha)$ and its `divergence` is
+`MaxDivergence`. Like total variation, it skips the dual: sort the
+scenarios by loss, give each its full nominal mass from the top until the
+cumulative mass reaches $\alpha$, give the boundary scenario the remainder,
+and divide by $\alpha$. $\alpha = 1$ is the nominal expectation and
+$\alpha = 0$ the maximum loss on the nominal's support.
+
 ### `WassersteinAmbiguitySet`
 
 The Wasserstein-ball case, for candidates sharing the nominal
@@ -208,6 +239,43 @@ dtype-determined number of steps. It uses a `SinkhornDivergence`
 internally only as an approximate `contains(...)` membership check; the
 worst-case expectation itself is solved exactly, not through the entropic
 approximation.
+
+### `SinkhornAmbiguitySet`
+
+Sinkhorn DRO (Wang, Gao, and Xie, 2025) replaces the Wasserstein
+distance with its entropic regularization, relative to a reference
+measure $\nu$ on the support (the counting measure by default). On a
+finite support it is a mixture of KL balls with one shared budget, one
+ball around each Gibbs kernel row
+$Q_i \propto \nu\, e^{-\mathrm{cost}(i, \cdot)/\epsilon}$:
+
+$$
+\sup_{\gamma_1, \ldots, \gamma_n}
+    \Big\{ \sum_i \mathrm{nominal}_i \, \mathbb{E}_{\gamma_i}[\mathrm{loss}]
+    \;:\; \epsilon \sum_i \mathrm{nominal}_i\,
+        \mathrm{KL}(\gamma_i \,\|\, Q_i) \le \mathrm{radius} \Big\}
+= \inf_{\lambda \ge 0} \; \lambda\, \mathrm{radius}
+    + \lambda \epsilon \sum_i \mathrm{nominal}_i
+      \log \sum_j Q_{ij}\, e^{\mathrm{loss}_j / (\lambda \epsilon)} .
+$$
+
+Every row's maximizer is an exponential tilt of $Q_i$ at one shared
+temperature, so the same bracketed bisection as KL pins it exactly.
+
+!!! note "The ball is centred on the smoothed nominal"
+    `radius` is the budget in excess of the entropic bias, so radius zero
+    is the single distribution $P^0 = \mathrm{nominal}^\top Q$, a kernel
+    smoothing of the nominal, not the nominal itself. The worst case can
+    put mass anywhere $\nu$ does, including scenarios with no nominal
+    mass. `EntropicTransportDivergence`, used by `contains`, vanishes at
+    $P^0$.
+
+With a zero cost every row is $\nu$ and the set is the KL ball of radius
+$\mathrm{radius}/\epsilon$ around $\nu$; as $\epsilon \to 0$ the worst case
+tends to the `WassersteinAmbiguitySet` worst case. Azizian, Iutzeler, and
+Malick (2023) also regularize the objective; that variant returns a
+penalized value rather than a worst-case expectation and is not
+implemented.
 
 ### `MinimaxSolver`
 

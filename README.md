@@ -50,7 +50,8 @@ robust_decision = MinimaxSolver(solver=outer_solver).solve(problem).point
 Ambiguity sets (`optora.dro`), the divergences underneath them
 (`optora.divergences`), and the solvers underneath those (`optora.solvers`)
 are implemented end to end: `KLAmbiguitySet`, `PhiAmbiguitySet` (plus
-`ChiSquareAmbiguitySet` and `TotalVariationAmbiguitySet`), and
+`ChiSquareAmbiguitySet`, `TotalVariationAmbiguitySet`, and
+`CVaRAmbiguitySet`), `SinkhornAmbiguitySet`, and
 `WassersteinAmbiguitySet`, wired together by `MinimaxSolver`. Every piece
 is covered by pytest tests checked against known closed-form results,
 independent grid-search cross-checks, convergence limits, and

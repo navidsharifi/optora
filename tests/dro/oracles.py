@@ -15,7 +15,7 @@ cross-check written against the same dual formula cannot do.
 
 Two families of reference are used:
 
-- Exact linear programs (`total_variation_worst_case`,
+- Exact linear programs (`total_variation_worst_case`, `cvar_worst_case`,
   `wasserstein_worst_case`) solved by `scipy.optimize.linprog`'s HiGHS
   simplex. The optimum is a vertex, so the value is exact up to the LP
   solver's own residual tolerance.
@@ -134,6 +134,54 @@ def total_variation_worst_case(nominal: Array, loss: Array, radius: float) -> fl
     )
     if not solution.success:
         raise RuntimeError(f"total-variation LP failed: {solution.message}")
+    return float(-solution.fun)
+
+
+def cvar_worst_case(nominal: Array, loss: Array, alpha: float) -> float:
+    r"""Solve the CVaR worst case as an exact linear program.
+
+    The primal maximizes the expected loss over distributions whose
+    likelihood ratio to the nominal is at most $1/\alpha$:
+
+    $$
+    \max_{q} \; \mathrm{loss}^\top q
+    \quad \text{s.t.} \quad
+    \mathbf{1}^\top q = 1, \;
+    0 \le q_i \le p_i / \alpha.
+    $$
+
+    At $\alpha = 0$ the upper bound is dropped on the nominal's support and
+    $q$ is pinned to zero off it, the limit in which the worst case is the
+    largest reachable loss.
+
+    Args:
+        nominal: Reference distribution of shape `(n,)`.
+        loss: Per-scenario losses of shape `(n,)`.
+        alpha: Tail probability in `[0, 1]`.
+
+    Returns:
+        The worst-case expected loss.
+
+    Raises:
+        RuntimeError: If the linear program does not solve to optimality.
+    """
+    nominal = _as_float64(nominal)
+    loss = _as_float64(loss)
+    if alpha == 0.0:
+        bounds = [(0.0, None if weight > 0.0 else 0.0) for weight in nominal]
+    else:
+        bounds = [(0.0, weight / alpha) for weight in nominal]
+
+    solution = linprog(
+        c=-loss,
+        A_eq=np.ones((1, loss.shape[0])),
+        b_eq=np.array([1.0]),
+        bounds=bounds,
+        method=_LP_METHOD,
+        options=_LP_OPTIONS,
+    )
+    if not solution.success:
+        raise RuntimeError(f"CVaR LP failed: {solution.message}")
     return float(-solution.fun)
 
 

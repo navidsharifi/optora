@@ -10,10 +10,11 @@ derivation itself.
 
 The sets fall into two groups:
 
-- `TotalVariationAmbiguitySet` and `WassersteinAmbiguitySet` evaluate exact
-  combinatorial solutions (a sorted cumulative sweep, a bisection on a
-  monotone piecewise-constant derivative), and match their oracles to
-  machine precision at every radius from zero to far past saturation.
+- `TotalVariationAmbiguitySet`, `CVaRAmbiguitySet`, and
+  `WassersteinAmbiguitySet` evaluate exact combinatorial solutions (sorted
+  cumulative sweeps, a bisection on a monotone piecewise-constant
+  derivative), and match their oracles to machine precision at every
+  radius, or tail probability, from the nominal to far past saturation.
 - `KLAmbiguitySet` and `ChiSquareAmbiguitySet` pin a monotone tilt of the
   nominal by bisection. Writing $P^\star$ for the nominal mass on the
   highest-loss scenarios, the radius constraint is tight below the
@@ -37,11 +38,16 @@ import pytest
 import torch
 
 from optora.dro.kl_dro import KLAmbiguitySet
-from optora.dro.phi_dro import ChiSquareAmbiguitySet, TotalVariationAmbiguitySet
+from optora.dro.phi_dro import (
+    ChiSquareAmbiguitySet,
+    CVaRAmbiguitySet,
+    TotalVariationAmbiguitySet,
+)
 from optora.dro.wasserstein_dro import WassersteinAmbiguitySet
 from tests.dro.instances import INSTANCES, Instance
 from tests.dro.oracles import (
     chi_square_worst_case,
+    cvar_worst_case,
     kl_worst_case,
     total_variation_worst_case,
     wasserstein_worst_case,
@@ -53,6 +59,12 @@ ORACLE_TOLERANCE = 1e-9
 # far below any structural threshold, around the point where the worst case
 # saturates at max(loss), and far beyond it.
 EXACT_RADII = (0.0, 1e-8, 1e-3, 0.1, 0.5, 1.0, 2.0, 1e3)
+
+# CVaR tail probabilities from the nominal (one) to the maximum loss (zero),
+# including levels that land exactly on a cumulative nominal mass of the
+# instances (0.4, 0.7, 0.5, 0.25), where the boundary scenario is either
+# fully in or fully out of the tail.
+CVAR_LEVELS = (1.0, 1.0 - 1e-8, 0.9, 0.7, 0.5, 0.4, 0.25, 0.1, 1e-3, 1e-12, 0.0)
 
 # Fractions of a set's saturation radius, the range over which the radius
 # constraint is tight and the tilt is pinned strictly inside its bracket.
@@ -122,6 +134,36 @@ def test_total_variation_matches_the_primal_linear_program(
         instance.nominal_array, instance.loss_array, radius
     )
     assert abs(float(result) - reference) <= ORACLE_TOLERANCE
+
+
+@pytest.mark.parametrize("instance", INSTANCES, ids=INSTANCE_IDS)
+@pytest.mark.parametrize("alpha", CVAR_LEVELS)
+def test_cvar_matches_the_primal_linear_program(
+    instance: Instance, alpha: float
+) -> None:
+    nominal, loss, _ = instance.tensors()
+    ambiguity_set = CVaRAmbiguitySet(nominal, alpha=alpha)
+
+    result = ambiguity_set.worst_case_expectation(loss)
+
+    reference = cvar_worst_case(instance.nominal_array, instance.loss_array, alpha)
+    assert abs(float(result) - reference) <= ORACLE_TOLERANCE
+
+
+@pytest.mark.parametrize("instance", INSTANCES, ids=INSTANCE_IDS)
+def test_batched_cvar_level_sweep_matches_the_oracle_elementwise(
+    instance: Instance,
+) -> None:
+    # A tensor level skips the alpha = 1 shortcut, so the leading entry
+    # exercises the general sweep at the nominal.
+    nominal, loss, _ = instance.tensors()
+    levels = torch.tensor(CVAR_LEVELS, dtype=torch.float64)
+
+    result = CVaRAmbiguitySet(nominal, alpha=levels).worst_case_expectation(loss)
+
+    for index, alpha in enumerate(CVAR_LEVELS):
+        reference = cvar_worst_case(instance.nominal_array, instance.loss_array, alpha)
+        assert abs(float(result[index]) - reference) <= ORACLE_TOLERANCE
 
 
 # Coincident support points with different losses: a pseudometric ground

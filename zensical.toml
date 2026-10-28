@@ -90,8 +90,10 @@ nav = [
     ] },
     { "Divergences" = [
       { "Overview" = "api/divergences/index.md" },
+      { "Entropic Transport" = "api/divergences/entropic_transport.md" },
       { "f-Divergence" = "api/divergences/f_divergence.md" },
       { "KL" = "api/divergences/kl.md" },
+      { "Max Divergence" = "api/divergences/max_divergence.md" },
       { "Wasserstein" = "api/divergences/wasserstein.md" },
     ] },
     { "DRO" = [
@@ -101,6 +103,7 @@ nav = [
       { "Minibatch" = "api/dro/minibatch.md" },
       { "Minimax Solver" = "api/dro/minimax_solver.md" },
       { "Phi-DRO" = "api/dro/phi_dro.md" },
+      { "Sinkhorn Dro" = "api/dro/sinkhorn_dro.md" },
       { "Wasserstein DRO" = "api/dro/wasserstein_dro.md" },
     ] },
     { "Solvers" = [

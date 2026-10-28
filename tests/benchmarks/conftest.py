@@ -15,6 +15,22 @@ import pytest
 from pytest_benchmark.fixture import BenchmarkFixture
 
 
+def pytest_benchmark_update_machine_info(machine_info: dict[str, Any]) -> None:
+    """Drop the current CPU clock from the machine info saved with a run.
+
+    On Linux `py-cpuinfo` reads the instantaneous frequency, so two runs on
+    one machine record different values and every base-versus-head
+    comparison would warn that the machine changed
+    (ionelmc/pytest-benchmark#255).
+
+    Args:
+        machine_info: Machine info about to be saved or compared, updated in
+            place.
+    """
+    for key in ("hz_actual", "hz_actual_friendly"):
+        machine_info["cpu"].pop(key, None)
+
+
 @pytest.fixture
 def guarded_benchmark(
     benchmark: BenchmarkFixture, host_sync_counter: Callable[[], Any]

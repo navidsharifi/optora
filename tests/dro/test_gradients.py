@@ -110,9 +110,20 @@ class Kink:
 KINKS = (
     Kink(
         name="saturated_tied_maximum",
-        spec_names=frozenset({"kl", "chi_square", "total_variation", "wasserstein"}),
+        spec_names=frozenset(
+            {"kl", "chi_square", "total_variation", "cvar", "wasserstein"}
+        ),
         instance=_INSTANCES["tied_maximum"],
         radius=1e3,
+        index=2,
+    ),
+    # A CVaR tail of mass exp(-1) ~ 0.37 cuts through the tied maximum,
+    # which carries mass 0.7, so the tie decides which scenario fills it.
+    Kink(
+        name="tie_straddles_the_tail",
+        spec_names=frozenset({"cvar"}),
+        instance=_INSTANCES["tied_maximum"],
+        radius=1.0,
         index=2,
     ),
     Kink(
@@ -124,7 +135,7 @@ KINKS = (
     ),
     Kink(
         name="tied_minimum",
-        spec_names=frozenset({"total_variation"}),
+        spec_names=frozenset({"total_variation", "cvar"}),
         instance=_INSTANCES["duplicate_support"],
         radius=0.3,
         index=0,

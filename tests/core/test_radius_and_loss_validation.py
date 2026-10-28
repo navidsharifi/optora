@@ -20,6 +20,7 @@ from optora.dro.phi_dro import (
     PhiAmbiguitySet,
     TotalVariationAmbiguitySet,
 )
+from optora.dro.sinkhorn_dro import SinkhornAmbiguitySet
 from optora.dro.wasserstein_dro import WassersteinAmbiguitySet
 from optora.solvers.gradient_descent import GradientDescent
 from tests.dro.instances import INSTANCES
@@ -78,8 +79,15 @@ def _wasserstein(radius: Radius, validate: bool) -> AmbiguitySet:
     return WassersteinAmbiguitySet(NOMINAL, cost=COST, radius=radius, validate=validate)
 
 
+def _sinkhorn(radius: Radius, validate: bool) -> AmbiguitySet:
+    return SinkhornAmbiguitySet(
+        NOMINAL, cost=COST, epsilon=0.5, radius=radius, validate=validate
+    )
+
+
 FACTORIES: dict[str, AmbiguitySetFactory] = {
     "chi_square": _chi_square,
+    "sinkhorn": _sinkhorn,
     "kl": _kl,
     "phi": _phi,
     "total_variation": _total_variation,

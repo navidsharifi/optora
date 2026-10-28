@@ -44,7 +44,10 @@ Issues = "https://github.com/navidsharifi/optora/issues"
 [project.optional-dependencies]
 dev = [
   "build>=1.2",
-  "pytest>=8",
+  # pytest 9.2 removed the private `Node._nodeid` that pytest-benchmark
+  # 5.3.0 still reads (ionelmc/pytest-benchmark#321); lift the cap once a
+  # fixed pytest-benchmark is released.
+  "pytest>=8,<9.2",
   "pytest-cov>=6",
   "ruff>=0.5",
   "mypy>=1.10",

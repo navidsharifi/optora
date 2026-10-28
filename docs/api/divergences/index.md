@@ -3,11 +3,15 @@
 # `optora.divergences`
 
 ## Modules
+- [`optora.divergences.entropic_transport`](entropic_transport.md)
+    - [`EntropicTransportDivergence`](entropic_transport.md#optora.divergences.entropic_transport.EntropicTransportDivergence)
 - [`optora.divergences.f_divergence`](f_divergence.md)
     - [`PhiDivergence`](f_divergence.md#optora.divergences.f_divergence.PhiDivergence)
     - [`ChiSquareDivergence`](f_divergence.md#optora.divergences.f_divergence.ChiSquareDivergence)
     - [`TotalVariationDivergence`](f_divergence.md#optora.divergences.f_divergence.TotalVariationDivergence)
 - [`optora.divergences.kl`](kl.md)
     - [`KLDivergence`](kl.md#optora.divergences.kl.KLDivergence)
+- [`optora.divergences.max_divergence`](max_divergence.md)
+    - [`MaxDivergence`](max_divergence.md#optora.divergences.max_divergence.MaxDivergence)
 - [`optora.divergences.wasserstein`](wasserstein.md)
     - [`SinkhornDivergence`](wasserstein.md#optora.divergences.wasserstein.SinkhornDivergence)

@@ -17,7 +17,8 @@ duality gap, written in NumPy and SciPy without importing optora:
 - the primal divergence of a candidate distribution from the nominal, so a
   reported maximizer can be checked for feasibility.
 
-The total-variation and Wasserstein duals are convex and piecewise linear,
+The total-variation, CVaR, and Wasserstein duals are convex and piecewise
+linear,
 so their minima are found exactly by evaluating every breakpoint. The KL
 and chi-square duals are smooth and convex in one scalar, and are minimized
 with a bounded Brent search over a logarithmic reparameterization that
@@ -31,7 +32,8 @@ from typing import Final
 
 import numpy as np
 from numpy.typing import NDArray
-from scipy.optimize import linprog, minimize_scalar
+from scipy.optimize import linprog, minimize, minimize_scalar
+from scipy.special import logsumexp
 
 Array = NDArray[np.float64]
 
@@ -47,6 +49,10 @@ _LP_OPTIONS: Final = {
     "primal_feasibility_tolerance": 1e-10,
     "dual_feasibility_tolerance": 1e-10,
 }
+
+# Gradient-norm tolerance of the Newton solve in
+# `entropic_transport_divergence`.
+_NEWTON_TOLERANCE: Final = 1e-12
 
 
 def _positive_support(nominal: Array, loss: Array) -> tuple[Array, Array]:
@@ -275,6 +281,62 @@ def total_variation_dual_minimum(nominal: Array, loss: Array, radius: float) -> 
     )
 
 
+def cvar_dual(nominal: Array, loss: Array, radius: float, level: float) -> float:
+    r"""Evaluate the Rockafellar-Uryasev CVaR dual at a level $c$.
+
+    The CVaR set of tail probability $\alpha = e^{-\mathrm{radius}}$ has
+    the dual objective $c + \mathbb{E}_p[(\ell - c)_+] / \alpha$
+    (Rockafellar and Uryasev 2000). Using that `nominal` has unit mass, it
+    is evaluated as
+
+    $$
+    \mathbb{E}_p[\max(\ell, c)]
+        + \left(e^{\mathrm{radius}} - 1\right) \mathbb{E}_p[(\ell - c)_+],
+    $$
+
+    a sum of two terms that never cancel a large $|c|$, with the factor
+    $1/\alpha - 1$ read through `expm1` so a vanishing radius keeps full
+    precision. Past $\mathrm{radius} \approx 709$ that factor overflows
+    to infinity, which is its correct float64 value: the objective is then
+    infinite below the largest reachable loss, as at $\alpha = 0$.
+
+    Args:
+        nominal: Reference distribution of shape `(n,)`.
+        loss: Per-scenario losses of shape `(n,)`.
+        radius: Nonnegative max-divergence radius $\log(1/\alpha)$.
+        level: Real quantile level $c$.
+
+    Returns:
+        The dual objective, an upper bound on the CVaR worst case.
+    """
+    nominal, loss = _positive_support(nominal, loss)
+    clipped = float(np.sum(nominal * np.maximum(loss, level)))
+    tail = float(np.sum(nominal * np.maximum(loss - level, 0.0)))
+    if tail == 0.0:
+        return clipped
+    with np.errstate(over="ignore"):
+        excess_ratio = float(np.expm1(radius))
+    return clipped + excess_ratio * tail
+
+
+def cvar_dual_minimum(nominal: Array, loss: Array, radius: float) -> float:
+    r"""Minimize `cvar_dual` exactly over its breakpoints.
+
+    The dual is convex and piecewise linear in the level with slope
+    $1 - 1/\alpha \le 0$ below every loss and $1$ above every loss, so its
+    minimum is attained at one of the losses.
+
+    Args:
+        nominal: Reference distribution of shape `(n,)`.
+        loss: Per-scenario losses of shape `(n,)`.
+        radius: Nonnegative max-divergence radius.
+
+    Returns:
+        The exact dual minimum.
+    """
+    return min(cvar_dual(nominal, loss, radius, float(level)) for level in loss)
+
+
 def wasserstein_dual(
     nominal: Array, cost: Array, loss: Array, radius: float, gamma: float
 ) -> float:
@@ -331,6 +393,84 @@ def wasserstein_dual_minimum(
     )
 
 
+def sinkhorn_kernel(cost: Array, epsilon: float, reference: Array) -> Array:
+    r"""Return the row-stochastic Gibbs kernel $Q \propto \nu e^{-C/\epsilon}$.
+
+    Args:
+        cost: Ground cost of shape `(n, n)`.
+        epsilon: Positive entropic regularization strength.
+        reference: Nonnegative reference measure of shape `(n,)`.
+
+    Returns:
+        The kernel, each row shifted by its smallest cost before
+        exponentiating so no row underflows entirely.
+    """
+    shifted = cost - cost.min(axis=1, keepdims=True)
+    weights = reference[None, :] * np.exp(-shifted / epsilon)
+    return weights / weights.sum(axis=1, keepdims=True)
+
+
+def sinkhorn_dual(
+    nominal: Array, kernel: Array, loss: Array, radius: float, eta: float
+) -> float:
+    r"""Evaluate the Sinkhorn-DRO dual at a temperature $\eta = \lambda\epsilon > 0$.
+
+    Wang, Gao and Xie's dual, in its form shifted by the entropic bias, is
+    $\inf_{\lambda \ge 0} \lambda \bar\rho + \lambda \epsilon \sum_i p_i
+    \log \sum_j Q_{ij} e^{\ell_j / (\lambda\epsilon)}$. In terms of $\eta$
+    the first term is $\eta \bar\rho / \epsilon$, and the caller passes
+    `radius` $= \bar\rho / \epsilon$. Each row's log-moment generating
+    function is shifted by the largest loss the kernel reaches and read
+    through `log1p` and `expm1`, as in `kl_dual`, while that sum stays
+    away from $-1$, and through `logsumexp` otherwise: when the largest
+    loss carries a tiny kernel mass the sum rounds to $-1$.
+
+    Args:
+        nominal: Nominal distribution of shape `(n,)`.
+        kernel: Row-stochastic kernel of shape `(n, n)`.
+        loss: Per-scenario losses of shape `(n,)`.
+        radius: Budget divided by the regularization strength.
+        eta: Positive temperature.
+
+    Returns:
+        The dual objective, an upper bound on the Sinkhorn worst case.
+    """
+    rows = nominal > 0.0
+    reachable = kernel[rows].sum(axis=0) > 0.0
+    maximum = float(loss[reachable].max())
+    shifted = np.where(reachable, loss - maximum, 0.0)
+    excess = np.sum(kernel[rows] * np.expm1(shifted / eta), axis=1)
+    with np.errstate(divide="ignore"):
+        log_kernel = np.log(kernel[rows])
+    direct = logsumexp(log_kernel + shifted / eta, axis=1)
+    moments = np.where(excess > -0.5, np.log1p(np.maximum(excess, -0.5)), direct)
+    return float(eta * radius + maximum + eta * np.sum(nominal[rows] * moments))
+
+
+def sinkhorn_dual_minimum(
+    nominal: Array, kernel: Array, loss: Array, radius: float
+) -> float:
+    """Minimize `sinkhorn_dual` over the temperature.
+
+    Args:
+        nominal: Nominal distribution of shape `(n,)`.
+        kernel: Row-stochastic kernel of shape `(n, n)`.
+        loss: Per-scenario losses of shape `(n,)`.
+        radius: Budget divided by the regularization strength.
+
+    Returns:
+        The dual minimum, equal to the Sinkhorn worst case by strong
+        duality (Wang, Gao and Xie 2025, Theorem 3.1).
+    """
+    reachable = kernel[nominal > 0.0].sum(axis=0) > 0.0
+    spread = float(loss[reachable].max() - loss[reachable].min())
+    if spread == 0.0:
+        return float(loss[reachable].max())
+    return _minimize_on_log_scale(
+        lambda eta: sinkhorn_dual(nominal, kernel, loss, radius, eta), spread
+    )
+
+
 def kl_divergence(candidate: Array, nominal: Array) -> float:
     r"""Return $D_{\mathrm{KL}}(q \,\|\, p)$, infinite if $q$ leaves the support of $p$.
 
@@ -363,6 +503,22 @@ def chi_square_divergence(candidate: Array, nominal: Array) -> float:
         return float(np.inf)
     deviation = candidate[support] - nominal[support]
     return float(np.sum(deviation**2 / nominal[support]))
+
+
+def max_divergence(candidate: Array, nominal: Array) -> float:
+    r"""Return $\log \max_i q_i / p_i$, infinite if $q$ leaves the support of $p$.
+
+    Args:
+        candidate: Candidate distribution of shape `(n,)`.
+        nominal: Reference distribution of shape `(n,)`.
+
+    Returns:
+        The max-divergence (Renyi divergence of order infinity) in nats.
+    """
+    support = candidate > 0.0
+    if np.any(nominal[support] == 0.0):
+        return float(np.inf)
+    return float(np.log(np.max(candidate[support] / nominal[support])))
 
 
 def total_variation_distance(candidate: Array, nominal: Array) -> float:
@@ -414,3 +570,72 @@ def transport_cost(candidate: Array, nominal: Array, cost: Array) -> float:
     if not solution.success:
         raise RuntimeError(f"transport LP failed: {solution.message}")
     return float(solution.fun)
+
+
+def entropic_transport_divergence(
+    candidate: Array, nominal: Array, kernel: Array, epsilon: float
+) -> float:
+    r"""Return the excess entropic transport cost of $q$ over $p$ via its dual.
+
+    The cost is $\epsilon \min_{\gamma \in \Gamma(p, q)}
+    \mathrm{KL}(\gamma \,\|\, \mathrm{diag}(p)\, Q)$, Wang, Gao and Xie's
+    Sinkhorn distance from $p$ to $q$ in excess of its minimum over $q$.
+    It equals $\epsilon$ times the maximum of the smooth concave dual
+
+    $$
+    \max_g \; \sum_j q_j g_j - \sum_i p_i \log \sum_j Q_{ij} e^{g_j}
+    $$
+
+    over potentials on the support of $q$, maximized here by a trust-region
+    Newton method with the exact Hessian. Unlike Sinkhorn scaling, which
+    slows down as $C/\epsilon$ grows, it reaches the maximum to rounding
+    error however sharp the kernel is. The first potential is pinned to
+    zero, since a common shift leaves the dual unchanged, and every dual
+    point bounds the divergence from below, so an inexact solve can only
+    understate it.
+
+    Args:
+        candidate: Candidate distribution of shape `(n,)`.
+        nominal: Nominal distribution of shape `(n,)`.
+        kernel: Row-stochastic kernel of shape `(n, n)` with positive
+            entries, so some coupling always meets both marginals.
+        epsilon: Positive entropic regularization strength.
+
+    Returns:
+        The divergence, zero at the kernel-smoothed nominal $p^\top Q$.
+
+    Raises:
+        RuntimeError: If the Newton solve stops short of the maximum.
+    """
+    row_mass = nominal[nominal > 0.0]
+    column_mass = candidate[candidate > 0.0]
+    log_kernel = np.log(kernel[np.ix_(nominal > 0.0, candidate > 0.0)])
+
+    def negative_dual(free: Array) -> tuple[float, Array, Array]:
+        potentials = np.concatenate([[0.0], free])
+        log_normalizer = logsumexp(log_kernel + potentials, axis=1)
+        conditional = np.exp(log_kernel + potentials - log_normalizer[:, None])
+        plan = row_mass[:, None] * conditional
+        marginal = plan.sum(axis=0)
+        hessian = np.diag(marginal) - conditional.T @ plan
+        value = float(row_mass @ log_normalizer - column_mass @ potentials)
+        return value, (marginal - column_mass)[1:], hessian[1:, 1:]
+
+    free = np.zeros(column_mass.size - 1)
+    if free.size:
+        solution = minimize(
+            lambda point: negative_dual(point)[:2],
+            free,
+            jac=True,
+            hess=lambda point: negative_dual(point)[2],
+            method="trust-exact",
+            options={"gtol": _NEWTON_TOLERANCE},
+        )
+        # Near the maximum the dual is flat to rounding, so the solve may end
+        # on a predicted improvement that rounds to zero (status 2) before
+        # `gtol` is met; only the iteration limit (1) or a linear-algebra
+        # failure (3) leaves it short of the maximum.
+        if solution.status in (1, 3):
+            raise RuntimeError(f"entropic transport dual failed: {solution.message}")
+        free = solution.x
+    return -epsilon * negative_dual(free)[0]

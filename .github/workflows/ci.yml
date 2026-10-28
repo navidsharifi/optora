@@ -116,6 +116,10 @@ jobs:
     runs-on: ubuntu-latest
     env:
       BENCHMARK_MAX_REGRESSION: 50%
+      # Inside the checkout: pytest-benchmark crashes while reporting a
+      # machine_info change for storage outside the working directory
+      # (ionelmc/pytest-benchmark#217).
+      BENCHMARK_STORAGE: ${{ github.workspace }}/.benchmarks
     steps:
       - uses: actions/checkout@v6
         with:
@@ -126,6 +130,9 @@ jobs:
           cache: pip
       - run: python -m pip install -U pip
       - run: python -m pip install torch --index-url ${{ env.TORCH_INDEX_URL }}
+      # This commit's toolchain is installed first, so the base keeps every
+      # tool it already accepts and both commits are timed with the same one.
+      - run: python -m pip install -e ".[dev]"
       # The base runs its own suite, so a base without one is skipped.
       - name: Benchmark the base commit
         if: github.event_name == 'pull_request'
@@ -138,19 +145,19 @@ jobs:
           if [ -d tests/benchmarks ]; then
             python -m pip install -e ".[dev]"
             python -m pytest tests/benchmarks --benchmark-enable --benchmark-only \
-              --benchmark-storage="file://$RUNNER_TEMP/benchmarks" --benchmark-save=base
+              --benchmark-storage="file://$BENCHMARK_STORAGE" --benchmark-save=base
           fi
+      # Points the editable install back at this commit after the base run.
       - run: python -m pip install -e ".[dev]"
       - name: Benchmark this commit against the base
         shell: bash
         run: |
-          storage="$RUNNER_TEMP/benchmarks"
           compare=()
-          if compgen -G "$storage/*/*_base.json" > /dev/null; then
+          if compgen -G "$BENCHMARK_STORAGE/*/*_base.json" > /dev/null; then
             compare=(--benchmark-compare "--benchmark-compare-fail=min:$BENCHMARK_MAX_REGRESSION")
           fi
           python -m pytest tests/benchmarks --benchmark-enable --benchmark-only \
-            --benchmark-storage="file://$storage" "${compare[@]}"
+            --benchmark-storage="file://$BENCHMARK_STORAGE" "${compare[@]}"
 
   # Single required status check for branch protection, so the matrix above
   # can change without editing the protection rules.
