@@ -13,7 +13,9 @@ here about $P^0$, against independent references:
 - the closed-form saturation radius
   $\epsilon \sum_i \hat p_i \log(1/Q_i(A))$;
 - a gradient that is a distribution inside the ball, measured by the
-  independent Sinkhorn scaling of `EntropicTransportDivergence`.
+  Newton solve of `tests.dro.duality.entropic_transport_divergence`:
+  Sinkhorn scaling converges too slowly at large $C/\epsilon$ to resolve
+  the boundary of the ball.
 """
 
 import math
@@ -31,7 +33,12 @@ from optora.core.dro_base import AmbiguitySet, TiltedAmbiguitySet
 from optora.dro.kl_dro import KLAmbiguitySet
 from optora.dro.sinkhorn_dro import SinkhornAmbiguitySet
 from optora.dro.wasserstein_dro import WassersteinAmbiguitySet
-from tests.dro.duality import sinkhorn_dual, sinkhorn_dual_minimum, sinkhorn_kernel
+from tests.dro.duality import (
+    entropic_transport_divergence,
+    sinkhorn_dual,
+    sinkhorn_dual_minimum,
+    sinkhorn_kernel,
+)
 from tests.dro.instances import INSTANCES, Instance
 from tests.dro.strategies import instances, positive_radii, radii
 
@@ -267,7 +274,7 @@ def test_a_reference_restricts_where_the_worst_case_can_move_mass() -> None:
 def test_gradient_is_a_distribution_inside_the_ball_attaining_the_worst_case(
     instance: Instance, epsilon: float, radius: float
 ) -> None:
-    nominal, loss, _ = instance.tensors()
+    _, loss, _ = instance.tensors()
     ambiguity_set = build(instance, epsilon, radius)
     differentiable = loss.clone().requires_grad_(True)
 
@@ -281,7 +288,12 @@ def test_gradient_is_a_distribution_inside_the_ball_attaining_the_worst_case(
     assert float(candidate @ loss) == pytest.approx(
         float(value.detach()), abs=tolerance(instance)
     )
-    divergence = float(ambiguity_set.divergence(candidate, nominal))
+    divergence = entropic_transport_divergence(
+        candidate.numpy(),
+        instance.nominal_array,
+        numpy_kernel(instance, epsilon),
+        epsilon,
+    )
     assert divergence <= radius * (1.0 + 1e-6) + 1e-9
 
 

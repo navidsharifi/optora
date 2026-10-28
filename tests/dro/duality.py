@@ -32,7 +32,7 @@ from typing import Final
 
 import numpy as np
 from numpy.typing import NDArray
-from scipy.optimize import linprog, minimize_scalar
+from scipy.optimize import linprog, minimize, minimize_scalar
 from scipy.special import logsumexp
 
 Array = NDArray[np.float64]
@@ -49,6 +49,10 @@ _LP_OPTIONS: Final = {
     "primal_feasibility_tolerance": 1e-10,
     "dual_feasibility_tolerance": 1e-10,
 }
+
+# Gradient-norm tolerance of the Newton solve in
+# `entropic_transport_divergence`.
+_NEWTON_TOLERANCE: Final = 1e-12
 
 
 def _positive_support(nominal: Array, loss: Array) -> tuple[Array, Array]:
@@ -566,3 +570,72 @@ def transport_cost(candidate: Array, nominal: Array, cost: Array) -> float:
     if not solution.success:
         raise RuntimeError(f"transport LP failed: {solution.message}")
     return float(solution.fun)
+
+
+def entropic_transport_divergence(
+    candidate: Array, nominal: Array, kernel: Array, epsilon: float
+) -> float:
+    r"""Return the excess entropic transport cost of $q$ over $p$ via its dual.
+
+    The cost is $\epsilon \min_{\gamma \in \Gamma(p, q)}
+    \mathrm{KL}(\gamma \,\|\, \mathrm{diag}(p)\, Q)$, Wang, Gao and Xie's
+    Sinkhorn distance from $p$ to $q$ in excess of its minimum over $q$.
+    It equals $\epsilon$ times the maximum of the smooth concave dual
+
+    $$
+    \max_g \; \sum_j q_j g_j - \sum_i p_i \log \sum_j Q_{ij} e^{g_j}
+    $$
+
+    over potentials on the support of $q$, maximized here by a trust-region
+    Newton method with the exact Hessian. Unlike Sinkhorn scaling, which
+    slows down as $C/\epsilon$ grows, it reaches the maximum to rounding
+    error however sharp the kernel is. The first potential is pinned to
+    zero, since a common shift leaves the dual unchanged, and every dual
+    point bounds the divergence from below, so an inexact solve can only
+    understate it.
+
+    Args:
+        candidate: Candidate distribution of shape `(n,)`.
+        nominal: Nominal distribution of shape `(n,)`.
+        kernel: Row-stochastic kernel of shape `(n, n)` with positive
+            entries, so some coupling always meets both marginals.
+        epsilon: Positive entropic regularization strength.
+
+    Returns:
+        The divergence, zero at the kernel-smoothed nominal $p^\top Q$.
+
+    Raises:
+        RuntimeError: If the Newton solve stops short of the maximum.
+    """
+    row_mass = nominal[nominal > 0.0]
+    column_mass = candidate[candidate > 0.0]
+    log_kernel = np.log(kernel[np.ix_(nominal > 0.0, candidate > 0.0)])
+
+    def negative_dual(free: Array) -> tuple[float, Array, Array]:
+        potentials = np.concatenate([[0.0], free])
+        log_normalizer = logsumexp(log_kernel + potentials, axis=1)
+        conditional = np.exp(log_kernel + potentials - log_normalizer[:, None])
+        plan = row_mass[:, None] * conditional
+        marginal = plan.sum(axis=0)
+        hessian = np.diag(marginal) - conditional.T @ plan
+        value = float(row_mass @ log_normalizer - column_mass @ potentials)
+        return value, (marginal - column_mass)[1:], hessian[1:, 1:]
+
+    free = np.zeros(column_mass.size - 1)
+    if free.size:
+        solution = minimize(
+            lambda point: negative_dual(point)[:2],
+            free,
+            jac=True,
+            hess=lambda point: negative_dual(point)[2],
+            method="trust-exact",
+            options={"gtol": _NEWTON_TOLERANCE},
+        )
+        # Near the maximum the dual is flat to rounding, so the solve may end
+        # on a predicted improvement that rounds to zero (status 2) before
+        # `gtol` is met; only the iteration limit (1) or a linear-algebra
+        # failure (3) leaves it short of the maximum.
+        if solution.status in (1, 3):
+            raise RuntimeError(f"entropic transport dual failed: {solution.message}")
+        free = solution.x
+    return -epsilon * negative_dual(free)[0]
