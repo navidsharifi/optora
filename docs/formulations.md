@@ -268,7 +268,10 @@ temperature, so the same bracketed bisection as KL pins it exactly.
     smoothing of the nominal, not the nominal itself. The worst case can
     put mass anywhere $\nu$ does, including scenarios with no nominal
     mass. `EntropicTransportDivergence`, used by `contains`, vanishes at
-    $P^0$.
+    $P^0$. It maximizes its semi-dual by Sinkhorn scaling, then, where
+    Sinkhorn stalls at a sharp kernel (large $\max C/\epsilon$), by a
+    damped Newton method, and reports the dual value: a lower bound on the
+    divergence that is accurate to rounding once converged.
 
 With a zero cost every row is $\nu$ and the set is the KL ball of radius
 $\mathrm{radius}/\epsilon$ around $\nu$; as $\epsilon \to 0$ the worst case

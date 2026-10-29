@@ -6,9 +6,11 @@ from typing import Any
 
 import pytest
 import torch
+from torch.autograd import gradcheck
 
 from optora.core.divergence_base import Divergence
 from optora.divergences.entropic_transport import EntropicTransportDivergence
+from tests.dro.duality import entropic_transport_divergence
 
 POINTS = torch.tensor([0.0, 1.0, 2.0, 3.0], dtype=torch.float64)
 COST = torch.abs(POINTS.unsqueeze(-1) - POINTS.unsqueeze(-2))
@@ -82,17 +84,97 @@ def test_is_positive_away_from_the_centre_and_batches() -> None:
         )
 
 
-def test_converged_potentials_honour_the_sync_budget(
+def _near_centre(divergence: EntropicTransportDivergence) -> torch.Tensor:
+    # A candidate a small divergence from the centre, where the value is
+    # tiny and a partly converged solve is relatively furthest off.
+    return 0.999 * _smoothed(divergence, NOMINAL) + 0.001 * CANDIDATE
+
+
+@pytest.mark.parametrize("epsilon", [0.02, 0.05, 0.3])
+@pytest.mark.parametrize("near_centre", [False, True], ids=["far", "near_centre"])
+def test_matches_the_exact_dual_at_a_sharp_kernel(
+    epsilon: float, near_centre: bool
+) -> None:
+    # Issue #69: at max(C) / epsilon up to 150 Sinkhorn scaling stalls far
+    # from the maximum, which near the centre left the value ~100% low.
+    divergence = EntropicTransportDivergence(COST, epsilon=epsilon)
+    candidate = _near_centre(divergence) if near_centre else CANDIDATE
+    kernel = torch.exp(divergence.log_kernel(torch.float64))
+
+    value = divergence(candidate, NOMINAL)
+
+    expected = entropic_transport_divergence(
+        candidate.numpy(), NOMINAL.numpy(), kernel.numpy(), epsilon
+    )
+    assert float(value) == pytest.approx(expected, rel=1e-9)
+
+
+def test_a_candidate_with_mass_off_the_reference_support_is_infinite() -> None:
+    # No coupling is absolutely continuous with diag(q) Q when the candidate
+    # puts mass on a column the reference measure gives no weight.
+    reference = torch.tensor([1.0, 0.0, 1.0, 1.0], dtype=torch.float64)
+    divergence = EntropicTransportDivergence(COST, epsilon=0.5, reference=reference)
+    on_support = torch.tensor([0.3, 0.0, 0.3, 0.4], dtype=torch.float64)
+
+    values = divergence(torch.stack([CANDIDATE, on_support]), NOMINAL)
+
+    assert float(values[0]) == math.inf
+    assert math.isfinite(float(values[1]))
+
+
+@pytest.mark.parametrize("epsilon", [0.05, 0.5])
+def test_gradient_is_the_envelope_gradient_of_the_converged_dual(
+    epsilon: float,
+) -> None:
+    # The potentials are held fixed under autograd, which by the envelope
+    # theorem is the exact gradient once the solve has converged.
+    divergence = EntropicTransportDivergence(COST, epsilon=epsilon)
+    candidate = CANDIDATE.clone().requires_grad_(True)
+    nominal = NOMINAL.clone().requires_grad_(True)
+
+    assert gradcheck(divergence, (candidate, nominal), atol=1e-6)
+
+
+def test_sinkhorn_honours_its_sync_budget(
     host_sync_counter: Callable[[], Any],
 ) -> None:
+    # At epsilon = 0.02 Sinkhorn cannot converge in 40 iterations, so it
+    # reads the flag at each of the 4 checkpoints.
     divergence = EntropicTransportDivergence(
-        COST, epsilon=0.5, max_iter=40, tol=1e-300, check_interval=10
+        COST, epsilon=0.02, max_iter=40, newton_max_iter=0, check_interval=10
     )
 
     with host_sync_counter() as syncs:
         divergence(CANDIDATE, NOMINAL)
 
     assert len(syncs) == 4
+
+
+def test_newton_reads_the_flag_once_per_iteration(
+    host_sync_counter: Callable[[], Any],
+) -> None:
+    divergence = EntropicTransportDivergence(
+        COST, epsilon=0.02, max_iter=40, newton_max_iter=3, check_interval=10
+    )
+
+    with host_sync_counter() as syncs:
+        divergence(CANDIDATE, NOMINAL)
+
+    assert len(syncs) == 4 + 3
+
+
+@pytest.mark.parametrize("dtype", [torch.float32, torch.float64])
+def test_a_converged_sinkhorn_stops_early_and_skips_newton(
+    dtype: torch.dtype, host_sync_counter: Callable[[], Any]
+) -> None:
+    # The default tol of 1e-9 is below float32's rounding floor of the
+    # marginal violation; flooring it at n * eps lets float32 stop too.
+    divergence = EntropicTransportDivergence(COST.to(dtype), epsilon=1.0)
+
+    with host_sync_counter() as syncs:
+        divergence(CANDIDATE.to(dtype), NOMINAL.to(dtype))
+
+    assert len(syncs) < divergence.max_iter // divergence.check_interval
 
 
 @pytest.mark.parametrize(
@@ -103,6 +185,7 @@ def test_converged_potentials_honour_the_sync_budget(
         ({"epsilon": 1.0, "tol": 0.0}, "tol must be positive"),
         ({"epsilon": 1.0, "eps": -1.0}, "eps must be positive"),
         ({"epsilon": 1.0, "max_iter": 0}, "max_iter must be positive"),
+        ({"epsilon": 1.0, "newton_max_iter": -1}, "newton_max_iter must be"),
         ({"epsilon": 1.0, "reference": torch.ones(3)}, "reference must have shape"),
     ],
 )
