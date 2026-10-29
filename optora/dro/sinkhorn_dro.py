@@ -194,6 +194,70 @@ class SinkhornAmbiguitySet(TiltedAmbiguitySet):
             The mixture distribution, of shape `batch_shape + (n,)`, and the
             budget it spends, of shape `batch_shape`.
         """
+        rows, row_divergence = self._tilted_rows(gap, tilt)
+        nominal = self._constant_nominal.to(gap.dtype)
+        weighted = torch.where(nominal > 0.0, nominal * row_divergence, 0.0)
+        budget = self.epsilon * torch.sum(weighted, dim=-1)
+        distribution = torch.sum(nominal.unsqueeze(-1) * rows, dim=-2)
+        return distribution, budget
+
+    def _standardized_sensitivities(
+        self,
+        gap: torch.Tensor,
+        tilt: torch.Tensor,
+        distribution: torch.Tensor,
+        divergence: torch.Tensor,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        r"""Return the envelope derivatives of the row-wise tilt.
+
+        The radius constraint
+        $\epsilon \sum_i \hat p_i \mathrm{KL}(\gamma_i \,\|\, Q_i) \le
+        \rho$ has the multiplier $\lambda^\star = 1 / (\epsilon \beta)$, and
+        the Lagrangian is linear in $\hat p$, so the derivative with respect
+        to $\hat p_i$ is row $i$'s own contribution,
+        $\mathbb{E}_{\gamma_i}[-\mathrm{gap}] - \lambda^\star \epsilon\,
+        \mathrm{KL}(\gamma_i \,\|\, Q_i)$, centered on its nominal mean.
+
+        Args:
+            gap: Standardized shortfall of every scenario, of shape
+                `(..., n)`.
+            tilt: Solved tilt of shape `batch_shape`.
+            distribution: Maximizer at `tilt`.
+            divergence: Budget spent at `tilt`.
+
+        Returns:
+            The derivative with respect to `nominal` and the multiplier
+            $\lambda^\star$, infinite at a zero tilt.
+        """
+        # Unreachable columns carry no mass whatever their gap, and an
+        # extreme gap there would meet their infinite log-kernel as inf - inf.
+        gap = torch.where(self._reachable, gap, 1.0)
+        rows, row_divergence = self._tilted_rows(gap, tilt)
+        rate = self._tilt_rate(tilt)
+        row_gap = torch.sum(rows * gap.unsqueeze(-2), dim=-1)
+        mean_gap = torch.sum(distribution * gap, dim=-1, keepdim=True)
+        excess_divergence = row_divergence - (divergence / self.epsilon).unsqueeze(-1)
+        positive = rate > 0.0
+        divergence_term = torch.where(
+            positive, excess_divergence / torch.where(positive, rate, 1.0), 0.0
+        )
+        multiplier = torch.reciprocal(self.epsilon * rate.squeeze(-1))
+        return mean_gap - row_gap - divergence_term, multiplier
+
+    def _tilted_rows(
+        self, gap: torch.Tensor, tilt: torch.Tensor
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """Tilt every kernel row at one rate.
+
+        Args:
+            gap: Standardized shortfall below the maximum reachable loss, of
+                shape `(..., n)`.
+            tilt: Path parameter in $[0, 1)$ of shape `batch_shape`.
+
+        Returns:
+            The tilted rows, of shape `batch_shape + (n, n)`, and each row's
+            KL divergence from its kernel row, of shape `batch_shape + (n,)`.
+        """
         log_kernel = self._kernel(gap.dtype)
         rate = self._tilt_rate(tilt).unsqueeze(-1)
         column_gap = gap.unsqueeze(-2)
@@ -211,9 +275,4 @@ class SinkhornAmbiguitySet(TiltedAmbiguitySet):
             largest_exponent.squeeze(-1) > exponent_limit
         )
         row_divergence = torch.clamp(torch.where(use_far, far, near), min=0.0)
-
-        nominal = self.nominal.to(gap.dtype)
-        weighted = torch.where(nominal > 0.0, nominal * row_divergence, 0.0)
-        budget = self.epsilon * torch.sum(weighted, dim=-1)
-        distribution = torch.sum(nominal.unsqueeze(-1) * rows, dim=-2)
-        return distribution, budget
+        return rows, row_divergence

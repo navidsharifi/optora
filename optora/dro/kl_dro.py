@@ -131,7 +131,9 @@ class KLAmbiguitySet(TiltedAmbiguitySet):
             validate=validate,
         )
         self.eps = eps
-        self.register_buffer("log_nominal", _log_on_support(nominal), persistent=False)
+        self.register_buffer(
+            "log_nominal", _log_on_support(nominal.detach()), persistent=False
+        )
 
     def _tilted_distribution(
         self, gap: torch.Tensor, tilt: torch.Tensor
@@ -187,7 +189,7 @@ class KLAmbiguitySet(TiltedAmbiguitySet):
         """
         log_nominal = self.log_nominal
         if log_nominal.dtype != gap.dtype:
-            log_nominal = _log_on_support(self.nominal.to(gap.dtype))
+            log_nominal = _log_on_support(self._constant_nominal.to(gap.dtype))
         rate = self._tilt_rate(tilt)
         log_weight = log_nominal - rate * gap
         log_normalizer = torch.logsumexp(log_weight, dim=-1, keepdim=True)
@@ -198,7 +200,7 @@ class KLAmbiguitySet(TiltedAmbiguitySet):
         # Both clamps only touch the regime where `near` is discarded; they
         # keep that branch and its derivative finite.
         centered = torch.clamp(largest_exponent - rate * gap, max=exponent_limit)
-        excess = torch.sum(self.nominal * torch.expm1(centered), dim=-1)
+        excess = torch.sum(self._constant_nominal * torch.expm1(centered), dim=-1)
         near = -torch.log1p(torch.clamp(excess, min=_NEAR_EXCESS_FLOOR))
         far = -(largest_exponent + log_normalizer).squeeze(-1)
         use_far = (far > _LARGE_DIVERGENCE) | (
@@ -206,3 +208,44 @@ class KLAmbiguitySet(TiltedAmbiguitySet):
         )
         divergence = torch.where(use_far, far, near)
         return distribution, torch.clamp(divergence, min=0.0)
+
+    def _standardized_sensitivities(
+        self,
+        gap: torch.Tensor,
+        tilt: torch.Tensor,
+        distribution: torch.Tensor,
+        divergence: torch.Tensor,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        r"""Return the envelope derivatives of the Gibbs tilt.
+
+        The multiplier of the radius constraint is the temperature
+        $\eta^\star = 1 / \beta$, and the derivative with respect to
+        $\mathrm{nominal}_i$ is $\eta^\star (r_i - 1)$ for the likelihood
+        ratio $r_i = q^\star_i / \mathrm{nominal}_i$. The ratio is read off
+        the tilt as $\log r_i = \beta (\mathbb{E}_{q^\star}[\mathrm{gap}]
+        - \mathrm{gap}_i) + D$, which also covers scenarios with zero
+        nominal mass, and $(r_i - 1) / \beta$ is evaluated through `expm1`
+        so a vanishing rate keeps its limit,
+        $\mathbb{E}_{\mathrm{nominal}}[\mathrm{gap}] - \mathrm{gap}_i$.
+
+        Args:
+            gap: Standardized shortfall of every scenario, of shape
+                `(..., n)`.
+            tilt: Solved tilt of shape `batch_shape`.
+            distribution: Maximizer at `tilt`.
+            divergence: KL divergence of `distribution` from `nominal`.
+
+        Returns:
+            The derivative with respect to `nominal` and the multiplier
+            $\eta^\star$, infinite at a zero tilt.
+        """
+        rate = self._tilt_rate(tilt)
+        mean_gap = torch.sum(distribution * gap, dim=-1, keepdim=True)
+        log_ratio = rate * (mean_gap - gap) + divergence.unsqueeze(-1)
+        positive = rate > 0.0
+        nominal_gradient = torch.where(
+            positive,
+            torch.expm1(log_ratio) / torch.where(positive, rate, 1.0),
+            mean_gap - gap,
+        )
+        return nominal_gradient, torch.reciprocal(rate.squeeze(-1))

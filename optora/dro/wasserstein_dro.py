@@ -34,6 +34,21 @@ def _bisection_steps(dtype: torch.dtype) -> int:
     return math.ceil(-math.log2(torch.finfo(dtype).eps)) + _BISECTION_HEADROOM
 
 
+def _selected(values: torch.Tensor, columns: torch.Tensor) -> torch.Tensor:
+    """Return `values[..., i, columns_i]` for every row `i`.
+
+    Args:
+        values: Tensor broadcastable to `batch_shape + (n, n)`, either the
+            ground cost or `loss.unsqueeze(-2)`.
+        columns: Destination column per row, of shape `batch_shape + (n, 1)`.
+
+    Returns:
+        The selected entries, of shape `batch_shape + (n,)`.
+    """
+    expanded = values.expand(columns.shape[:-1] + values.shape[-1:])
+    return torch.gather(expanded, -1, columns).squeeze(-1)
+
+
 class WassersteinAmbiguitySet(AmbiguitySet):
     r"""Wasserstein-distance-constrained ambiguity set for Wasserstein-DRO.
 
@@ -306,9 +321,52 @@ class WassersteinAmbiguitySet(AmbiguitySet):
             and the expected loss under the distribution it induces when
             `values` is the loss.
         """
-        expanded = values.expand(columns.shape[:-1] + values.shape[-1:])
-        selected = torch.gather(expanded, -1, columns).squeeze(-1)
-        return torch.sum(self.nominal * selected, dim=-1)
+        return torch.sum(self._constant_nominal * _selected(values, columns), dim=-1)
+
+    def _parameter_sensitivities(
+        self,
+        loss: torch.Tensor,
+        gamma: torch.Tensor,
+        weight: torch.Tensor,
+        eager: torch.Tensor,
+        thrifty: torch.Tensor,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        r"""Return the envelope derivatives with respect to nominal and radius.
+
+        The dual $\min_{\gamma \ge 0} \gamma \rho + \sum_i p_i \max_j
+        (\ell_j - \gamma c_{ij})$ is linear in $\rho$ and in $p$, so at its
+        minimizer $\gamma^\star$ the radius derivative is $\gamma^\star$
+        and the derivative with respect to $p_i$ is the $c$-transform
+        $\max_j (\ell_j - \gamma^\star c_{ij})$, read off the plans' own
+        destination columns. It is shifted along the all-ones direction,
+        where it is not defined, by $\gamma^\star$ times the transport cost
+        spent, so that $\sum_i p_i \, \partial V / \partial p_i = V$.
+
+        Args:
+            loss: Detached working-precision loss of shape `(..., n)`.
+            gamma: Dual multiplier of shape `batch_shape`, the midpoint of
+                the bracket around $\gamma^\star$.
+            weight: Weight of the eager plan in the worst-case mixture.
+            eager: Destination columns of the eager plan.
+            thrifty: Destination columns of the thrifty plan.
+
+        Returns:
+            The derivatives with respect to `nominal`, of shape
+            `batch_shape + (n,)`, and `radius`, of shape `batch_shape`.
+        """
+        cost = self.cost.to(loss.dtype)
+        losses = loss.unsqueeze(-2)
+        multiplier = gamma.unsqueeze(-1)
+        eager_surplus = _selected(losses, eager) - multiplier * _selected(cost, eager)
+        thrifty_surplus = _selected(losses, thrifty) - multiplier * _selected(
+            cost, thrifty
+        )
+        mix = weight.unsqueeze(-1)
+        surplus = mix * eager_surplus + (1.0 - mix) * thrifty_surplus
+        spent = weight * self._transported(cost, eager) + (
+            1.0 - weight
+        ) * self._transported(cost, thrifty)
+        return surplus + (gamma * spent).unsqueeze(-1), gamma
 
     def _dual_derivative(self, loss: torch.Tensor, gamma: torch.Tensor) -> torch.Tensor:
         """Evaluate a subderivative of the dual objective at a multiplier.
@@ -442,4 +500,10 @@ class WassersteinAmbiguitySet(AmbiguitySet):
         # The plans select columns by comparison, which silently skips a nan
         # or infinite loss, so a non-finite input is propagated explicitly.
         finite = torch.all(torch.isfinite(detached), dim=-1)
-        return self._as_result(torch.where(finite, value, torch.nan), loss)
+        result = self._attach_parameter_gradients(
+            torch.where(finite, value, torch.nan),
+            lambda: self._parameter_sensitivities(
+                detached, 0.5 * (lower + upper), weight, eager, thrifty
+            ),
+        )
+        return self._as_result(result, loss)

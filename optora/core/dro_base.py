@@ -177,6 +177,11 @@ class AmbiguitySet(nn.Module, ABC):
       radius) always run. Checks that read tensor values back to the host
       run only with `validate=True`, in the spirit of
       `torch.distributions`' `validate_args`.
+    - **Gradients.** The worst case is differentiable in `loss` by
+      Danskin's theorem, and to first order in `nominal` and a tensor
+      `radius` by the envelope theorem (`_attach_parameter_gradients`);
+      only the derivative along directions that keep `nominal` summing to
+      one is defined.
 
     Attributes:
         nominal: Reference distribution the ambiguity set is centered on, a
@@ -345,6 +350,66 @@ class AmbiguitySet(nn.Module, ABC):
         """
         return torch.sum(self.nominal * loss, dim=-1).expand(batch_shape)
 
+    @property
+    def _constant_nominal(self) -> torch.Tensor:
+        """`nominal` cut from the autograd graph, for inner solves.
+
+        A subclass whose worst case is not an explicit function of `nominal`
+        reads it through this property while solving, so that its only
+        gradient path to `nominal` is the one `_attach_parameter_gradients`
+        installs.
+        """
+        return self.nominal.detach()
+
+    @property
+    def _radius_parameter(self) -> torch.Tensor | None:
+        """The tensor the radius derivative is taken with respect to, if any.
+
+        A tensor `radius` by default, `None` for a float. A subclass whose
+        radius is derived from another parameter overrides this.
+        """
+        return self.radius if isinstance(self.radius, torch.Tensor) else None
+
+    def _attach_parameter_gradients(
+        self,
+        value: torch.Tensor,
+        sensitivities: Callable[[], tuple[torch.Tensor, torch.Tensor]],
+    ) -> torch.Tensor:
+        r"""Make a worst-case value differentiable in `nominal` and `radius`.
+
+        By the envelope theorem, the derivative of
+        $V(\ell, p, \rho) = \sup \{\langle q, \ell \rangle : D(q \,\|\, p)
+        \le \rho\}$ with respect to the radius is the optimal Lagrange
+        multiplier $\lambda^\star$ of the divergence constraint, and with
+        respect to the nominal it is the partial derivative of the
+        Lagrangian at the optimum. Subclasses that compute these in closed
+        form from their own solve pass them in through `sensitivities`,
+        which is only called when `nominal` or `_radius_parameter` requires
+        grad, so an ordinary training step pays nothing.
+
+        Args:
+            value: Worst-case expectation of shape `batch_shape`, in working
+                precision.
+            sensitivities: Callable returning the derivative with respect
+                to `nominal`, of shape `batch_shape + (n,)`, and with
+                respect to `_radius_parameter`, of shape `batch_shape`.
+
+        Returns:
+            `value`, unchanged, whose backward pass additionally routes the
+            cotangent to `nominal` and to `_radius_parameter`.
+        """
+        radius = self._radius_parameter
+        needs_gradient = self.nominal.requires_grad or (
+            radius is not None and radius.requires_grad
+        )
+        if not (needs_gradient and torch.is_grad_enabled()):
+            return value
+        nominal_gradient, radius_gradient = sensitivities()
+        result: torch.Tensor = _ParameterSensitivity.apply(
+            value, self.nominal, radius, nominal_gradient, radius_gradient
+        )
+        return result
+
     def contains(self, candidate: torch.Tensor) -> torch.Tensor:
         """Check whether a candidate distribution lies inside the ambiguity set.
 
@@ -380,6 +445,70 @@ class AmbiguitySet(nn.Module, ABC):
             the ambiguity set. An unbatched `(n,)` loss gives a scalar.
         """
         raise NotImplementedError
+
+
+class _ParameterSensitivity(torch.autograd.Function):
+    """Identity on a worst-case value that carries its parameter derivatives.
+
+    The forward pass returns the value unchanged, so attaching the
+    derivatives never perturbs it. The backward pass passes the cotangent
+    through to the value and routes it, scaled by the precomputed
+    sensitivities, to `nominal` and to the tensor the radius is set by. The
+    sensitivities are detached constants, so second derivatives with
+    respect to either are not available.
+    """
+
+    generate_vmap_rule = True
+
+    @staticmethod
+    def forward(
+        value: torch.Tensor,
+        nominal: torch.Tensor,
+        radius: torch.Tensor | None,
+        nominal_gradient: torch.Tensor,
+        radius_gradient: torch.Tensor,
+    ) -> torch.Tensor:
+        """Return a copy of `value`.
+
+        Args:
+            value: Worst-case expectation of shape `batch_shape`.
+            nominal: The ambiguity set's nominal distribution.
+            radius: The ambiguity set's `_radius_parameter`, or `None`.
+            nominal_gradient: Derivative of `value` with respect to
+                `nominal`, of shape `batch_shape + (n,)`.
+            radius_gradient: Derivative of `value` with respect to
+                `radius`, of shape `batch_shape`.
+
+        Returns:
+            `value`.
+        """
+        return value.clone()
+
+    @staticmethod
+    def setup_context(ctx: Any, inputs: tuple[Any, ...], output: Any) -> None:
+        """Save the sensitivities and the parameters' shapes and dtypes."""
+        _, nominal, radius, nominal_gradient, radius_gradient = inputs
+        ctx.save_for_backward(nominal_gradient, radius_gradient)
+        ctx.nominal_meta = (nominal.shape, nominal.dtype)
+        ctx.radius_meta = None if radius is None else (radius.shape, radius.dtype)
+
+    @staticmethod
+    def backward(
+        ctx: Any, grad_output: torch.Tensor
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor | None, None, None]:
+        """Scale the cotangent by each sensitivity and reduce to each shape."""
+        nominal_gradient, radius_gradient = ctx.saved_tensors
+        shape, dtype = ctx.nominal_meta
+        grad_nominal = (grad_output.unsqueeze(-1) * nominal_gradient).sum_to_size(shape)
+        grad_radius = None
+        if ctx.radius_meta is not None:
+            radius_shape, radius_dtype = ctx.radius_meta
+            grad_radius = (
+                (grad_output * radius_gradient)
+                .sum_to_size(radius_shape)
+                .to(radius_dtype)
+            )
+        return grad_output, grad_nominal.to(dtype), grad_radius, None, None
 
 
 class _MaximizerExpectation(torch.autograd.Function):
@@ -543,6 +672,12 @@ class TiltedAmbiguitySet(AmbiguitySet):
     maximizer that splits the tied mass in proportion to `nominal`, a
     subgradient of the convex worst case.
 
+    The tilt path is solved on a detached `nominal`, and the first
+    derivatives with respect to `nominal` and a tensor `radius` are
+    attached afterwards by the envelope theorem, from the multiplier
+    $\lambda^\star$ that each subclass reads off its solved tilt in closed
+    form (`_standardized_sensitivities`).
+
     Attributes:
         nominal: Reference distribution the ambiguity set is centered on.
         divergence: Divergence used to measure distance from `nominal`.
@@ -578,6 +713,88 @@ class TiltedAmbiguitySet(AmbiguitySet):
             divergence from `nominal`, of shape `batch_shape`.
         """
         raise NotImplementedError
+
+    def _standardized_sensitivities(
+        self,
+        gap: torch.Tensor,
+        tilt: torch.Tensor,
+        distribution: torch.Tensor,
+        divergence: torch.Tensor,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        r"""Return the parameter derivatives of the worst case of `-gap`.
+
+        On the standardized loss $-\mathrm{gap}$, the derivative with
+        respect to `radius` is the multiplier $\lambda^\star$ of the radius
+        constraint. Only the part of the derivative with respect to
+        `nominal` along directions that keep it summing to one is defined;
+        it is returned as the representative $g$ with
+        $\sum_i \mathrm{nominal}_i \, g_i = 0$, which stays finite as the
+        radius vanishes, where $\lambda^\star$ grows without bound.
+
+        Args:
+            gap: Standardized shortfall below the maximum reachable loss, of
+                shape `(..., n)`, taken from the loss itself on every
+                scenario, including unreachable ones.
+            tilt: Solved tilt of shape `batch_shape`.
+            distribution: Maximizer at `tilt`, of shape
+                `batch_shape + (n,)`.
+            divergence: Divergence of `distribution`, of shape
+                `batch_shape`.
+
+        Returns:
+            The derivative $g$ with respect to `nominal`, of shape
+            `batch_shape + (n,)`, and $\lambda^\star$, of shape
+            `batch_shape`.
+
+        Raises:
+            NotImplementedError: Unless a subclass implements it, so that a
+                formulation without parameter derivatives fails loudly
+                instead of returning none.
+        """
+        raise NotImplementedError(
+            f"{type(self).__name__} does not implement gradients with respect "
+            "to nominal or radius."
+        )
+
+    def _parameter_sensitivities(
+        self,
+        loss: torch.Tensor,
+        value: torch.Tensor,
+        max_loss: torch.Tensor,
+        scale: torch.Tensor,
+        tilt: torch.Tensor,
+        distribution: torch.Tensor,
+        divergence: torch.Tensor,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        r"""Return the parameter derivatives of the worst case in loss units.
+
+        The worst case is $\max \ell - s \, V(-\mathrm{gap})$ for the
+        spread $s$, so the radius derivative is $s \lambda^\star$, and the
+        nominal derivative is $s g$ shifted by the worst case itself. The
+        shift lies along the all-ones direction, where the derivative is
+        not defined, and makes $\sum_i \mathrm{nominal}_i \, \partial V /
+        \partial \mathrm{nominal}_i = V$, matching the derivative $\ell$ of
+        the zero-radius worst case $\langle \mathrm{nominal}, \ell \rangle$.
+
+        Args:
+            loss: Detached working-precision loss of shape `(..., n)`.
+            value: Detached worst case of shape `batch_shape`.
+            max_loss: Maximum reachable loss, with a trailing singleton
+                dimension.
+            scale: Positive loss spread, shaped like `max_loss`.
+            tilt: Solved tilt of shape `batch_shape`.
+            distribution: Maximizer of shape `batch_shape + (n,)`.
+            divergence: Divergence of `distribution`, of shape
+                `batch_shape`.
+
+        Returns:
+            The derivatives with respect to `nominal`, of shape
+            `batch_shape + (n,)`, and `radius`, of shape `batch_shape`.
+        """
+        gap, multiplier = self._standardized_sensitivities(
+            (max_loss - loss) / scale, tilt, distribution, divergence
+        )
+        return value.unsqueeze(-1) + scale * gap, scale.squeeze(-1) * multiplier
 
     @property
     def _reachable(self) -> torch.Tensor:
@@ -704,11 +921,24 @@ class TiltedAmbiguitySet(AmbiguitySet):
         scale = torch.where(spread > 0, spread, torch.ones_like(spread))
         gap = torch.where(on_support, (max_loss - detached) / scale, 1.0)
         tilt = self._solve_tilt(gap, batch_shape)
-        distribution, _ = self._tilted_distribution(gap, tilt)
+        distribution, divergence = self._tilted_distribution(gap, tilt)
         value: torch.Tensor = _MaximizerExpectation.apply(
             working, distribution, max_loss, scale, tilt, self._implicit_maximizer
         )
-        return self._as_result(value.expand(batch_shape), loss)
+        expectation = value.expand(batch_shape)
+        result = self._attach_parameter_gradients(
+            expectation,
+            lambda: self._parameter_sensitivities(
+                detached,
+                expectation.detach(),
+                max_loss,
+                scale,
+                tilt,
+                distribution,
+                divergence,
+            ),
+        )
+        return self._as_result(result, loss)
 
     def _implicit_maximizer(
         self,

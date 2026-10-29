@@ -159,6 +159,55 @@ every device:
 finite differences, alongside `gradcheck` and `gradgradcheck` in float64 at
 smooth points.
 
+## Gradients with respect to `nominal` and `radius`
+
+`nominal` and a tensor `radius` (or a tensor `alpha` for
+`CVaRAmbiguitySet`) are differentiable too, for example to learn a
+reweighting of the training data through `nominal = torch.softmax(logits,
+dim=-1)` or to tune the radius. The inner solve again stays out of the
+graph: by the envelope theorem, the derivatives are read off the
+Lagrangian
+
+$$
+L(q, \lambda; \ell, p, \rho) = \langle q, \ell \rangle
+    - \lambda \big( D(q \,\|\, p) - \rho \big)
+$$
+
+at the saddle point $(q^\star, \lambda^\star)$ the set already solved for:
+
+$$
+\frac{\partial V}{\partial \rho} = \lambda^\star \ge 0,
+\qquad
+\frac{\partial V}{\partial p} = \frac{\partial L}{\partial p}
+    \Big|_{(q^\star, \lambda^\star)}.
+$$
+
+The multiplier $\lambda^\star$ is the marginal value of robustness: how
+much the worst case rises per unit of radius. It falls as the radius
+grows and vanishes once the radius saturates the set. For KL, chi-square
+and Sinkhorn it is unbounded as the radius vanishes, where the worst case
+grows like $\sqrt{\rho}$.
+
+!!! note "Only directions that keep `nominal` a distribution are defined"
+
+    The worst case is defined for distributions only, so its derivative
+    with respect to `nominal` is defined only along directions $d$ with
+    $\sum_i d_i = 0$. The component along the all-ones direction is
+    implementation-defined; a softmax or any other map onto the simplex
+    discards it.
+
+The worst case is concave in $p$ and in $\rho$ (for CVaR, in the
+likelihood-ratio bound $1/\alpha$ rather than in $\rho$), so at a kink,
+such as a total
+variation radius that drains a scenario exactly, the returned derivative is
+a supergradient: one of the one-sided derivatives. Derivatives with respect
+to `nominal` and `radius` are first order: second derivatives that involve
+them are not supported. `PhiAmbiguitySet` gets
+the same derivatives from its dual objective, so, like its loss gradient,
+they are exact once its inner dual solve has converged.
+`tests/dro/test_parameter_gradients.py` checks every set against `gradcheck`
+and against finite differences of independent NumPy duals.
+
 ## Minibatches from a population
 
 The pattern above treats `nominal` as the whole training distribution. When
@@ -255,7 +304,7 @@ the exact full-batch optimum.
 | Batched losses | Pass a batched loss of shape `(..., n)`; the inner problems decouple across leading dimensions and are bisected jointly in one call. For minibatches drawn from a population, see [Minibatches from a population](#minibatches-from-a-population). |
 | Device and dtype | `ambiguity_set.to(device)` moves `nominal` and every cached buffer; the returned value follows the loss's dtype and device. Half-precision losses (including under `torch.autocast`) are solved in float32 and rounded once; see [Numerical behaviour](numerics.md). |
 | Debugging | `validate=True` checks `nominal`, a tensor `radius`, and every `loss` for non-finite or invalid values, at one host synchronization per call. |
-| Differentiable inputs | Only `loss`. Treat `nominal` and a tensor `radius` as constants: gradients with respect to them are not supported and are not meaningful. |
+| Differentiable inputs | `loss`, `nominal`, and a tensor `radius` (`alpha` for CVaR); see [Gradients with respect to `nominal` and `radius`](#gradients-with-respect-to-nominal-and-radius). The extra derivatives are computed only when `nominal` or the radius requires grad. |
 | Choosing the radius | `optora.dro.kl_radius`, `chi_square_radius`, `phi_divergence_radius` and `wasserstein_radius` turn a confidence level and a sample size into a radius under which the robust value is an asymptotically exact upper confidence bound on the true risk; see [Calibrating the ambiguity radius](examples/calibrated_ambiguity_radius.md). |
 | Zero radius | `radius=0.0` makes the objective exactly the nominal-weighted empirical risk, which is the natural non-robust baseline to compare against. For `WassersteinAmbiguitySet` this needs a metric `cost` (`cost[i, j] > 0` for `i != j`); a zero-cost pair of distinct support points still lets mass move between them at zero radius. |
 
