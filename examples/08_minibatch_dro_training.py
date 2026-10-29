@@ -77,6 +77,7 @@ from optora.dro import (
     KLAmbiguitySet,
     MultilevelMonteCarloEstimator,
     StochasticPhiDual,
+    kl_conjugate,
     kl_radius,
 )
 
@@ -235,7 +236,7 @@ def estimator_bias(
     )
 
     dual = StochasticPhiDual(
-        radii.squeeze(-1), torch.expm1, initial_lam=float(loss.mean())
+        radii.squeeze(-1), kl_conjugate, initial_lam=float(loss.mean())
     )
     minimize(list(dual.parameters()), lambda: dual(loss).sum())
     batch = draw(DUAL_BATCH)
@@ -263,7 +264,7 @@ def pilot_dual_point(pilot_loss: torch.Tensor) -> tuple[float, float]:
     """
     dual = StochasticPhiDual(
         torch.tensor(TRAIN_RADIUS, dtype=torch.float64),
-        torch.expm1,
+        kl_conjugate,
         initial_lam=float(pilot_loss.mean()),
     )
     minimize(list(dual.parameters()), lambda: dual(pilot_loss))
@@ -303,7 +304,7 @@ def train(
     if method == "stochastic dual":
         dual = StochasticPhiDual(
             torch.full((NUM_SEEDS,), TRAIN_RADIUS),
-            torch.expm1,
+            kl_conjugate,
             initial_log_eta=dual_start[0],
             initial_lam=dual_start[1],
         )

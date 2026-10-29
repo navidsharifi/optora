@@ -26,6 +26,7 @@ from optora.dro.phi_dro import (
     TotalVariationAmbiguitySet,
     chi_square_conjugate,
     cvar_conjugate,
+    kl_conjugate,
 )
 
 DTYPE = torch.float64
@@ -42,7 +43,7 @@ FACTORIES: dict[str, AmbiguitySetFactory] = {
 }
 
 EXACT_PHI_SETS: dict[str, tuple[Conjugate, Callable[..., AmbiguitySet]]] = {
-    "kl": (torch.expm1, KLAmbiguitySet),
+    "kl": (kl_conjugate, KLAmbiguitySet),
     "chi_square": (chi_square_conjugate, ChiSquareAmbiguitySet),
 }
 
@@ -556,6 +557,33 @@ class TestStochasticPhiDual:
 
         expected = torch.tensor([[0.0, 1.0, 4.0], [0.0, 2.0, 8.0]], dtype=DTYPE)
         assert torch.equal(result, expected)
+
+    @pytest.mark.parametrize("spike", [100.0, 1e4])
+    def test_kl_conjugate_survives_a_loss_spike_that_overflows_expm1(
+        self, spike: float
+    ) -> None:
+        loss = torch.full((8,), spike)
+
+        def train(conjugate: Conjugate) -> tuple[StochasticPhiDual, list[float]]:
+            dual = StochasticPhiDual(0.1, conjugate)
+            optimizer = torch.optim.Adam(dual.parameters(), lr=0.5)
+            values = []
+            for _ in range(100):
+                optimizer.zero_grad()
+                value = dual(loss)
+                value.backward()
+                optimizer.step()
+                values.append(float(value))
+            return dual, values
+
+        overflowing, _ = train(torch.expm1)
+        dual, values = train(kl_conjugate)
+
+        assert torch.isnan(overflowing.lam)
+        assert all(math.isfinite(value) for value in values)
+        assert values[-1] < 1e-6 * values[0]
+        assert torch.isfinite(dual.lam) and float(dual.lam) > 1.0
+        assert torch.isfinite(dual.log_eta) and float(dual.log_eta) > 1.0
 
     def test_forward_and_backward_never_synchronize(
         self, host_sync_counter: Callable[[], Any]

@@ -24,6 +24,55 @@ from optora.divergences.f_divergence import (
 from optora.divergences.max_divergence import MaxDivergence
 
 
+def kl_conjugate(scaled_shift: torch.Tensor) -> torch.Tensor:
+    r"""Overflow-free convex conjugate of the KL generator $\phi(t) = t \log t - t + 1$.
+
+    The exact conjugate $\phi^*(s) = e^s - 1$ overflows once $s$ passes
+    $\log$ of the dtype's largest value (about 88.7 in float32), as it does
+    in `optora.dro.minibatch.StochasticPhiDual` when $\lambda$ lags a loss
+    spike, and the resulting `inf` turns every gradient into `nan`. This
+    returns instead the conjugate of the generator restricted to likelihood
+    ratios $t \le T = e^c$, with $c$ a quarter of the dtype's logarithmic
+    range (about 22.2 in float32, 177.4 in float64):
+
+    $$
+    \sup_{0 \le t \le T} \big(s\,t - \phi(t)\big) =
+    \begin{cases}
+        e^s - 1, & s \le c, \\
+        e^c (1 + s - c) - 1, & s > c,
+    \end{cases}
+    $$
+
+    the exact conjugate continued along its tangent at $c$. It is convex
+    and continuously differentiable, and its slope never exceeds $T$, so
+    the dual objective, its gradients, and their squares (as accumulated by
+    Adam and RMSprop) stay finite for any loss spike up to about $T$ times
+    $\eta$; at half the range the squared gradient of $\log \eta$ would
+    already overflow float32. The dual it defines is the exact dual of the
+    KL ball intersected with the likelihood-ratio bound
+    $q / \mathrm{nominal} \le T$, so it equals the KL dual whenever the
+    worst-case likelihood ratio $e^s$ stays below $T$ (about $4 \times
+    10^9$ in float32). Since a ratio $r$ on an event of nominal probability
+    $p$ puts mass $r p \le 1$ on it, the bound can only bind where the
+    worst case loads events of nominal probability below $1 / T$. Pass it
+    as
+    `phi_conjugate` to `PhiAmbiguitySet` or
+    `optora.dro.minibatch.StochasticPhiDual` for the KL ball.
+
+    Args:
+        scaled_shift: Elementwise dual argument
+            $s = (\mathrm{loss} - \lambda) / \eta$.
+
+    Returns:
+        The conjugate evaluated elementwise on `scaled_shift`.
+    """
+    limit = 0.25 * math.log(torch.finfo(scaled_shift.dtype).max)
+    # Both branches read the same rounded excess, so within an ulp of the
+    # limit exactly one of them carries the derivative.
+    excess = torch.relu(scaled_shift - limit)
+    return torch.expm1(scaled_shift - excess) + math.exp(limit) * excess
+
+
 def chi_square_conjugate(scaled_shift: torch.Tensor) -> torch.Tensor:
     r"""Convex conjugate of the chi-square generator $\phi(t) = (t-1)^2$, $t \ge 0$.
 

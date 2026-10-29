@@ -275,8 +275,9 @@ provides the two standard remedies:
     import torch
 
     from optora import StochasticPhiDual
+    from optora.dro import kl_conjugate
 
-    dual = StochasticPhiDual(radius=0.1, phi_conjugate=torch.expm1)  # KL
+    dual = StochasticPhiDual(radius=0.1, phi_conjugate=kl_conjugate)
     optimizer = torch.optim.Adam([*model.parameters(), *dual.parameters()])
 
     for features, targets in loader:
@@ -286,6 +287,10 @@ provides the two standard remedies:
         optimizer.step()
     ```
 
+    `optora.dro.kl_conjugate` is the KL conjugate $e^s - 1$, continued
+    linearly past a quarter of the dtype's exponent range so that $\lambda$
+    lagging a loss spike gives a large finite gradient instead of
+    `inf`, which `torch.expm1` would turn into `nan` dual variables.
     Use `optora.dro.chi_square_conjugate` for the chi-square ball. For
     CVaR at level $\alpha$, pass `radius=0.0` and
     `functools.partial(optora.dro.cvar_conjugate, alpha=alpha)`: the dual
@@ -294,7 +299,8 @@ provides the two standard remedies:
     out. Start
     the dual variables on the scale of the loss, for example at the exact
     dual optimum of a pilot minibatch: with KL's exponential conjugate,
-    the default start can produce gradients large enough to stall Adam.
+    the default start can still produce gradients large enough to stall
+    Adam.
 
 | | `MultilevelMonteCarloEstimator` | `StochasticPhiDual` |
 | --- | --- | --- |

@@ -16,6 +16,7 @@ from optora.dro.phi_dro import (
     TotalVariationAmbiguitySet,
     chi_square_conjugate,
     cvar_conjugate,
+    kl_conjugate,
 )
 from optora.dro.sinkhorn_dro import SinkhornAmbiguitySet
 from optora.dro.wasserstein_dro import WassersteinAmbiguitySet
@@ -35,6 +36,7 @@ __all__ = [
     "StochasticPhiDual",
     "chi_square_conjugate",
     "cvar_conjugate",
+    "kl_conjugate",
     "chi_square_radius",
     "kl_radius",
     "phi_divergence_radius",

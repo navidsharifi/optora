@@ -18,6 +18,7 @@
     - [`MinimaxResult`](minimax_solver.md#optora.dro.minimax_solver.MinimaxResult)
     - [`MinimaxSolver`](minimax_solver.md#optora.dro.minimax_solver.MinimaxSolver)
 - [`optora.dro.phi_dro`](phi_dro.md)
+    - [`kl_conjugate`](phi_dro.md#optora.dro.phi_dro.kl_conjugate)
     - [`chi_square_conjugate`](phi_dro.md#optora.dro.phi_dro.chi_square_conjugate)
     - [`cvar_conjugate`](phi_dro.md#optora.dro.phi_dro.cvar_conjugate)
     - [`PhiAmbiguitySet`](phi_dro.md#optora.dro.phi_dro.PhiAmbiguitySet)
