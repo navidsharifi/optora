@@ -13,9 +13,9 @@ here about $P^0$, against independent references:
 - the closed-form saturation radius
   $\epsilon \sum_i \hat p_i \log(1/Q_i(A))$;
 - a gradient that is a distribution inside the ball, measured by the
-  Newton solve of `tests.dro.duality.entropic_transport_divergence`:
-  Sinkhorn scaling converges too slowly at large $C/\epsilon$ to resolve
-  the boundary of the ball.
+  Newton solve of `tests.dro.duality.entropic_transport_divergence`, which
+  `contains` and its `EntropicTransportDivergence` agree with however
+  large $C/\epsilon$ is (issue #69).
 """
 
 import math
@@ -295,6 +295,11 @@ def test_gradient_is_a_distribution_inside_the_ball_attaining_the_worst_case(
         epsilon,
     )
     assert divergence <= radius * (1.0 + 1e-6) + 1e-9
+    # The divergence `contains` uses agrees with the reference up to the
+    # absolute floor its `eps` clamp of zero-mass rows sets, eps times the
+    # size of the potentials.
+    measured = float(ambiguity_set.divergence(candidate, ambiguity_set.nominal))
+    assert measured == pytest.approx(divergence, rel=1e-6, abs=1e-9)
 
 
 SMOOTH = (
