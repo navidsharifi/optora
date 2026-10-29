@@ -1002,18 +1002,91 @@ class TiltedAmbiguitySet(AmbiguitySet):
         return torch.where(active.unsqueeze(-1), distribution, distribution.detach())
 
 
+def _implicit_curvature(
+    dual_objective: Callable[[torch.Tensor], torch.Tensor],
+    point: torch.Tensor,
+    batch_shape: torch.Size,
+) -> torch.Tensor:
+    r"""Return a zero term that completes the Hessian of a dual re-evaluation.
+
+    The worst case is $V(\theta) = F(x^\star(\theta), \theta)$ for the dual
+    objective $F$, its minimizer $x^\star$, and the inputs $\theta$
+    (`loss`, `nominal`, `radius`). Re-evaluating $F$ at a detached optimum
+    $\bar x$ gives the exact first derivative $F_\theta$ by the envelope
+    theorem, but differentiating it again yields only $F_{\theta\theta}$
+    and misses the implicit-function term from $\partial x^\star /
+    \partial \theta = -H^{-1} F_{x\theta}$, where $H = F_{xx}(\bar x)$.
+    With the residual $r(\theta) = F_x(\bar x, \theta) - F_x(\bar x,
+    \bar\theta)$, this returns
+
+    $$
+    c(\theta) = -\tfrac{1}{2}\, r(\theta)^\top H^{-1} r(\theta),
+    $$
+
+    whose value and first derivative vanish at $\bar\theta$, since
+    $r(\bar\theta) = 0$ exactly, and whose second derivative is exactly
+    $-F_{\theta x} H^{-1} F_{x\theta}$. Adding it to the re-evaluation
+    therefore leaves the value and gradient untouched and makes every
+    second derivative exact once the dual solve has converged. $H$ is held
+    fixed, which costs nothing at second order. Where $H$ is not finite
+    and positive definite, the term is zero.
+
+    Args:
+        dual_objective: Map from dual points of shape `batch_shape + d` to
+            per-element dual values of shape `batch_shape`, attached to the
+            inputs being differentiated.
+        point: Detached dual optimum of shape `batch_shape + d`.
+        batch_shape: Batch shape of the solve.
+
+    Returns:
+        The zero-valued correction, of shape `batch_shape`.
+    """
+    with torch.enable_grad():
+        variable = point.detach().requires_grad_(True)
+        (slope,) = torch.autograd.grad(
+            dual_objective(variable).sum(), variable, create_graph=True
+        )
+        slope = slope.reshape(batch_shape + (-1,))
+        size = slope.shape[-1]
+        rows = [
+            torch.autograd.grad(
+                slope[..., row].sum(), variable, retain_graph=True, allow_unused=True
+            )[0]
+            for row in range(size)
+        ]
+    hessian = torch.stack(
+        [
+            torch.zeros_like(slope) if row is None else row.reshape(slope.shape)
+            for row in rows
+        ],
+        dim=-2,
+    )
+    identity = torch.eye(size, dtype=hessian.dtype, device=hessian.device)
+    finite = torch.isfinite(hessian).all(dim=-1).all(dim=-1)
+    factor, info = torch.linalg.cholesky_ex(
+        torch.where(finite[..., None, None], hessian, identity)
+    )
+    usable = finite & (info == 0)
+    factor = torch.where(usable[..., None, None], factor, identity)
+    residual = slope - slope.detach()
+    solved = torch.cholesky_solve(residual.unsqueeze(-1), factor).squeeze(-1)
+    correction = -0.5 * torch.sum(residual * solved, dim=-1)
+    return torch.where(usable, correction, torch.zeros_like(correction))
+
+
 class DualAmbiguitySet(AmbiguitySet):
     r"""Ambiguity set whose worst-case expectation is a low-dimensional dual solve.
 
     Every divergence-based ambiguity set that reformulates its inner
     supremum as a convex dual minimization over a handful of dual variables
-    (`optora.dro.KLAmbiguitySet` over $\log(\eta)$,
-    `optora.dro.PhiAmbiguitySet` over $(\log(\eta), \lambda)$) runs the
+    (`optora.dro.PhiAmbiguitySet` over $(\log(\eta), \lambda)$) runs the
     same machinery around a formulation-specific dual objective, so that
     machinery lives here: hold an injected `dual_solver`, start it from a
     dual point, and re-evaluate the dual objective at the returned optimum
-    so the result stays differentiable with respect to `loss` by the
-    envelope theorem.
+    so the result stays differentiable with respect to `loss`, `nominal`,
+    and `radius` by the envelope theorem. A zero-valued implicit-function
+    term (`_implicit_curvature`) built from the dual Hessian at the optimum
+    makes second derivatives exact as well, once the solve has converged.
 
     Repeated calls are warm-started. The dual optimum moves only slightly
     between consecutive `worst_case_expectation` calls on a slowly changing
@@ -1263,7 +1336,11 @@ class DualAmbiguitySet(AmbiguitySet):
             re-evaluated at the dual optimum found by `dual_solver`. The
             re-evaluation is what keeps the result differentiable with
             respect to `loss` even though the dual variables themselves are
-            detached. The cached warm start is reused only when its shape
+            detached, and `_implicit_curvature` adds, at zero value and zero
+            first derivative, the second-order effect of the optimum moving
+            with `loss`, `nominal`, and `radius`. It is built only when the
+            re-evaluated objective requires grad. The cached warm start is
+            reused only when its shape
             still matches the batch being solved. Both the initial point and
             the cache are kept in raw-loss units and converted to and from
             the standardized units the solver iterates in.
@@ -1290,7 +1367,9 @@ class DualAmbiguitySet(AmbiguitySet):
             initial_point=start,
         )
         result = self.dual_solver.solve(problem)
-        self._dual_warm_start = self._from_standard_units(
-            result.point.detach(), shift, scale
-        )
-        return dual_objective(result.point)
+        point = result.point.detach()
+        self._dual_warm_start = self._from_standard_units(point, shift, scale)
+        value = dual_objective(point)
+        if not value.requires_grad:
+            return value
+        return value + _implicit_curvature(dual_objective, point, batch_shape)

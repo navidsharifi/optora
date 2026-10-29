@@ -116,15 +116,26 @@ Hessians and Hessian-vector products of the worst case with respect to
     The worst case is piecewise linear in `loss`, so its Hessian is zero
     wherever it exists, which is exactly what autograd reports.
 
+=== "General phi-divergence"
+
+    `PhiAmbiguitySet` re-evaluates its dual objective $F$ at the detached
+    optimum $x^\star$, which alone would miss how $x^\star$ moves with the
+    loss. It also adds a term that is zero in value and in first
+    derivative but whose Hessian is the implicit-function correction
+    $-F_{\ell x} F_{xx}^{-1} F_{x \ell}$, built from the dual's own Hessian
+    at the optimum. Second derivatives are then exact once the dual solve
+    has converged, including the mixed ones with `nominal` and `radius`.
+    The term costs a few passes over the dual objective per call, against
+    the solve's many, and is skipped when nothing requires grad.
+
 !!! warning "Unsupported second-order paths"
 
     - `torch.func.jacfwd(torch.func.jacfwd(...))` on `KLAmbiguitySet` or
       `ChiSquareAmbiguitySet`: PyTorch does not differentiate a custom
       forward-mode rule a second time. Use `torch.func.hessian`
       (forward over reverse) or reverse over reverse.
-    - `PhiAmbiguitySet`: the first derivative is exact once the inner dual
-      solve has converged, but the second derivative ignores how the dual
-      optimum moves with `loss`.
+    - `torch.func` transforms on `PhiAmbiguitySet`: its inner dual solve
+      calls `torch.autograd.grad`. Use `torch.autograd` directly.
 
 ## Non-differentiable points
 
@@ -202,9 +213,9 @@ such as a total
 variation radius that drains a scenario exactly, the returned derivative is
 a supergradient: one of the one-sided derivatives. Derivatives with respect
 to `nominal` and `radius` are first order: second derivatives that involve
-them are not supported. `PhiAmbiguitySet` gets
-the same derivatives from its dual objective, so, like its loss gradient,
-they are exact once its inner dual solve has converged.
+them are not supported, except on `PhiAmbiguitySet`. That set gets these
+derivatives, first and second order, from its dual objective, so, like its
+loss derivatives, they are exact once its inner dual solve has converged.
 `tests/dro/test_parameter_gradients.py` checks every set against `gradcheck`
 and against finite differences of independent NumPy duals.
 

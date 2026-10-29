@@ -23,9 +23,9 @@ with ties forced, that the gradient is always a feasible distribution
 attaining the worst case, which is what makes it a subgradient at a kink.
 
 `PhiAmbiguitySet` is not in `tests.dro.specs.SPECS` and is checked
-separately at the end of the module: its first derivative is exact once the
-inner dual solve has converged, while its second derivative ignores how the
-dual optimum moves with the loss (a strict `xfail`).
+separately at the end of the module: its first and second derivatives are
+exact once the inner dual solve has converged, the second through the
+implicit-function term built from the dual Hessian.
 """
 
 from collections.abc import Callable
@@ -34,9 +34,9 @@ from dataclasses import dataclass
 import pytest
 import torch
 from torch.autograd import gradcheck, gradgradcheck
-from torch.autograd.gradcheck import GradcheckError
 
 from optora.divergences import PhiDivergence
+from optora.dro.kl_dro import KLAmbiguitySet
 from optora.dro.phi_dro import PhiAmbiguitySet
 from optora.solvers import GradientDescent
 from tests.dro.instances import INSTANCES, Instance
@@ -439,7 +439,7 @@ def test_chi_square_gradient_is_continuous_where_a_scenario_enters_the_active_se
     assert abs(right - left) > KINK_MARGIN
 
 
-def _kl_phi_ambiguity_set(nominal: torch.Tensor, radius: float) -> PhiAmbiguitySet:
+def _kl_phi_ambiguity_set(nominal: torch.Tensor, radius: Radius) -> PhiAmbiguitySet:
     """Return a KL-generator `PhiAmbiguitySet` with a tightly converged dual."""
     return PhiAmbiguitySet(
         nominal,
@@ -464,14 +464,6 @@ def test_phi_set_gradient_matches_finite_differences_once_converged() -> None:
     )
 
 
-@pytest.mark.xfail(
-    raises=GradcheckError,
-    strict=True,
-    reason=(
-        "DualAmbiguitySet re-evaluates the dual at a detached optimum, so its "
-        "second derivative omits how that optimum moves with the loss"
-    ),
-)
 def test_phi_set_second_derivative_matches_finite_differences() -> None:
     instance = _INSTANCES["asymmetric"]
     nominal, _, _ = instance.tensors()
@@ -484,3 +476,44 @@ def test_phi_set_second_derivative_matches_finite_differences() -> None:
         grad_outputs=(fixed_grad_outputs(function(loss)),),
         **GRADCHECK_TOLERANCES,
     )
+
+
+def test_phi_set_hessian_matches_the_closed_form_kl_set() -> None:
+    nominal, loss, _ = GENERIC.tensors()
+    phi_hessian = torch.autograd.functional.hessian(
+        _kl_phi_ambiguity_set(nominal, 0.3).worst_case_expectation, loss
+    )
+    kl_hessian = torch.autograd.functional.hessian(
+        KLAmbiguitySet(nominal, 0.3).worst_case_expectation, loss
+    )
+
+    assert torch.linalg.eigvalsh(kl_hessian).max() > 1e-2
+    torch.testing.assert_close(phi_hessian, kl_hessian, rtol=0.0, atol=1e-10)
+
+
+def test_phi_set_mixed_loss_radius_derivative_matches_finite_differences() -> None:
+    nominal, loss, _ = GENERIC.tensors()
+    radius = torch.tensor(0.3, dtype=torch.float64, requires_grad=True)
+    point = loss.clone().requires_grad_(True)
+    (loss_gradient,) = torch.autograd.grad(
+        _kl_phi_ambiguity_set(nominal, radius).worst_case_expectation(point),
+        point,
+        create_graph=True,
+    )
+    mixed = torch.stack(
+        [
+            torch.autograd.grad(entry, radius, retain_graph=True)[0]
+            for entry in loss_gradient
+        ]
+    )
+    step = 1e-5
+    expected = (
+        gradient(
+            _kl_phi_ambiguity_set(nominal, 0.3 + step).worst_case_expectation, loss
+        )
+        - gradient(
+            _kl_phi_ambiguity_set(nominal, 0.3 - step).worst_case_expectation, loss
+        )
+    ) / (2.0 * step)
+
+    torch.testing.assert_close(mixed, expected, rtol=0.0, atol=1e-6)
