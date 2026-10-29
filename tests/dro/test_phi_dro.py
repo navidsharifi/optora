@@ -25,6 +25,7 @@ from optora.dro.phi_dro import (
     PhiAmbiguitySet,
     TotalVariationAmbiguitySet,
     chi_square_conjugate,
+    kl_conjugate,
 )
 from optora.solvers.gradient_descent import GradientDescent
 from tests.dro.tolerances import feasibility_bound
@@ -835,3 +836,53 @@ def test_cvar_fills_tied_losses_in_support_index_order() -> None:
     perturbed = _maximizer(ambiguity_set, TIED_LOSS - TIE_BREAK)
 
     assert torch.allclose(tied, perturbed, rtol=0.0, atol=1e-12)
+
+
+def _kl_conjugate_limit(dtype: torch.dtype) -> float:
+    """Return a quarter of `dtype`'s logarithmic range: where `kl_conjugate` bends."""
+    return 0.25 * math.log(torch.finfo(dtype).max)
+
+
+@pytest.mark.parametrize("dtype", [torch.float32, torch.float64])
+def test_kl_conjugate_is_expm1_up_to_half_the_exponent_range(
+    dtype: torch.dtype,
+) -> None:
+    limit = _kl_conjugate_limit(dtype)
+    scaled_shift = torch.tensor(
+        [-1e4, -40.0, -1.0, -1e-9, 0.0, 1e-9, 1.0, 20.0, limit], dtype=dtype
+    )
+
+    torch.testing.assert_close(
+        kl_conjugate(scaled_shift), torch.expm1(scaled_shift), rtol=0.0, atol=0.0
+    )
+
+
+def test_kl_conjugate_is_the_conjugate_of_the_ratio_capped_generator() -> None:
+    # Past the limit the supremum of s t - phi(t) over 0 <= t <= T sits at
+    # the cap T = exp(limit), where phi(T) = T * limit - T + 1.
+    limit = _kl_conjugate_limit(torch.float64)
+    cap = math.exp(limit)
+    scaled_shift = torch.tensor([limit + 0.5, limit + 10.0, 2e3], dtype=torch.float64)
+    expected = scaled_shift * cap - (cap * limit - cap + 1.0)
+
+    torch.testing.assert_close(kl_conjugate(scaled_shift), expected, rtol=1e-13, atol=0)
+
+
+@pytest.mark.parametrize("dtype", [torch.float32, torch.float64])
+def test_kl_conjugate_stays_finite_and_continuously_differentiable(
+    dtype: torch.dtype,
+) -> None:
+    limit = _kl_conjugate_limit(dtype)
+    scaled_shift = torch.tensor(
+        [limit - 1e-6, limit, limit + 1e-6, limit + 1.0, limit + 1e3, 1e6], dtype=dtype
+    ).requires_grad_(True)
+
+    value = kl_conjugate(scaled_shift)
+    (slope,) = torch.autograd.grad(value.sum(), scaled_shift)
+
+    assert torch.isfinite(value).all()
+    assert torch.isfinite(slope).all()
+    torch.testing.assert_close(
+        slope, torch.full_like(slope, math.exp(limit)), rtol=2e-3, atol=0.0
+    )
+    assert torch.all(value[1:] >= value[:-1])

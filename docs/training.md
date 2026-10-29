@@ -116,15 +116,26 @@ Hessians and Hessian-vector products of the worst case with respect to
     The worst case is piecewise linear in `loss`, so its Hessian is zero
     wherever it exists, which is exactly what autograd reports.
 
+=== "General phi-divergence"
+
+    `PhiAmbiguitySet` re-evaluates its dual objective $F$ at the detached
+    optimum $x^\star$, which alone would miss how $x^\star$ moves with the
+    loss. It also adds a term that is zero in value and in first
+    derivative but whose Hessian is the implicit-function correction
+    $-F_{\ell x} F_{xx}^{-1} F_{x \ell}$, built from the dual's own Hessian
+    at the optimum. Second derivatives are then exact once the dual solve
+    has converged, including the mixed ones with `nominal` and `radius`.
+    The term costs a few passes over the dual objective per call, against
+    the solve's many, and is skipped when nothing requires grad.
+
 !!! warning "Unsupported second-order paths"
 
     - `torch.func.jacfwd(torch.func.jacfwd(...))` on `KLAmbiguitySet` or
       `ChiSquareAmbiguitySet`: PyTorch does not differentiate a custom
       forward-mode rule a second time. Use `torch.func.hessian`
       (forward over reverse) or reverse over reverse.
-    - `PhiAmbiguitySet`: the first derivative is exact once the inner dual
-      solve has converged, but the second derivative ignores how the dual
-      optimum moves with `loss`.
+    - `torch.func` transforms on `PhiAmbiguitySet`: its inner dual solve
+      calls `torch.autograd.grad`. Use `torch.autograd` directly.
 
 ## Non-differentiable points
 
@@ -158,6 +169,55 @@ every device:
 `tests/dro/test_gradients.py` checks each of these kinks by one-sided
 finite differences, alongside `gradcheck` and `gradgradcheck` in float64 at
 smooth points.
+
+## Gradients with respect to `nominal` and `radius`
+
+`nominal` and a tensor `radius` (or a tensor `alpha` for
+`CVaRAmbiguitySet`) are differentiable too, for example to learn a
+reweighting of the training data through `nominal = torch.softmax(logits,
+dim=-1)` or to tune the radius. The inner solve again stays out of the
+graph: by the envelope theorem, the derivatives are read off the
+Lagrangian
+
+$$
+L(q, \lambda; \ell, p, \rho) = \langle q, \ell \rangle
+    - \lambda \big( D(q \,\|\, p) - \rho \big)
+$$
+
+at the saddle point $(q^\star, \lambda^\star)$ the set already solved for:
+
+$$
+\frac{\partial V}{\partial \rho} = \lambda^\star \ge 0,
+\qquad
+\frac{\partial V}{\partial p} = \frac{\partial L}{\partial p}
+    \Big|_{(q^\star, \lambda^\star)}.
+$$
+
+The multiplier $\lambda^\star$ is the marginal value of robustness: how
+much the worst case rises per unit of radius. It falls as the radius
+grows and vanishes once the radius saturates the set. For KL, chi-square
+and Sinkhorn it is unbounded as the radius vanishes, where the worst case
+grows like $\sqrt{\rho}$.
+
+!!! note "Only directions that keep `nominal` a distribution are defined"
+
+    The worst case is defined for distributions only, so its derivative
+    with respect to `nominal` is defined only along directions $d$ with
+    $\sum_i d_i = 0$. The component along the all-ones direction is
+    implementation-defined; a softmax or any other map onto the simplex
+    discards it.
+
+The worst case is concave in $p$ and in $\rho$ (for CVaR, in the
+likelihood-ratio bound $1/\alpha$ rather than in $\rho$), so at a kink,
+such as a total
+variation radius that drains a scenario exactly, the returned derivative is
+a supergradient: one of the one-sided derivatives. Derivatives with respect
+to `nominal` and `radius` are first order: second derivatives that involve
+them are not supported, except on `PhiAmbiguitySet`. That set gets these
+derivatives, first and second order, from its dual objective, so, like its
+loss derivatives, they are exact once its inner dual solve has converged.
+`tests/dro/test_parameter_gradients.py` checks every set against `gradcheck`
+and against finite differences of independent NumPy duals.
 
 ## Minibatches from a population
 
@@ -215,8 +275,9 @@ provides the two standard remedies:
     import torch
 
     from optora import StochasticPhiDual
+    from optora.dro import kl_conjugate
 
-    dual = StochasticPhiDual(radius=0.1, phi_conjugate=torch.expm1)  # KL
+    dual = StochasticPhiDual(radius=0.1, phi_conjugate=kl_conjugate)
     optimizer = torch.optim.Adam([*model.parameters(), *dual.parameters()])
 
     for features, targets in loader:
@@ -226,6 +287,10 @@ provides the two standard remedies:
         optimizer.step()
     ```
 
+    `optora.dro.kl_conjugate` is the KL conjugate $e^s - 1$, continued
+    linearly past a quarter of the dtype's exponent range so that $\lambda$
+    lagging a loss spike gives a large finite gradient instead of
+    `inf`, which `torch.expm1` would turn into `nan` dual variables.
     Use `optora.dro.chi_square_conjugate` for the chi-square ball. For
     CVaR at level $\alpha$, pass `radius=0.0` and
     `functools.partial(optora.dro.cvar_conjugate, alpha=alpha)`: the dual
@@ -234,7 +299,8 @@ provides the two standard remedies:
     out. Start
     the dual variables on the scale of the loss, for example at the exact
     dual optimum of a pilot minibatch: with KL's exponential conjugate,
-    the default start can produce gradients large enough to stall Adam.
+    the default start can still produce gradients large enough to stall
+    Adam.
 
 | | `MultilevelMonteCarloEstimator` | `StochasticPhiDual` |
 | --- | --- | --- |
@@ -255,7 +321,7 @@ the exact full-batch optimum.
 | Batched losses | Pass a batched loss of shape `(..., n)`; the inner problems decouple across leading dimensions and are bisected jointly in one call. For minibatches drawn from a population, see [Minibatches from a population](#minibatches-from-a-population). |
 | Device and dtype | `ambiguity_set.to(device)` moves `nominal` and every cached buffer; the returned value follows the loss's dtype and device. Half-precision losses (including under `torch.autocast`) are solved in float32 and rounded once; see [Numerical behaviour](numerics.md). |
 | Debugging | `validate=True` checks `nominal`, a tensor `radius`, and every `loss` for non-finite or invalid values, at one host synchronization per call. |
-| Differentiable inputs | Only `loss`. Treat `nominal` and a tensor `radius` as constants: gradients with respect to them are not supported and are not meaningful. |
+| Differentiable inputs | `loss`, `nominal`, and a tensor `radius` (`alpha` for CVaR); see [Gradients with respect to `nominal` and `radius`](#gradients-with-respect-to-nominal-and-radius). The extra derivatives are computed only when `nominal` or the radius requires grad. |
 | Choosing the radius | `optora.dro.kl_radius`, `chi_square_radius`, `phi_divergence_radius` and `wasserstein_radius` turn a confidence level and a sample size into a radius under which the robust value is an asymptotically exact upper confidence bound on the true risk; see [Calibrating the ambiguity radius](examples/calibrated_ambiguity_radius.md). |
 | Zero radius | `radius=0.0` makes the objective exactly the nominal-weighted empirical risk, which is the natural non-robust baseline to compare against. For `WassersteinAmbiguitySet` this needs a metric `cost` (`cost[i, j] > 0` for `i != j`); a zero-cost pair of distinct support points still lets mass move between them at zero radius. |
 

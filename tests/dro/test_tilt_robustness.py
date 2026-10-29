@@ -408,3 +408,32 @@ def test_tilted_ambiguity_set_is_abstract_over_its_formulation() -> None:
             divergence=KLAmbiguitySet(NOMINAL, radius=0.1).divergence,
             radius=0.1,
         )
+
+
+class _UndifferentiatedTilt(TiltedAmbiguitySet):
+    """A linear tilt without parameter derivatives, as a third-party subclass."""
+
+    def _tilted_distribution(
+        self, gap: torch.Tensor, tilt: torch.Tensor
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        nominal = self._constant_nominal
+        weight = torch.clamp(1.0 - self._tilt_rate(tilt) * gap, min=0.0)
+        distribution = nominal * weight / torch.sum(nominal * weight, -1, keepdim=True)
+        ratio = distribution / nominal
+        return distribution, torch.sum(nominal * (ratio - 1.0) ** 2, dim=-1)
+
+
+def test_tilted_subclass_without_parameter_derivatives_fails_loudly() -> None:
+    nominal = NOMINAL.clone()
+    ambiguity_set = _UndifferentiatedTilt(
+        nominal,
+        divergence=ChiSquareAmbiguitySet(NOMINAL, radius=0.1).divergence,
+        radius=0.1,
+    )
+    loss = torch.tensor([0.0, 1.0, 2.0, 5.0], dtype=torch.float64)
+
+    expected = ChiSquareAmbiguitySet(NOMINAL, radius=0.1).worst_case_expectation(loss)
+    torch.testing.assert_close(ambiguity_set.worst_case_expectation(loss), expected)
+    nominal.requires_grad_(True)
+    with pytest.raises(NotImplementedError, match="_UndifferentiatedTilt"):
+        ambiguity_set.worst_case_expectation(loss)

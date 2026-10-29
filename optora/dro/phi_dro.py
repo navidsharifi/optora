@@ -24,6 +24,55 @@ from optora.divergences.f_divergence import (
 from optora.divergences.max_divergence import MaxDivergence
 
 
+def kl_conjugate(scaled_shift: torch.Tensor) -> torch.Tensor:
+    r"""Overflow-free convex conjugate of the KL generator $\phi(t) = t \log t - t + 1$.
+
+    The exact conjugate $\phi^*(s) = e^s - 1$ overflows once $s$ passes
+    $\log$ of the dtype's largest value (about 88.7 in float32), as it does
+    in `optora.dro.minibatch.StochasticPhiDual` when $\lambda$ lags a loss
+    spike, and the resulting `inf` turns every gradient into `nan`. This
+    returns instead the conjugate of the generator restricted to likelihood
+    ratios $t \le T = e^c$, with $c$ a quarter of the dtype's logarithmic
+    range (about 22.2 in float32, 177.4 in float64):
+
+    $$
+    \sup_{0 \le t \le T} \big(s\,t - \phi(t)\big) =
+    \begin{cases}
+        e^s - 1, & s \le c, \\
+        e^c (1 + s - c) - 1, & s > c,
+    \end{cases}
+    $$
+
+    the exact conjugate continued along its tangent at $c$. It is convex
+    and continuously differentiable, and its slope never exceeds $T$, so
+    the dual objective, its gradients, and their squares (as accumulated by
+    Adam and RMSprop) stay finite for any loss spike up to about $T$ times
+    $\eta$; at half the range the squared gradient of $\log \eta$ would
+    already overflow float32. The dual it defines is the exact dual of the
+    KL ball intersected with the likelihood-ratio bound
+    $q / \mathrm{nominal} \le T$, so it equals the KL dual whenever the
+    worst-case likelihood ratio $e^s$ stays below $T$ (about $4 \times
+    10^9$ in float32). Since a ratio $r$ on an event of nominal probability
+    $p$ puts mass $r p \le 1$ on it, the bound can only bind where the
+    worst case loads events of nominal probability below $1 / T$. Pass it
+    as
+    `phi_conjugate` to `PhiAmbiguitySet` or
+    `optora.dro.minibatch.StochasticPhiDual` for the KL ball.
+
+    Args:
+        scaled_shift: Elementwise dual argument
+            $s = (\mathrm{loss} - \lambda) / \eta$.
+
+    Returns:
+        The conjugate evaluated elementwise on `scaled_shift`.
+    """
+    limit = 0.25 * math.log(torch.finfo(scaled_shift.dtype).max)
+    # Both branches read the same rounded excess, so within an ulp of the
+    # limit exactly one of them carries the derivative.
+    excess = torch.relu(scaled_shift - limit)
+    return torch.expm1(scaled_shift - excess) + math.exp(limit) * excess
+
+
 def chi_square_conjugate(scaled_shift: torch.Tensor) -> torch.Tensor:
     r"""Convex conjugate of the chi-square generator $\phi(t) = (t-1)^2$, $t \ge 0$.
 
@@ -387,15 +436,63 @@ class ChiSquareAmbiguitySet(TiltedAmbiguitySet):
             The tilted distribution and its chi-square divergence from
             `nominal`.
         """
+        nominal = self._constant_nominal
         rate = self._tilt_rate(tilt)
         weight = torch.clamp(1.0 - rate * gap, min=0.0)
-        normalizer = torch.sum(self.nominal * weight, dim=-1, keepdim=True)
-        distribution = self.nominal * weight / normalizer
+        normalizer = torch.sum(nominal * weight, dim=-1, keepdim=True)
+        distribution = nominal * weight / normalizer
         deviation = weight - normalizer
         divergence = (
-            torch.sum(self.nominal * deviation**2, dim=-1, keepdim=True) / normalizer**2
+            torch.sum(nominal * deviation**2, dim=-1, keepdim=True) / normalizer**2
         ).squeeze(-1)
         return distribution, torch.clamp(divergence, min=0.0)
+
+    def _standardized_sensitivities(
+        self,
+        gap: torch.Tensor,
+        tilt: torch.Tensor,
+        distribution: torch.Tensor,
+        divergence: torch.Tensor,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        r"""Return the envelope derivatives of the linear tilt.
+
+        With the weight $w_i = (1 - \beta\,\mathrm{gap}_i)_+$, its nominal
+        mean $N$, and the likelihood ratio $r_i = w_i / N$, the multiplier
+        of the radius constraint is $\eta^\star = N / (2\beta)$ and the
+        derivative with respect to $\mathrm{nominal}_i$ is
+        $\eta^\star (r_i^2 - 1 - D)$. Writing the cut depth
+        $m_i = \min(\mathrm{gap}_i, 1/\beta)$, so that $w_i = 1 - \beta m_i$,
+        gives $\eta^\star (r_i^2 - 1) = \tfrac{1}{2} (\bar m - m_i)(r_i + 1)$
+        for the nominal mean $\bar m$, which has no division by the rate and
+        reduces to $\bar m - \mathrm{gap}_i$ at a zero tilt.
+
+        Args:
+            gap: Standardized shortfall of every scenario, of shape
+                `(..., n)`.
+            tilt: Solved tilt of shape `batch_shape`.
+            distribution: Maximizer at `tilt`, unused.
+            divergence: Chi-square divergence of the maximizer, unused.
+
+        Returns:
+            The derivative with respect to `nominal` and the multiplier
+            $\eta^\star$, infinite at a zero tilt.
+        """
+        nominal = self._constant_nominal.to(gap.dtype)
+        on_support = self._reachable
+
+        def nominal_mean(values: torch.Tensor) -> torch.Tensor:
+            # Off the support a large tilt may overflow `values` to infinity,
+            # which zero nominal mass must not turn into nan.
+            weighted = torch.where(on_support, nominal * values, 0.0)
+            return torch.sum(weighted, dim=-1, keepdim=True)
+
+        rate = self._tilt_rate(tilt)
+        weight = torch.clamp(1.0 - rate * gap, min=0.0)
+        normalizer = nominal_mean(weight)
+        depth = torch.minimum(gap, torch.reciprocal(rate))
+        excess = (nominal_mean(depth) - depth) * (weight / normalizer + 1.0)
+        nominal_gradient = 0.5 * (excess - nominal_mean(excess))
+        return nominal_gradient, (normalizer / (2.0 * rate)).squeeze(-1)
 
 
 class TotalVariationAmbiguitySet(AmbiguitySet):
@@ -507,7 +604,7 @@ class TotalVariationAmbiguitySet(AmbiguitySet):
                 self._nominal_expectation(working, batch_shape), loss
             )
 
-        nominal = self.nominal.to(working.dtype)
+        nominal = self._constant_nominal.to(working.dtype)
         support_shape = (
             _broadcast_batch_shapes(loss=working.shape[:-1], nominal=nominal.shape[:-1])
             + working.shape[-1:]
@@ -522,16 +619,77 @@ class TotalVariationAmbiguitySet(AmbiguitySet):
         max_loss = sorted_loss[..., -1:]
 
         radius = self.radius
-        budget = radius.unsqueeze(-1) if isinstance(radius, torch.Tensor) else radius
+        budget = (
+            radius.detach().unsqueeze(-1)
+            if isinstance(radius, torch.Tensor)
+            else radius
+        )
         mass_available_before = torch.cumsum(rest_nominal, dim=-1) - rest_nominal
         remaining_budget = torch.clamp(budget - mass_available_before, min=0.0)
         reallocated_mass = torch.minimum(remaining_budget, rest_nominal)
 
         nominal_expectation = torch.sum(nominal * working, dim=-1)
         reallocation_gain = torch.sum(reallocated_mass * (max_loss - rest_loss), dim=-1)
-        return self._as_result(
-            (nominal_expectation + reallocation_gain).expand(batch_shape), loss
+        value = (nominal_expectation + reallocation_gain).expand(batch_shape)
+        result = self._attach_parameter_gradients(
+            value,
+            lambda: self._parameter_sensitivities(
+                working.detach(),
+                value.detach(),
+                max_loss.detach(),
+                rest_loss.detach(),
+                reallocated_mass < rest_nominal,
+            ),
         )
+        return self._as_result(result, loss)
+
+    def _parameter_sensitivities(
+        self,
+        loss: torch.Tensor,
+        value: torch.Tensor,
+        max_loss: torch.Tensor,
+        rest_loss: torch.Tensor,
+        undrained: torch.Tensor,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        r"""Return the envelope derivatives with respect to nominal and radius.
+
+        Let $\theta$ be the loss of the first scenario, in ascending order,
+        that the reallocation does not drain completely ($\max \ell$ once
+        every other scenario is drained). The next unit of radius moves
+        mass from it to the maximum, so the radius derivative is
+        $\max \ell - \theta$, and the derivative with respect to
+        $\mathrm{nominal}_i$ is $\max(\ell_i, \theta)$, the value of a unit
+        of nominal mass at scenario $i$ once low losses are drained up to
+        $\theta$. It is shifted along the all-ones direction, where it is
+        not defined, so that $\sum_i \mathrm{nominal}_i \, \partial V /
+        \partial \mathrm{nominal}_i = V$. At a radius that drains a scenario
+        exactly, $\theta$ is either neighbouring loss, and both give a
+        supergradient of the worst case, which is concave in the radius.
+
+        Args:
+            loss: Detached working-precision loss of shape `(..., n)`.
+            value: Detached worst case of shape `batch_shape`.
+            max_loss: Largest loss, with a trailing singleton dimension.
+            rest_loss: Every other loss, in ascending order.
+            undrained: Mask of the scenarios in `rest_loss` that keep part
+                of their nominal mass.
+
+        Returns:
+            The derivatives with respect to `nominal`, of shape
+            `batch_shape + (n,)`, and `radius`, of shape `batch_shape`.
+        """
+        threshold = torch.minimum(
+            torch.amin(
+                torch.where(undrained, rest_loss, torch.inf), dim=-1, keepdim=True
+            ),
+            max_loss,
+        )
+        retained = torch.maximum(loss, threshold)
+        nominal = self._constant_nominal.to(loss.dtype)
+        shift = value.unsqueeze(-1) - torch.sum(
+            nominal * retained, dim=-1, keepdim=True
+        )
+        return retained + shift, (max_loss - threshold).squeeze(-1)
 
 
 def _validate_alpha(alpha: torch.Tensor) -> None:
@@ -640,7 +798,7 @@ class CVaRAmbiguitySet(AmbiguitySet):
         if isinstance(alpha, torch.Tensor):
             if validate:
                 _validate_alpha(alpha)
-            radius = -torch.log(alpha)
+            radius = -torch.log(alpha.detach())
         else:
             if not 0.0 <= alpha <= 1.0:
                 raise ValueError(f"alpha must lie in [0, 1], got {alpha}.")
@@ -674,7 +832,7 @@ class CVaRAmbiguitySet(AmbiguitySet):
         tiny = torch.finfo(dtype).tiny
         alpha = self.alpha
         if isinstance(alpha, torch.Tensor):
-            return torch.clamp(alpha.to(dtype), min=tiny).unsqueeze(-1)
+            return torch.clamp(alpha.detach().to(dtype), min=tiny).unsqueeze(-1)
         return max(alpha, tiny)
 
     def worst_case_expectation(self, loss: torch.Tensor) -> torch.Tensor:
@@ -706,7 +864,7 @@ class CVaRAmbiguitySet(AmbiguitySet):
                 self._nominal_expectation(working, batch_shape), loss
             )
 
-        nominal = self.nominal.to(working.dtype)
+        nominal = self._constant_nominal.to(working.dtype)
         support_shape = (
             _broadcast_batch_shapes(loss=working.shape[:-1], nominal=nominal.shape[:-1])
             + working.shape[-1:]
@@ -723,5 +881,63 @@ class CVaRAmbiguitySet(AmbiguitySet):
         # Normalizing by the filled mass rather than by alpha keeps the
         # maximizer a distribution under rounding, and is what turns the
         # floored alpha = 0 limit into an exact point mass.
-        value = torch.sum(weight * sorted_loss, dim=-1) / torch.sum(weight, dim=-1)
-        return self._as_result(value.expand(batch_shape), loss)
+        filled = torch.sum(weight, dim=-1, keepdim=True)
+        value = (
+            torch.sum(weight * sorted_loss, dim=-1, keepdim=True) / filled
+        ).squeeze(-1)
+        result = self._attach_parameter_gradients(
+            value.expand(batch_shape),
+            lambda: self._parameter_sensitivities(
+                working.detach(), sorted_loss.detach(), weight, filled
+            ),
+        )
+        return self._as_result(result, loss)
+
+    @property
+    def _radius_parameter(self) -> torch.Tensor | None:
+        r"""A tensor `alpha`, the parameter the radius $\log(1/\alpha)$ is set by."""
+        return self.alpha if isinstance(self.alpha, torch.Tensor) else None
+
+    def _parameter_sensitivities(
+        self,
+        loss: torch.Tensor,
+        sorted_loss: torch.Tensor,
+        weight: torch.Tensor,
+        filled: torch.Tensor,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        r"""Return the envelope derivatives with respect to nominal and `alpha`.
+
+        By the Rockafellar-Uryasev representation
+        $\mathrm{CVaR}_\alpha = \min_c \, c + \mathbb{E}_{\mathrm{nominal}}
+        [(\ell - c)_+] / \alpha$, minimized at the value-at-risk $c^\star$,
+        the lowest loss in the filled tail, the derivative with respect to
+        $\mathrm{nominal}_i$ is $c^\star + (\ell_i - c^\star)_+ / \alpha$,
+        shifted along the all-ones direction, where it is not defined, so
+        that $\sum_i \mathrm{nominal}_i \, \partial V / \partial
+        \mathrm{nominal}_i = V$, and the derivative with respect to
+        $\alpha$ is $-\mathbb{E}_{q^\star}[\ell - c^\star] / \alpha$. Both
+        divide by the filled mass rather than by $\alpha$, as the value
+        does, and the value-at-risk term vanishes exactly on a point-mass
+        tail, so a floored $\alpha = 0$ gives zero rather than an overflow.
+
+        Args:
+            loss: Detached working-precision loss of shape `(..., n)`.
+            sorted_loss: `loss` in descending order, broadcast against the
+                nominal.
+            weight: Tail mass each entry of `sorted_loss` receives.
+            filled: Total tail mass, with a trailing singleton dimension.
+
+        Returns:
+            The derivatives with respect to `nominal`, of shape
+            `batch_shape + (n,)`, and `alpha`, of shape `batch_shape`.
+        """
+        in_tail = weight > 0.0
+        value_at_risk = torch.amin(
+            torch.where(in_tail, sorted_loss, torch.inf), dim=-1, keepdim=True
+        )
+        tail_excess = torch.where(in_tail, sorted_loss - value_at_risk, 0.0)
+        mean_excess = torch.sum(weight / filled * tail_excess, dim=-1, keepdim=True)
+        return (
+            value_at_risk + torch.relu(loss - value_at_risk) / filled,
+            (-mean_excess / filled).squeeze(-1),
+        )

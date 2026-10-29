@@ -271,14 +271,18 @@ class StochasticPhiDual(nn.Module):
     variables are `nn.Parameter`s, so they train with the model:
 
     ```python
-    dual = StochasticPhiDual(radius=0.1, phi_conjugate=torch.expm1)  # KL
+    dual = StochasticPhiDual(radius=0.1, phi_conjugate=kl_conjugate)
     optimizer = torch.optim.Adam([*model.parameters(), *dual.parameters()])
     dual(per_sample_loss(model, batch)).backward()
     optimizer.step()
     ```
 
-    The KL conjugate is $\phi^*(s) = e^s - 1$, `torch.expm1`; the chi-square
-    conjugate is `optora.dro.chi_square_conjugate`. The price of
+    Use `optora.dro.kl_conjugate` for KL: it is $\phi^*(s) = e^s - 1$
+    continued along its tangent past a quarter of the dtype's exponent
+    range, so a loss spike that $\lambda$ has not caught up with gives a
+    large, finite objective and gradient rather than the `inf`, and then
+    `nan` dual variables, of `torch.expm1`. The chi-square conjugate is
+    `optora.dro.chi_square_conjugate`. The price of
     unbiasedness is that $(\eta, \lambda)$ are reached by stochastic
     optimization rather than solved per batch: a conjugate that grows
     exponentially, as KL's does, makes the objective's variance sensitive to
@@ -317,7 +321,7 @@ class StochasticPhiDual(nn.Module):
                 radius sweep trains in one module.
             phi_conjugate: Convex conjugate of the generator restricted to
                 $t \ge 0$, finite on the real line, for example
-                `torch.expm1` for KL.
+                `optora.dro.kl_conjugate` for KL.
             initial_log_eta: Starting value of `log_eta`.
             initial_lam: Starting value of `lam`, in the units of the loss.
 

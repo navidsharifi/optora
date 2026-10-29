@@ -22,6 +22,7 @@ NOT_REEXPORTED = frozenset(
         "chi_square_conjugate",
         "chi_square_radius",
         "cvar_conjugate",
+        "kl_conjugate",
         "kl_radius",
         "phi_divergence_radius",
         "wasserstein_radius",

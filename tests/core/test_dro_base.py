@@ -256,3 +256,100 @@ def test_warm_start_cache_stays_out_of_the_state_dict(nominal: torch.Tensor) -> 
 
     assert "initial_dual_point" in state_dict
     assert "_dual_warm_start" not in state_dict
+
+
+class _LinearDualAmbiguitySet(_QuadraticDualAmbiguitySet):
+    """Dual-solved ambiguity set whose dual is linear, with a zero Hessian."""
+
+    def _dual_objective(
+        self,
+        point: torch.Tensor,
+        loss: torch.Tensor,
+        radius: float | torch.Tensor,
+    ) -> torch.Tensor:
+        return point * loss.sum(dim=-1) - loss.prod(dim=-1)
+
+
+def _without_curvature(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        "optora.core.dro_base._implicit_curvature",
+        lambda _objective, point, batch_shape: torch.zeros(
+            batch_shape, dtype=point.dtype
+        ),
+    )
+
+
+def test_implicit_curvature_leaves_value_and_gradient_unchanged(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    nominal = torch.tensor([0.25, 0.75], dtype=torch.float64)
+    ambiguity_set = _dual_ambiguity_set(nominal, _RecordingSolver())
+    loss = torch.tensor([1.0, 2.5], dtype=torch.float64, requires_grad=True)
+
+    value = ambiguity_set.worst_case_expectation(loss)
+    (gradient,) = torch.autograd.grad(value, loss)
+    _without_curvature(monkeypatch)
+    plain_value = ambiguity_set.worst_case_expectation(loss)
+    (plain_gradient,) = torch.autograd.grad(plain_value, loss)
+
+    torch.testing.assert_close(value, plain_value, rtol=0.0, atol=0.0)
+    torch.testing.assert_close(gradient, plain_gradient, rtol=0.0, atol=0.0)
+
+
+def test_implicit_curvature_adds_the_moving_optimum_to_the_hessian(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # The dual (x - s(loss))^2 has minimum 0 for every loss, so the exact
+    # Hessian is zero; the detached re-evaluation alone reports 2 grad s^2.
+    nominal = torch.tensor([0.25, 0.75], dtype=torch.float64)
+    ambiguity_set = _dual_ambiguity_set(nominal, _RecordingSolver())
+    loss = torch.tensor([1.0, 2.5], dtype=torch.float64)
+
+    hessian = torch.autograd.functional.hessian(
+        ambiguity_set.worst_case_expectation, loss
+    )
+    _without_curvature(monkeypatch)
+    plain_hessian = torch.autograd.functional.hessian(
+        ambiguity_set.worst_case_expectation, loss
+    )
+
+    torch.testing.assert_close(hessian, torch.zeros_like(hessian), rtol=0.0, atol=1e-12)
+    assert plain_hessian.abs().max() > 1e-3
+
+
+def test_implicit_curvature_is_zero_where_the_dual_hessian_is_singular() -> None:
+    nominal = torch.tensor([0.25, 0.75], dtype=torch.float64)
+    ambiguity_set = _LinearDualAmbiguitySet(
+        nominal=nominal,
+        divergence=_AbsoluteDifferenceDivergence(),
+        radius=0.5,
+        dual_solver=_RecordingSolver(),
+        initial_dual_point=torch.tensor(0.0, dtype=torch.float64),
+    )
+    loss = torch.tensor([1.0, 2.5], dtype=torch.float64, requires_grad=True)
+
+    (gradient,) = torch.autograd.grad(
+        ambiguity_set.worst_case_expectation(loss), loss, create_graph=True
+    )
+    (second,) = torch.autograd.grad(gradient.sum(), loss)
+
+    assert torch.isfinite(gradient).all()
+    assert torch.isfinite(second).all()
+
+
+def test_implicit_curvature_is_skipped_when_nothing_requires_grad(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def unexpected(*_: object) -> torch.Tensor:
+        raise AssertionError("implicit curvature was built")
+
+    monkeypatch.setattr("optora.core.dro_base._implicit_curvature", unexpected)
+    nominal = torch.tensor([0.25, 0.75], dtype=torch.float64)
+    ambiguity_set = _dual_ambiguity_set(nominal, _RecordingSolver())
+    loss = torch.tensor([1.0, 2.5], dtype=torch.float64)
+
+    ambiguity_set.worst_case_expectation(loss)
+    with torch.no_grad():
+        ambiguity_set.worst_case_expectation(loss.requires_grad_(True))
+    with pytest.raises(AssertionError, match="implicit curvature was built"):
+        ambiguity_set.worst_case_expectation(loss)
