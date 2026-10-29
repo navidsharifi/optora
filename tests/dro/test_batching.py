@@ -1,7 +1,7 @@
 """Tests for batched losses and batched radii across every ambiguity set."""
 
 from collections.abc import Callable
-from typing import Any
+from typing import Any, Protocol
 
 import pytest
 import torch
@@ -27,31 +27,53 @@ BATCHED_LOSS = torch.tensor(
     [[0.0, 1.0, 2.0], [1.0, 0.5, 3.0], [2.0, 0.5, 1.0]], dtype=torch.float64
 )
 
-AmbiguitySetFactory = Callable[[float | torch.Tensor], AmbiguitySet]
+# Two valid nominals stacked along a leading batch dimension, for checking
+# that a nominal may carry more batch dimensions than the loss.
+BATCHED_NOMINAL = torch.stack(
+    [NOMINAL, torch.tensor([0.1, 0.3, 0.6], dtype=torch.float64)]
+)
 
 
-def _kl(radius: float | torch.Tensor) -> AmbiguitySet:
-    return KLAmbiguitySet(NOMINAL, radius=radius)
+class AmbiguitySetFactory(Protocol):
+    """Build an ambiguity set from a radius and an optional nominal."""
+
+    def __call__(
+        self, radius: float | torch.Tensor, nominal: torch.Tensor = NOMINAL
+    ) -> AmbiguitySet: ...
 
 
-def _chi_square(radius: float | torch.Tensor) -> AmbiguitySet:
-    return ChiSquareAmbiguitySet(NOMINAL, radius=radius)
+def _kl(radius: float | torch.Tensor, nominal: torch.Tensor = NOMINAL) -> AmbiguitySet:
+    return KLAmbiguitySet(nominal, radius=radius)
 
 
-def _total_variation(radius: float | torch.Tensor) -> AmbiguitySet:
-    return TotalVariationAmbiguitySet(NOMINAL, radius=radius)
+def _chi_square(
+    radius: float | torch.Tensor, nominal: torch.Tensor = NOMINAL
+) -> AmbiguitySet:
+    return ChiSquareAmbiguitySet(nominal, radius=radius)
 
 
-def _cvar(radius: float | torch.Tensor) -> AmbiguitySet:
-    return CVaRAmbiguitySet(NOMINAL, alpha=cvar_level(radius))
+def _total_variation(
+    radius: float | torch.Tensor, nominal: torch.Tensor = NOMINAL
+) -> AmbiguitySet:
+    return TotalVariationAmbiguitySet(nominal, radius=radius)
 
 
-def _wasserstein(radius: float | torch.Tensor) -> AmbiguitySet:
-    return WassersteinAmbiguitySet(NOMINAL, cost=COST, radius=radius)
+def _cvar(
+    radius: float | torch.Tensor, nominal: torch.Tensor = NOMINAL
+) -> AmbiguitySet:
+    return CVaRAmbiguitySet(nominal, alpha=cvar_level(radius))
 
 
-def _sinkhorn(radius: float | torch.Tensor) -> AmbiguitySet:
-    return SinkhornAmbiguitySet(NOMINAL, cost=COST, epsilon=0.5, radius=radius)
+def _wasserstein(
+    radius: float | torch.Tensor, nominal: torch.Tensor = NOMINAL
+) -> AmbiguitySet:
+    return WassersteinAmbiguitySet(nominal, cost=COST, radius=radius)
+
+
+def _sinkhorn(
+    radius: float | torch.Tensor, nominal: torch.Tensor = NOMINAL
+) -> AmbiguitySet:
+    return SinkhornAmbiguitySet(nominal, cost=COST, epsilon=0.5, radius=radius)
 
 
 FACTORIES: dict[str, AmbiguitySetFactory] = {
@@ -161,6 +183,68 @@ def test_batched_gradients_match_a_per_row_reference(
 
     assert batched_loss.grad is not None
     assert torch.allclose(batched_loss.grad, torch.stack(expected), atol=1e-6)
+
+
+def test_batched_nominal_broadcasts_against_an_unbatched_loss(
+    factory: AmbiguitySetFactory,
+) -> None:
+    # Issue #66: the nominal may carry more batch dimensions than the loss.
+    loss = BATCHED_LOSS[0]
+    expected = torch.stack(
+        [
+            factory(0.2, nominal).worst_case_expectation(loss)
+            for nominal in BATCHED_NOMINAL
+        ]
+    )
+
+    result = factory(0.2, BATCHED_NOMINAL).worst_case_expectation(loss)
+
+    assert result.shape == (2,)
+    assert torch.allclose(result, expected, atol=1e-6)
+
+
+def test_batched_nominal_and_loss_broadcast_to_their_outer_product(
+    factory: AmbiguitySetFactory,
+) -> None:
+    # A nominal batch of shape (2, 1) against a loss batch of shape (3,)
+    # broadcasts to (2, 3), each entry solved independently.
+    expected = torch.stack(
+        [
+            torch.stack(
+                [
+                    factory(0.2, nominal).worst_case_expectation(row)
+                    for row in BATCHED_LOSS
+                ]
+            )
+            for nominal in BATCHED_NOMINAL
+        ]
+    )
+
+    result = factory(0.2, BATCHED_NOMINAL.unsqueeze(1)).worst_case_expectation(
+        BATCHED_LOSS
+    )
+
+    assert result.shape == (2, 3)
+    assert torch.allclose(result, expected, atol=1e-6)
+
+
+def test_batched_nominal_gradient_is_the_per_nominal_maximizer(
+    factory: AmbiguitySetFactory,
+) -> None:
+    # Summing over the nominal batch accumulates one maximizer per nominal
+    # into the shared loss's gradient.
+    shared_loss = BATCHED_LOSS[0].clone().requires_grad_(True)
+    factory(0.2, BATCHED_NOMINAL).worst_case_expectation(shared_loss).sum().backward()
+
+    expected = torch.zeros_like(BATCHED_LOSS[0])
+    for nominal in BATCHED_NOMINAL:
+        single_loss = BATCHED_LOSS[0].clone().requires_grad_(True)
+        factory(0.2, nominal).worst_case_expectation(single_loss).backward()
+        assert single_loss.grad is not None
+        expected += single_loss.grad
+
+    assert shared_loss.grad is not None
+    assert torch.allclose(shared_loss.grad, expected, atol=1e-6)
 
 
 def test_mismatched_support_size_raises_value_error(

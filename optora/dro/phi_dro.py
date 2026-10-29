@@ -501,8 +501,12 @@ class TotalVariationAmbiguitySet(AmbiguitySet):
             )
 
         nominal = self.nominal.to(working.dtype)
-        sorted_loss, sort_index = torch.sort(working, dim=-1)
-        sorted_nominal = nominal.expand_as(working).gather(-1, sort_index)
+        support_shape = (
+            _broadcast_batch_shapes(loss=working.shape[:-1], nominal=nominal.shape[:-1])
+            + working.shape[-1:]
+        )
+        sorted_loss, sort_index = torch.sort(working.expand(support_shape), dim=-1)
+        sorted_nominal = nominal.expand(support_shape).gather(-1, sort_index)
 
         rest_nominal = sorted_nominal[..., :-1]
         rest_loss = sorted_loss[..., :-1]

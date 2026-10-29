@@ -20,6 +20,7 @@ from optora.core.dro_base import TiltedAmbiguitySet
 from optora.dro.kl_dro import KLAmbiguitySet
 from optora.dro.phi_dro import ChiSquareAmbiguitySet
 from tests.dro.oracles import chi_square_worst_case, kl_worst_case
+from tests.dro.tolerances import feasibility_bound
 
 NOMINAL = torch.tensor([0.1, 0.2, 0.3, 0.4], dtype=torch.float64)
 LOSS = torch.tensor([0.0, 1.0, 2.0, 5.0], dtype=torch.float64)
@@ -199,10 +200,7 @@ def test_gradient_is_a_distribution_inside_the_ambiguity_set(
 ) -> None:
     # By Danskin's theorem the gradient of the worst case with respect to
     # the loss is the worst-case distribution itself, tilted or saturated
-    # alike, so it must be a probability vector the set contains. The
-    # reference divergence cancels to ~0 when the gradient is close to the
-    # nominal, so its rounding has an absolute floor of about n * eps that
-    # the relative slack alone cannot absorb at a vanishing radius.
+    # alike, so it must be a probability vector the set contains.
     saturation = KL_SATURATION if make is _kl else CHI_SQUARE_SATURATION
     radius = multiple * saturation
     ambiguity_set = make(radius)  # type: ignore[operator]
@@ -214,8 +212,7 @@ def test_gradient_is_a_distribution_inside_the_ambiguity_set(
     assert bool((gradient >= 0.0).all())
     assert abs(float(gradient.sum()) - 1.0) <= 1e-12
     divergence = float(ambiguity_set.divergence(gradient, NOMINAL))
-    rounding_floor = NOMINAL.numel() * torch.finfo(NOMINAL.dtype).eps
-    assert divergence <= radius * (1.0 + 1e-9) + rounding_floor
+    assert divergence <= feasibility_bound(radius, NOMINAL.numel(), NOMINAL.dtype)
 
 
 def test_saturated_gradient_is_the_nominal_restricted_to_the_top_scenarios() -> None:
