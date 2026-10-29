@@ -72,6 +72,10 @@ CVAR_LEVELS = (1.0, 1.0 - 1e-8, 0.9, 0.7, 0.5, 0.4, 0.25, 0.1, 1e-3, 1e-12, 0.0)
 # the equivalent dual's minimizer runs off to infinity.
 TILT_RADIUS_FRACTIONS = (1e-10, 1e-6, 0.01, 0.1, 0.3, 0.6, 0.9, 0.99)
 
+# Fractions of the chi-square saturation radius below TILT_RADIUS_FRACTIONS,
+# down to where the radius is about one ulp of the nominal's total mass.
+VANISHING_RADIUS_FRACTIONS = (1e-16, 1e-14, 1e-12)
+
 # Multiples of the saturation radius from exactly at it to far beyond it,
 # where the worst case is the maximum loss.
 SATURATION_MULTIPLES = (1.0, 1.5, 4.0, 20.0, 1e3)
@@ -287,6 +291,26 @@ def test_chi_square_matches_the_active_set_closed_form(
         instance.nominal_array, instance.loss_array, radius
     )
     assert abs(float(result) - reference) <= ORACLE_TOLERANCE
+
+
+@pytest.mark.parametrize("instance", TILT_INSTANCES, ids=TILT_INSTANCE_IDS)
+@pytest.mark.parametrize("fraction", VANISHING_RADIUS_FRACTIONS)
+def test_chi_square_excess_matches_the_closed_form_at_a_vanishing_radius(
+    instance: Instance, fraction: float
+) -> None:
+    # Below 1e-10 the excess over the nominal mean, of order
+    # sqrt(radius * variance), falls under ORACLE_TOLERANCE, so it is
+    # compared relative to itself (issue #56).
+    nominal, loss, _ = instance.tensors()
+    radius = fraction * chi_square_saturation_radius(instance)
+    mean = float(instance.nominal_array @ instance.loss_array)
+
+    result = ChiSquareAmbiguitySet(nominal, radius=radius).worst_case_expectation(loss)
+
+    reference = chi_square_worst_case(
+        instance.nominal_array, instance.loss_array, radius
+    )
+    assert float(result) - mean == pytest.approx(reference - mean, rel=1e-6)
 
 
 @pytest.mark.parametrize("instance", SATURATING_INSTANCES, ids=SATURATING_INSTANCE_IDS)

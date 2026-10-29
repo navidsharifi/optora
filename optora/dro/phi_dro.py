@@ -425,6 +425,13 @@ class TotalVariationAmbiguitySet(AmbiguitySet):
     is implemented as a sort followed by a cumulative-sum sweep rather than
     an iterative solve, so it is both exact and free of solver tuning.
 
+    At tied losses the linear program has many maximizers. The sort is
+    stable, so ties are broken by support index as if a later index had a
+    marginally larger loss: tied low-loss scenarios are drained in index
+    order, and the reallocated mass goes to the last of the tied maxima.
+    The maximizer, and with it the gradient with respect to `loss`, is
+    then the same on every device.
+
     Attributes:
         nominal: Reference distribution the ambiguity set is centered on.
         divergence: `TotalVariationDivergence` instance measuring distance
@@ -505,7 +512,9 @@ class TotalVariationAmbiguitySet(AmbiguitySet):
             _broadcast_batch_shapes(loss=working.shape[:-1], nominal=nominal.shape[:-1])
             + working.shape[-1:]
         )
-        sorted_loss, sort_index = torch.sort(working.expand(support_shape), dim=-1)
+        sorted_loss, sort_index = torch.sort(
+            working.expand(support_shape), dim=-1, stable=True
+        )
         sorted_nominal = nominal.expand(support_shape).gather(-1, sort_index)
 
         rest_nominal = sorted_nominal[..., :-1]
@@ -577,7 +586,9 @@ class CVaRAmbiguitySet(AmbiguitySet):
     and the result is divided by $\alpha$. It is computed as a sort
     followed by a cumulative-sum sweep, as for
     `TotalVariationAmbiguitySet`, so it is exact, solver-free, and
-    synchronization-free.
+    synchronization-free. The sort is stable, so tied losses are filled in
+    support-index order and the maximizer, and with it the gradient with
+    respect to `loss`, is the same on every device.
 
     Attributes:
         nominal: Reference distribution the ambiguity set is centered on.
@@ -701,7 +712,7 @@ class CVaRAmbiguitySet(AmbiguitySet):
             + working.shape[-1:]
         )
         sorted_loss, order = torch.sort(
-            working.expand(support_shape), dim=-1, descending=True
+            working.expand(support_shape), dim=-1, descending=True, stable=True
         )
         sorted_nominal = nominal.expand(support_shape).gather(-1, order)
 

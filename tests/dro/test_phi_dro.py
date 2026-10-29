@@ -81,6 +81,28 @@ def _grid_search_chi_square_dual_minimum(
     return dual_values.min()
 
 
+# Tied losses on a support large enough (n >= 33) that PyTorch's unstable
+# CPU sort reorders equal keys. A total-variation radius of 0.3 ends the
+# drain inside the loss-0 tie group, and a CVaR level of 0.1 ends the tail
+# inside the loss-2 tie group.
+TIED_NOMINAL = torch.linspace(1.0, 2.0, 40, dtype=torch.float64)
+TIED_NOMINAL = TIED_NOMINAL / TIED_NOMINAL.sum()
+TIED_LOSS = (torch.arange(40) % 3).to(torch.float64)
+
+# An index-proportional perturbation far below the unit loss gap, which
+# turns every tie into a strict order without changing any other.
+TIE_BREAK = 1e-6 * torch.arange(40, dtype=torch.float64)
+
+
+def _maximizer(ambiguity_set: AmbiguitySet, loss: torch.Tensor) -> torch.Tensor:
+    """Return the gradient of the worst case at `loss`, its maximizer."""
+    differentiable = loss.clone().requires_grad_(True)
+    (gradient,) = torch.autograd.grad(
+        ambiguity_set.worst_case_expectation(differentiable), differentiable
+    )
+    return gradient
+
+
 # --- PhiAmbiguitySet (generic base) ---------------------------------------
 
 
@@ -601,6 +623,17 @@ def test_total_variation_is_an_ambiguity_set_instance() -> None:
     assert isinstance(TotalVariationAmbiguitySet(nominal, radius=0.1), AmbiguitySet)
 
 
+def test_total_variation_breaks_ties_as_if_a_later_index_had_a_larger_loss() -> None:
+    # Issue #59: at a kink the subgradient is the maximizer of the
+    # index-perturbed loss, whose maximizer is unique, on every device.
+    ambiguity_set = TotalVariationAmbiguitySet(TIED_NOMINAL, radius=0.3)
+
+    tied = _maximizer(ambiguity_set, TIED_LOSS)
+    perturbed = _maximizer(ambiguity_set, TIED_LOSS + TIE_BREAK)
+
+    assert torch.allclose(tied, perturbed, rtol=0.0, atol=1e-12)
+
+
 # --- CVaRAmbiguitySet --------------------------------------------------------
 
 CVAR_NOMINAL = torch.tensor([0.1, 0.2, 0.3, 0.4], dtype=torch.float64)
@@ -791,3 +824,14 @@ def test_cvar_invalid_eps_raises_value_error() -> None:
 
 def test_cvar_is_an_ambiguity_set_instance() -> None:
     assert isinstance(CVaRAmbiguitySet(CVAR_NOMINAL, alpha=0.5), AmbiguitySet)
+
+
+def test_cvar_fills_tied_losses_in_support_index_order() -> None:
+    # The tail boundary falls inside the tie group at loss 2, so the
+    # partially filled scenario must be chosen by index, not by the sort.
+    ambiguity_set = CVaRAmbiguitySet(TIED_NOMINAL, alpha=0.1)
+
+    tied = _maximizer(ambiguity_set, TIED_LOSS)
+    perturbed = _maximizer(ambiguity_set, TIED_LOSS - TIE_BREAK)
+
+    assert torch.allclose(tied, perturbed, rtol=0.0, atol=1e-12)

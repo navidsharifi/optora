@@ -414,9 +414,13 @@ def chi_square_worst_case(nominal: Array, loss: Array, radius: float) -> float:
         active_loss = sorted_loss[:active_size]
         active_nominal = sorted_nominal[:active_size]
         active_mass = float(active_nominal.sum())
+        # The mass outside A is summed directly rather than formed as
+        # 1 - P_A, which cancels to a rounding error of ~1e-16 when A is the
+        # whole support and swamps the budget at a vanishing radius.
+        excluded_mass = float(sorted_nominal[active_size:].sum())
         mean = float(active_nominal @ active_loss) / active_mass
         variance = float(active_nominal @ (active_loss - mean) ** 2)
-        budget = radius - (1.0 - active_mass) / active_mass
+        budget = radius - excluded_mass / active_mass
         if budget < 0.0 or variance <= 0.0:
             continue
         inverse_eta = np.sqrt(budget / variance)
