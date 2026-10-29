@@ -16,6 +16,11 @@ concurrency:
 
 env:
   TORCH_INDEX_URL: https://download.pytorch.org/whl/cpu
+  # pip's default 5 retries back off for about 8 seconds in total, too short
+  # to ride out a transient runner DNS outage. 10 retries stretch that to
+  # about 4 minutes. Every pip call inherits this, including the one inside
+  # actions/setup-python and the isolated venv of tools.smoke.
+  PIP_RETRIES: "10"
 
 jobs:
   tests:
