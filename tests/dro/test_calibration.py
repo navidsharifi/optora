@@ -206,6 +206,154 @@ class TestPhiDivergenceRadius:
         _assert_coverage(upper >= 0.0, confidence)
 
 
+def _vector_mean_coverage(
+    radius_function: RadiusFunction,
+    set_class: type[AmbiguitySet],
+    confidence: float,
+    degrees_of_freedom: int,
+    dimension: int,
+) -> torch.Tensor:
+    """Return, per replication, whether the profile region covers a zero mean.
+
+    With $\\delta = \\mu_0 - \\bar x$ and the plug-in covariance
+    $\\hat\\Sigma$, the direction $u = \\hat\\Sigma^{-1} \\delta$ is the one
+    along which the region is most likely to miss $\\mu_0$: to first order the
+    worst case of $u^\\top x$ exceeds $u^\\top \\mu_0$ exactly when
+    $n\\, \\delta^\\top \\hat\\Sigma^{-1} \\delta$ is below the quantile the
+    radius was calibrated with. So the region covers $\\mu_0 = 0$ iff that
+    one worst case is nonnegative.
+    """
+    num_samples, replications = 200, 4000
+    generator = torch.Generator().manual_seed(degrees_of_freedom + 10 * dimension)
+    samples = torch.randn(
+        replications, num_samples, dimension, generator=generator, dtype=DTYPE
+    )
+    mean = samples.mean(dim=-2)
+    centered = samples - mean[:, None, :]
+    covariance = centered.mT @ centered / num_samples
+    direction = torch.linalg.solve(covariance, -mean)
+    loss = (samples @ direction[..., None]).squeeze(-1)
+    radius = radius_function(
+        num_samples, confidence, degrees_of_freedom=degrees_of_freedom
+    )
+
+    upper = set_class(_uniform(num_samples), radius=radius).worst_case_expectation(loss)
+    return upper >= 0.0
+
+
+class TestDegreesOfFreedom:
+    """Radii calibrated with the chi-square quantile of a d-dimensional parameter."""
+
+    @pytest.mark.parametrize("confidence", [0.5, 0.9, 0.95, 0.99])
+    @pytest.mark.parametrize("degrees_of_freedom", [1, 2, 3, 5, 10, 100])
+    def test_radius_is_the_chi_square_quantile_with_d_degrees_of_freedom(
+        self, degrees_of_freedom: int, confidence: float
+    ) -> None:
+        quantile = stats.chi2.ppf(confidence, df=degrees_of_freedom)
+
+        assert chi_square_radius(
+            37, confidence, degrees_of_freedom=degrees_of_freedom
+        ) == pytest.approx(quantile / 37, rel=1e-12)
+        assert kl_radius(
+            37, confidence, degrees_of_freedom=degrees_of_freedom
+        ) == pytest.approx(quantile / 74, rel=1e-12)
+
+    @pytest.mark.parametrize(
+        ("degrees_of_freedom", "confidence"),
+        [
+            *(
+                (dimension, level)
+                for dimension in (2, 3, 4, 7, 50, 1000, 100_000)
+                for level in (1e-12, 0.01, 0.4999, 0.5, 0.95, 1.0 - 1e-14)
+            ),
+            # SciPy's own lower-tail quantile is only reliable this deep in
+            # the tail for a small number of degrees of freedom.
+            *((dimension, 1e-300) for dimension in (2, 3, 4, 7, 50)),
+        ],
+    )
+    def test_quantile_keeps_its_precision_in_both_tails(
+        self, degrees_of_freedom: int, confidence: float
+    ) -> None:
+        if confidence < 0.5:
+            reference = stats.chi2.ppf(confidence, df=degrees_of_freedom)
+        else:
+            reference = stats.chi2.isf(1.0 - confidence, df=degrees_of_freedom)
+
+        result = chi_square_radius(1, confidence, degrees_of_freedom=degrees_of_freedom)
+
+        assert result == pytest.approx(reference, rel=1e-12)
+
+    @pytest.mark.parametrize("confidence", [0.1, 0.9, 0.999999])
+    def test_two_degrees_of_freedom_is_the_exponential_quantile(
+        self, confidence: float
+    ) -> None:
+        result = chi_square_radius(1, confidence, degrees_of_freedom=2)
+
+        assert result == pytest.approx(-2.0 * math.log1p(-confidence), rel=1e-13)
+
+    def test_one_degree_of_freedom_is_the_default(self) -> None:
+        assert chi_square_radius(12, 0.9, degrees_of_freedom=1) == chi_square_radius(
+            12, 0.9
+        )
+        assert kl_radius(12, 0.9, True, 1) == kl_radius(12, 0.9, True)
+
+    def test_radius_grows_with_the_dimension(self) -> None:
+        radii = [
+            phi_divergence_radius(50, 0.95, 2.0, degrees_of_freedom=dimension)
+            for dimension in range(1, 30)
+        ]
+
+        assert radii == sorted(radii)
+        assert len(set(radii)) == len(radii)
+
+    def test_returns_a_python_float(self) -> None:
+        assert type(kl_radius(5, 0.9, degrees_of_freedom=4)) is float
+
+    @pytest.mark.parametrize("degrees_of_freedom", [0, -2, 1.5, True, "3"], ids=repr)
+    def test_rejects_a_non_positive_integer(self, degrees_of_freedom: Any) -> None:
+        with pytest.raises(ValueError, match="degrees_of_freedom"):
+            chi_square_radius(10, 0.9, degrees_of_freedom=degrees_of_freedom)
+
+    def test_rejects_a_one_sided_vector_calibration(self) -> None:
+        with pytest.raises(ValueError, match="one_sided"):
+            kl_radius(10, 0.9, one_sided=True, degrees_of_freedom=2)
+
+    @pytest.mark.parametrize("confidence", [0.0, 1.0, float("nan")])
+    def test_rejects_confidence_outside_the_unit_interval(
+        self, confidence: float
+    ) -> None:
+        with pytest.raises(ValueError, match=r"confidence must lie in \(0, 1\)"):
+            chi_square_radius(10, confidence, degrees_of_freedom=3)
+
+    @pytest.mark.parametrize("confidence", [0.8, 0.95])
+    def test_region_covers_a_vector_mean(
+        self,
+        calibrated_set: tuple[RadiusFunction, type[AmbiguitySet]],
+        confidence: float,
+    ) -> None:
+        radius_function, set_class = calibrated_set
+
+        covered = _vector_mean_coverage(
+            radius_function, set_class, confidence, degrees_of_freedom=3, dimension=3
+        )
+
+        _assert_coverage(covered, confidence)
+
+    def test_scalar_calibration_undercovers_a_vector_mean(self) -> None:
+        # With d = 1 the region covers a 3-dimensional mean with probability
+        # P(chi2_3 <= chi2_{1, 0.95}) ~ 0.72, far below the 0.95 asked for.
+        covered = _vector_mean_coverage(
+            chi_square_radius,
+            ChiSquareAmbiguitySet,
+            0.95,
+            degrees_of_freedom=1,
+            dimension=3,
+        )
+
+        expected = stats.chi2.cdf(stats.chi2.ppf(0.95, df=1), df=3)
+        assert float(covered.to(DTYPE).mean()) == pytest.approx(expected, abs=0.03)
+
+
 class TestWassersteinRadius:
     """Plug-in robust Wasserstein profile radii for the quadratic cost."""
 
