@@ -64,6 +64,7 @@ def test_sinkhorn_divergence(guarded_benchmark: Callable[..., Any]) -> None:
         max_iter=max_iter,
         tol=1e-30,
         check_interval=check_interval,
+        newton_max_iter=0,
     )
 
     value = guarded_benchmark(

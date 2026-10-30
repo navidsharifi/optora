@@ -493,14 +493,24 @@ def test_sinkhorn_parameters_are_passed_through_to_divergence() -> None:
         epsilon=0.02,
         sinkhorn_max_iter=50,
         sinkhorn_tol=1e-4,
-        eps=1e-10,
     )
 
     assert isinstance(ambiguity_set.divergence, SinkhornDivergence)
     assert ambiguity_set.divergence.epsilon == 0.02
     assert ambiguity_set.divergence.max_iter == 50
     assert ambiguity_set.divergence.tol == 1e-4
-    assert ambiguity_set.divergence.eps == 1e-10
+
+
+def test_eps_is_deprecated_and_ignored() -> None:
+    nominal = torch.tensor([0.5, 0.5])
+    cost = torch.tensor([[0.0, 1.0], [1.0, 0.0]])
+
+    with pytest.warns(DeprecationWarning, match="eps is deprecated"):
+        ambiguity_set = WassersteinAmbiguitySet(
+            nominal, cost=cost, radius=0.1, eps=1e-10
+        )
+
+    assert ambiguity_set.divergence.eps is None
 
 
 def test_cost_is_not_duplicated_as_a_separate_buffer() -> None:

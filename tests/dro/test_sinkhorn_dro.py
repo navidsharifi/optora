@@ -295,10 +295,12 @@ def test_gradient_is_a_distribution_inside_the_ball_attaining_the_worst_case(
         epsilon,
     )
     assert divergence <= radius * (1.0 + 1e-6) + 1e-9
-    # The divergence `contains` uses excludes zero-mass rows and columns
-    # exactly, so it agrees with the reference to the solve tolerance alone.
+    # The divergence `contains` uses agrees with the reference up to what
+    # its tol of 1e-9 on the L1 marginal violation resolves: a candidate that
+    # differs from the smoothed nominal only where the kernel is ~e^-40 meets
+    # that tol before the solve moves at all.
     measured = float(ambiguity_set.divergence(candidate, ambiguity_set.nominal))
-    assert measured == pytest.approx(divergence, rel=1e-6, abs=1e-12)
+    assert measured == pytest.approx(divergence, rel=1e-6, abs=1e-9)
 
 
 SMOOTH = (

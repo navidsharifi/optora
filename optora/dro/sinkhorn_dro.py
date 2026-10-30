@@ -6,10 +6,8 @@ import torch
 
 from optora.core.convergence import DEFAULT_CHECK_INTERVAL
 from optora.core.dro_base import TiltedAmbiguitySet
-from optora.divergences.entropic_transport import (
-    EntropicTransportDivergence,
-    _warn_deprecated_eps,
-)
+from optora.divergences._entropic import warn_deprecated_eps
+from optora.divergences.entropic_transport import EntropicTransportDivergence
 
 # Divergence above which a row's KL divergence is read from its direct form
 # rather than its centered form, as in `optora.dro.kl_dro`.
@@ -116,7 +114,7 @@ class SinkhornAmbiguitySet(TiltedAmbiguitySet):
                 f"to match nominal, got {tuple(cost.shape)}."
             )
         if eps is not None:
-            _warn_deprecated_eps(stacklevel=2)
+            warn_deprecated_eps(stacklevel=2)
         super().__init__(
             nominal=nominal,
             divergence=EntropicTransportDivergence(
