@@ -346,7 +346,7 @@ def test_mixed_second_derivatives_are_symmetric(name: str, build: Builder) -> No
     assert float(loss_by_radius.abs().max()) > 1e-3
 
 
-@select_builders(frozenset({"kl", "chi_square"}))
+@select_builders(TILTED)
 def test_torch_func_hessian_in_every_input_matches_reverse_over_reverse(
     name: str, build: Builder
 ) -> None:
