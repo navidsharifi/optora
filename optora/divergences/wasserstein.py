@@ -2,13 +2,14 @@
 
 import torch
 
-from optora.core.convergence import (
-    DEFAULT_CHECK_INTERVAL,
-    ConvergenceTracker,
-    validate_check_interval,
-)
+from optora.core.convergence import DEFAULT_CHECK_INTERVAL, validate_check_interval
 from optora.core.divergence_base import Divergence
 from optora.core.precision import working_dtype
+from optora.divergences._entropic import (
+    log_on_support,
+    solve_semi_dual,
+    warn_deprecated_eps,
+)
 
 
 class SinkhornDivergence(Divergence):
@@ -26,17 +27,37 @@ class SinkhornDivergence(Divergence):
 
     where $U(p, q)$ is the set of transport plans (joint distributions) with
     marginals `p` and `q`, and $\epsilon$ is the entropic regularization
-    strength. Sinkhorn's algorithm computes the minimizing plan $\pi$ by
-    alternately updating dual potentials `f` and `g` until both marginal
-    constraints hold, and $\mathrm{OT}_\epsilon$ is then read off as
-    $\langle \mathrm{cost}, \pi \rangle$ for the converged plan
-    $\pi = \exp\!\big((f \oplus g - \mathrm{cost}) / \epsilon\big)$. The
-    potential updates are computed with `torch.logsumexp` (the log-sum-exp
-    trick) rather than by forming the Gibbs kernel
-    $\exp(-\mathrm{cost} / \epsilon)$ directly: that kernel underflows to
-    exact zero for small $\epsilon$ or large `cost`, which silently collapses
-    the whole divergence to zero instead of raising an error, so it is
-    avoided rather than merely guarded against with a larger $\epsilon$.
+    strength. It is evaluated through its dual (Feydy et al. 2019),
+
+    $$
+    \mathrm{OT}_\epsilon(p, q) = \max_{f, g} \; \langle f, p \rangle
+        + \langle g, q \rangle
+        - \epsilon \big\langle p \otimes q,\,
+        e^{(f \oplus g - \mathrm{cost}) / \epsilon} - 1 \big\rangle
+        + c(p, q),
+    $$
+
+    where $c(p, q) = -\epsilon \sum_i p_i \log p_i - \epsilon \sum_j q_j
+    \log q_j - \epsilon$ collects terms that cancel in the debiased
+    divergence below and are therefore dropped. The potentials stay finite
+    even where `p` or `q` has no mass, and zero-mass entries are excluded
+    from the solve exactly rather than clamped. The dual is maximized by
+    log-domain Sinkhorn scaling and, if that stops short, a damped Newton
+    polish (the solver `optora.divergences.EntropicTransportDivergence`
+    uses), both stopping on the L1 marginal violation of the plan.
+    Updates go through `torch.logsumexp` rather than the Gibbs kernel
+    $\exp(-\mathrm{cost} / \epsilon)$, which underflows to exact zero for
+    small $\epsilon$ or large `cost`.
+
+    The value is the dual objective at the final potentials, with $f$ the
+    exact $c$-transform of $g$, rather than the transport cost
+    $\langle \mathrm{cost}, \pi \rangle$ of the final plan: every dual point
+    bounds $\mathrm{OT}_\epsilon$ from below and is off by an amount
+    second order in the marginal violation, where the plan, which does not
+    meet its marginals until the solve converges, would be off to first
+    order. The potentials are held fixed under autograd, so by the
+    envelope theorem the gradients, $f$ in `p` and $g$ in `q`, are exact
+    once the solve has converged.
 
     Plain entropic OT cost is biased: $\mathrm{OT}_\epsilon(p, p)$ is not
     exactly zero for `eps > 0`. This class instead computes the debiased
@@ -63,15 +84,16 @@ class SinkhornDivergence(Divergence):
             approximate the exact Wasserstein distance more closely at the
             cost of more Sinkhorn iterations to converge.
         max_iter: Maximum number of Sinkhorn scaling iterations.
-        tol: Convergence tolerance on the largest change in a row dual
-            potential between iterations, taken over the whole batched
-            problem so it stops when its slowest element does.
-        eps: Small positive constant used to clamp `p` and `q` away from
-            zero before taking the logarithm, avoiding `log(0)` without
-            branching.
+        tol: Convergence tolerance on the L1 marginal violation of the
+            transport plan, taken over the whole batched problem so it stops
+            when its slowest element does, and floored at $n$ times the
+            machine epsilon of the working dtype.
+        eps: Deprecated and unused; `None` unless passed explicitly.
         check_interval: Number of Sinkhorn iterations between host reads of
             the convergence flag. The potentials are frozen once converged,
             so the divergence does not depend on this interval.
+        newton_max_iter: Maximum number of damped Newton iterations run
+            after Sinkhorn stops short of `tol`; zero disables the phase.
     """
 
     cost: torch.Tensor
@@ -82,9 +104,10 @@ class SinkhornDivergence(Divergence):
         epsilon: float = 0.1,
         max_iter: int = 100,
         tol: float = 1e-6,
-        eps: float = 1e-12,
+        eps: float | None = None,
         check_interval: int = DEFAULT_CHECK_INTERVAL,
         validate: bool = False,
+        newton_max_iter: int = 50,
     ) -> None:
         """Initialize the Sinkhorn divergence.
 
@@ -93,11 +116,14 @@ class SinkhornDivergence(Divergence):
                 the shared support points of `p` and `q`, shape `(n, n)`.
             epsilon: Positive entropic regularization strength.
             max_iter: Maximum number of Sinkhorn scaling iterations.
-            tol: Convergence tolerance on the largest change in a row dual
-                potential between iterations, taken over the whole batched
-                problem.
-            eps: Small positive constant used to clamp `p` and `q` away
-                from zero before taking the logarithm.
+            tol: Convergence tolerance on the L1 marginal violation of the
+                transport plan, over the whole batched problem. It is floored
+                at `n` times the machine epsilon of the working dtype, below
+                which the violation is rounding error.
+            eps: Deprecated and ignored. Zero-mass entries of `p` and `q`
+                are excluded from the solve exactly, so there is nothing
+                left to clamp; passing it emits a `DeprecationWarning`, and
+                it will be removed in a future minor release.
             check_interval: Number of Sinkhorn iterations between host
                 reads of the convergence flag. Raise it to trade redundant
                 frozen iterations for fewer device synchronizations.
@@ -107,12 +133,16 @@ class SinkhornDivergence(Divergence):
                 and off by default to keep construction asynchronous. The
                 shape and hyperparameter checks are metadata-only and
                 always run.
+            newton_max_iter: Maximum number of damped Newton iterations run
+                after Sinkhorn stops short of `tol`. Each solves one
+                `(n, n)` linear system per transport problem; zero disables
+                the phase.
 
         Raises:
             ValueError: If `cost` is not a square 2D tensor, if `validate`
-                is set and `cost` contains negative entries, or if
-                `epsilon`, `max_iter`, `tol`, `eps`, or `check_interval`
-                are not positive.
+                is set and `cost` contains negative entries, if `epsilon`,
+                `max_iter`, `tol`, or `check_interval` are not positive, or
+                if `newton_max_iter` is negative.
         """
         super().__init__()
         if cost.ndim != 2 or cost.shape[0] != cost.shape[1]:
@@ -127,11 +157,16 @@ class SinkhornDivergence(Divergence):
             raise ValueError(f"max_iter must be positive, got {max_iter}.")
         if tol <= 0:
             raise ValueError(f"tol must be positive, got {tol}.")
-        if eps <= 0:
-            raise ValueError(f"eps must be positive, got {eps}.")
+        if newton_max_iter < 0:
+            raise ValueError(
+                f"newton_max_iter must be nonnegative, got {newton_max_iter}."
+            )
+        if eps is not None:
+            warn_deprecated_eps(stacklevel=2)
         self.register_buffer("cost", cost)
         self.epsilon = epsilon
         self.max_iter = max_iter
+        self.newton_max_iter = newton_max_iter
         self.tol = tol
         self.eps = eps
         self.check_interval = validate_check_interval(check_interval)
@@ -192,7 +227,26 @@ class SinkhornDivergence(Divergence):
     def _entropic_transport_cost(
         self, p: torch.Tensor, q: torch.Tensor
     ) -> torch.Tensor:
-        r"""Compute the entropic optimal transport cost $\mathrm{OT}_\epsilon(p, q)$.
+        r"""Compute $\mathrm{OT}_\epsilon(p, q)$ up to the terms debiasing cancels.
+
+        With the scaled potentials $\phi = f / \epsilon$ and $\psi = g /
+        \epsilon$, the dual over $g$ alone is the semi-dual the shared
+        solver maximizes, for the row-stochastic kernel $\log Q_{ij} =
+        -C_{ij}/\epsilon - r_i$ with $r_i = \log \sum_k e^{-C_{ik}/\epsilon}$,
+        in the column potentials $h_j = \psi_j + \log q_j$. From its
+        maximizer the row potential is the exact $c$-transform
+
+        $$
+        \phi_i = -\log \sum_j q_j\, e^{\psi_j - C_{ij}/\epsilon}
+        = -\log \sum_j Q_{ij} e^{h_j} - r_i,
+        $$
+
+        under which the plan's rows meet `p` exactly and its total mass is
+        one, so the dual objective reduces to $\epsilon (\langle \phi, p
+        \rangle + \langle \psi, q \rangle)$. A column with $q_j = 0$ is
+        outside the solve; its potential, which only its gradient needs, is
+        the $c$-transform $\psi_j = -\log \sum_i p_i e^{\phi_i -
+        C_{ij}/\epsilon}$.
 
         Args:
             p: Row marginals, a nonnegative tensor of shape `(..., n)` whose
@@ -201,81 +255,28 @@ class SinkhornDivergence(Divergence):
                 whose last dimension sums to one.
 
         Returns:
-            A tensor of shape `batch_shape` holding
-            $\langle \mathrm{cost}, \pi \rangle$ for each transport plan
-            `pi` produced by Sinkhorn's algorithm.
-        """
-        transport_plan = self._sinkhorn(p, q)
-        return torch.sum(transport_plan * self.cost.to(p.dtype), dim=(-2, -1))
-
-    def _sinkhorn(self, p: torch.Tensor, q: torch.Tensor) -> torch.Tensor:
-        r"""Run Sinkhorn's algorithm to compute entropic transport plans.
-
-        Updates the dual potentials `f` and `g` in the log domain via
-        `torch.logsumexp` rather than rescaling `u = p / (kernel @ v)`
-        against the raw Gibbs kernel $\exp(-\mathrm{cost} / \epsilon)$: the
-        two are algebraically equivalent ($f = \epsilon \log u$,
-        $g = \epsilon \log v$), but the raw kernel underflows to exact zero
-        for small $\epsilon$ or large `cost`, while `logsumexp` stays
-        accurate in that regime by construction.
-
-        Leading batch dimensions run as one loop over a stack of transport
-        problems sharing the ground cost. The stopping test is the largest
-        potential update over the whole batch, so the batch stops when its
-        slowest element does and every element is at least as converged as
-        a solo run would leave it.
-
-        The stopping test on `f` runs on the potentials' device and is read
-        back to the host only every `check_interval` iterations; the
-        potentials are frozen once converged, so the returned plans are the
-        same ones a per-iteration test would produce.
-
-        Args:
-            p: Row marginals, a nonnegative tensor of shape `(..., n)` whose
-                last dimension sums to one.
-            q: Column marginals, a nonnegative tensor of shape `(..., n)`
-                whose last dimension sums to one.
-
-        Returns:
-            The converged transport plans
-            $\pi = \exp\!\big((f \oplus g - \mathrm{cost}) / \epsilon\big)$,
-            a tensor of shape `(..., n, n)` whose row sums approximate `p`
-            and whose column sums approximate `q`.
+            A tensor of shape `batch_shape` holding the dual value of each
+            transport problem.
         """
         scaled_cost = self.cost.to(p.dtype) / self.epsilon
-        log_p = torch.log(torch.clamp(p, min=self.eps))
-        log_q = torch.log(torch.clamp(q, min=self.eps))
-        f = torch.zeros_like(p)
-        g = torch.zeros_like(q)
-        tracker = ConvergenceTracker(self.tol, self.check_interval, f)
-        for iteration in range(self.max_iter):
-            f_prev = f
-            f = torch.where(
-                tracker.converged,
-                f,
-                self.epsilon
-                * (
-                    log_p
-                    - torch.logsumexp(
-                        g.unsqueeze(-2) / self.epsilon - scaled_cost, dim=-1
-                    )
-                ),
-            )
-            g = torch.where(
-                tracker.converged,
-                g,
-                self.epsilon
-                * (
-                    log_q
-                    - torch.logsumexp(
-                        f.unsqueeze(-1) / self.epsilon - scaled_cost, dim=-2
-                    )
-                ),
-            )
-            tracker.update(torch.max(torch.abs(f - f_prev)))
-            if tracker.should_stop(iteration):
-                break
-        scaled_potentials = (
-            f.unsqueeze(-1) / self.epsilon + g.unsqueeze(-2) / self.epsilon
+        row_normalizer = torch.logsumexp(-scaled_cost, dim=-1)
+        log_kernel = -scaled_cost - row_normalizer.unsqueeze(-1)
+        column_potential = solve_semi_dual(
+            p,
+            q,
+            log_kernel,
+            self.tol,
+            self.max_iter,
+            self.newton_max_iter,
+            self.check_interval,
         )
-        return torch.exp(scaled_potentials - scaled_cost)
+        with torch.no_grad():
+            phi = -(
+                torch.logsumexp(column_potential.unsqueeze(-2) + log_kernel, dim=-1)
+                + row_normalizer
+            )
+            transform = -torch.logsumexp(
+                (log_on_support(p) + phi).unsqueeze(-1) - scaled_cost, dim=-2
+            )
+            psi = torch.where(q > 0.0, column_potential - log_on_support(q), transform)
+        return self.epsilon * (torch.sum(p * phi, dim=-1) + torch.sum(q * psi, dim=-1))

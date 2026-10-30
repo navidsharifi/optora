@@ -187,9 +187,10 @@ class KLAmbiguitySet(TiltedAmbiguitySet):
         Returns:
             The tilted distribution and its KL divergence from `nominal`.
         """
+        nominal = self._constant_nominal
         log_nominal = self.log_nominal
-        if log_nominal.dtype != gap.dtype:
-            log_nominal = _log_on_support(self._constant_nominal.to(gap.dtype))
+        if log_nominal.dtype != gap.dtype or self._nominal_is_attached:
+            log_nominal = _log_on_support(nominal.to(gap.dtype))
         rate = self._tilt_rate(tilt)
         log_weight = log_nominal - rate * gap
         log_normalizer = torch.logsumexp(log_weight, dim=-1, keepdim=True)
@@ -200,7 +201,7 @@ class KLAmbiguitySet(TiltedAmbiguitySet):
         # Both clamps only touch the regime where `near` is discarded; they
         # keep that branch and its derivative finite.
         centered = torch.clamp(largest_exponent - rate * gap, max=exponent_limit)
-        excess = torch.sum(self._constant_nominal * torch.expm1(centered), dim=-1)
+        excess = torch.sum(nominal * torch.expm1(centered), dim=-1)
         near = -torch.log1p(torch.clamp(excess, min=_NEAR_EXCESS_FLOOR))
         far = -(largest_exponent + log_normalizer).squeeze(-1)
         use_far = (far > _LARGE_DIVERGENCE) | (

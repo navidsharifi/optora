@@ -6,6 +6,7 @@ from typing import cast
 import torch
 
 from optora.core.dro_base import AmbiguitySet
+from optora.divergences._entropic import warn_deprecated_eps
 from optora.divergences.wasserstein import SinkhornDivergence
 
 _BISECTION_HEADROOM = 2
@@ -191,7 +192,7 @@ class WassersteinAmbiguitySet(AmbiguitySet):
         epsilon: float = 0.1,
         sinkhorn_max_iter: int = 100,
         sinkhorn_tol: float = 1e-6,
-        eps: float = 1e-12,
+        eps: float | None = None,
         validate: bool = False,
     ) -> None:
         """Initialize the Wasserstein-DRO ambiguity set.
@@ -212,11 +213,10 @@ class WassersteinAmbiguitySet(AmbiguitySet):
                 `SinkhornDivergence` used by `contains(...)`.
             sinkhorn_max_iter: Maximum number of Sinkhorn scaling
                 iterations, passed through to `SinkhornDivergence`.
-            sinkhorn_tol: Sinkhorn scaling convergence tolerance, passed
-                through to `SinkhornDivergence`.
-            eps: Small positive constant used to clamp Sinkhorn scaling
-                denominators away from zero, passed through to
-                `SinkhornDivergence`.
+            sinkhorn_tol: Tolerance on the L1 marginal violation of the
+                Sinkhorn plan, passed through to `SinkhornDivergence`.
+            eps: Deprecated and ignored, as in `SinkhornDivergence`;
+                passing it emits a `DeprecationWarning`.
             validate: Whether to check that `cost` is nonnegative, passed
                 through to `SinkhornDivergence`, and that `nominal` is a
                 valid probability distribution. The checks read reductions
@@ -238,6 +238,8 @@ class WassersteinAmbiguitySet(AmbiguitySet):
                 "cost must have shape (n, n) matching nominal's support "
                 f"size {nominal.shape[-1]}, got cost shape {tuple(cost.shape)}."
             )
+        if eps is not None:
+            warn_deprecated_eps(stacklevel=2)
         super().__init__(
             nominal=nominal,
             divergence=SinkhornDivergence(
@@ -245,7 +247,6 @@ class WassersteinAmbiguitySet(AmbiguitySet):
                 epsilon=epsilon,
                 max_iter=sinkhorn_max_iter,
                 tol=sinkhorn_tol,
-                eps=eps,
                 validate=validate,
             ),
             radius=radius,

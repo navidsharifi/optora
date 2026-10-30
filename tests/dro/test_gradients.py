@@ -25,7 +25,8 @@ attaining the worst case, which is what makes it a subgradient at a kink.
 `PhiAmbiguitySet` is not in `tests.dro.specs.SPECS` and is checked
 separately at the end of the module: its first and second derivatives are
 exact once the inner dual solve has converged, the second through the
-implicit-function term built from the dual Hessian.
+implicit-function term built from the dual Hessian, and they agree under
+`torch.func` transforms.
 """
 
 from collections.abc import Callable
@@ -338,7 +339,7 @@ def test_first_order_backward_does_not_rebuild_the_maximizer(
     def unexpected(*_: object) -> torch.Tensor:
         raise AssertionError("a first-order backward rebuilt the maximizer")
 
-    monkeypatch.setattr(ambiguity_set, "_implicit_maximizer", unexpected)
+    monkeypatch.setattr(ambiguity_set, "_implicit_solution", unexpected)
     loss = leaf_loss(GENERIC)
     ambiguity_set.worst_case_expectation(loss).backward()
 
@@ -517,3 +518,74 @@ def test_phi_set_mixed_loss_radius_derivative_matches_finite_differences() -> No
     ) / (2.0 * step)
 
     torch.testing.assert_close(mixed, expected, rtol=0.0, atol=1e-6)
+
+
+def _fresh_phi_function(
+    nominal: torch.Tensor, max_iter: int = 200_000
+) -> Callable[[torch.Tensor], torch.Tensor]:
+    """Return a worst case that builds its set per call, so no warm start leaks."""
+
+    def function(loss: torch.Tensor) -> torch.Tensor:
+        ambiguity_set = _kl_phi_ambiguity_set(nominal, 0.3)
+        assert isinstance(ambiguity_set.dual_solver, GradientDescent)
+        ambiguity_set.dual_solver.max_iter = max_iter
+        return ambiguity_set.worst_case_expectation(loss)
+
+    return function
+
+
+def test_phi_set_torch_func_transforms_match_reverse_over_reverse_autograd() -> None:
+    # Issue #78: the inner dual solve used to call `requires_grad_`, which
+    # every `torch.func` transform rejects.
+    nominal, loss, _ = GENERIC.tensors()
+    function = _fresh_phi_function(nominal)
+    expected = torch.autograd.functional.hessian(function, loss)
+
+    torch.testing.assert_close(
+        torch.func.grad(function)(loss), gradient(function, loss), rtol=0.0, atol=1e-12
+    )
+    torch.testing.assert_close(
+        torch.func.hessian(function)(loss), expected, rtol=0.0, atol=1e-10
+    )
+    torch.testing.assert_close(
+        torch.func.jacrev(torch.func.jacrev(function))(loss),
+        expected,
+        rtol=0.0,
+        atol=1e-10,
+    )
+
+
+def test_phi_set_torch_func_vmap_matches_a_batched_call() -> None:
+    # Under vmap the dual solve runs its whole budget, kept small here.
+    nominal, loss, _ = GENERIC.tensors()
+    function = _fresh_phi_function(nominal, max_iter=5_000)
+    batch = torch.stack([loss, loss.flip(-1), -loss])
+
+    torch.testing.assert_close(
+        torch.func.vmap(function)(batch), function(batch), rtol=0.0, atol=1e-10
+    )
+
+
+def test_phi_set_parameter_gradients_under_torch_func_match_autograd() -> None:
+    nominal, loss, _ = GENERIC.tensors()
+
+    def function(nominal: torch.Tensor, radius: torch.Tensor) -> torch.Tensor:
+        return _kl_phi_ambiguity_set(nominal, radius).worst_case_expectation(loss)
+
+    radius = torch.tensor(0.3, dtype=torch.float64)
+    leaves = (nominal.clone().requires_grad_(True), radius.clone().requires_grad_(True))
+    expected = torch.autograd.grad(function(*leaves), leaves)
+
+    actual = torch.func.grad(function, argnums=(0, 1))(nominal, radius)
+
+    torch.testing.assert_close(actual, expected, rtol=0.0, atol=1e-12)
+
+
+def test_phi_set_keeps_no_warm_start_from_inside_a_transform() -> None:
+    # A transformed dual optimum cached on the module would outlive the call.
+    nominal, loss, _ = GENERIC.tensors()
+    ambiguity_set = _kl_phi_ambiguity_set(nominal, 0.3)
+
+    torch.func.grad(ambiguity_set.worst_case_expectation)(loss)
+
+    assert ambiguity_set._dual_warm_start is None

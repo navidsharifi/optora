@@ -142,3 +142,30 @@ def test_status_caches_the_diagnostics_it_reads_back(
             assert status.num_iterations == 1
 
     assert len(syncs) == 2
+
+
+def test_a_batched_flag_under_vmap_is_never_read_on_the_host() -> None:
+    # Inside vmap each mapped element has its own flag, so there is no single
+    # value to read: the loop runs its whole budget, frozen once converged.
+    def iterate(residual: torch.Tensor) -> torch.Tensor:
+        tracker = ConvergenceTracker(1e-3, 1, residual)
+        stops = []
+        for iteration in range(3):
+            tracker.update(residual)
+            stops.append(tracker.should_stop(iteration))
+        assert stops == [False, False, False]
+        return tracker.converged
+
+    converged = torch.func.vmap(iterate)(torch.tensor([1e-6, 1.0]))
+
+    assert converged.tolist() == [True, False]
+
+
+def test_an_unbatched_flag_under_vmap_is_still_read() -> None:
+    def iterate(point: torch.Tensor) -> torch.Tensor:
+        tracker = ConvergenceTracker(1e-3, 1, point)
+        tracker.update(torch.tensor(0.0))
+        assert tracker.should_stop(0)
+        return point
+
+    torch.func.vmap(iterate)(torch.ones(2))

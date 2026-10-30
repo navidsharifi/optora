@@ -103,13 +103,22 @@ Hessians and Hessian-vector products of the worst case with respect to
 `loss` are exact too: `create_graph=True`,
 `torch.autograd.functional.hessian`, and `torch.func.hessian` all work.
 
-=== "KL and chi-square"
+=== "KL, chi-square, and Sinkhorn"
 
     The worst case is curved in `loss`, so a detached $q^\star$ alone would
     report a zero Hessian. A recorded backward pass instead rebuilds
     $q^\star$ from the solved tilt by one implicit-function step, which has
-    exactly the Jacobian $\partial q^\star / \partial \ell$. A plain
+    exactly the Jacobian $\partial q^\star / \partial \ell$, and the same
+    step in `nominal` and `radius` gives the mixed derivatives. A plain
     `.backward()` never pays for that step.
+
+=== "MMD"
+
+    The worst case is curved in `loss`. A zero-valued term built from the
+    implicit function theorem on the optimality conditions over the
+    maximizer's support supplies the Jacobian $\partial q^\star / \partial
+    \ell$, so the Hessian is exact once the interior-point solve has
+    converged. It is built only when `loss` requires grad.
 
 === "Total variation and Wasserstein"
 
@@ -128,14 +137,24 @@ Hessians and Hessian-vector products of the worst case with respect to
     The term costs a few passes over the dual objective per call, against
     the solve's many, and is skipped when nothing requires grad.
 
+    `torch.func` transforms work too: inside one the inner
+    `GradientDescent` differentiates the dual with `torch.func` rather than
+    `torch.autograd`. Under `torch.func.vmap` a batched convergence flag
+    has no single value to read, so every mapped element runs the dual
+    solver's whole `max_iter` budget; keep it modest there.
+
 !!! warning "Unsupported second-order paths"
 
     - `torch.func.jacfwd(torch.func.jacfwd(...))` on `KLAmbiguitySet` or
       `ChiSquareAmbiguitySet`: PyTorch does not differentiate a custom
       forward-mode rule a second time. Use `torch.func.hessian`
       (forward over reverse) or reverse over reverse.
-    - `torch.func` transforms on `PhiAmbiguitySet`: its inner dual solve
-      calls `torch.autograd.grad`. Use `torch.autograd` directly.
+    - Forward-mode `torch.func` transforms (`torch.func.hessian`,
+      `torch.func.jacfwd`) of a function that constructs a
+      `SinkhornAmbiguitySet`: its forward-mode rule reads the kernel the set
+      caches, which the transform then sees at the wrong level. Construct
+      the set outside the transformed function, or use reverse over
+      reverse.
 
 ## Non-differentiable points
 
@@ -164,6 +183,7 @@ every device:
 | `TotalVariationAmbiguitySet` | Ties among the highest losses, and ties among the lowest-loss scenarios that mass is drained from | Ties broken by support index: tied low-loss scenarios drained in index order, all reallocated mass on the last tied maximum |
 | `CVaRAmbiguitySet` | Tied losses that straddle the boundary of the upper $\alpha$-tail | The tail filled in support-index order among the tied scenarios |
 | `SinkhornAmbiguitySet` | As KL, with ties among the highest losses on the reference measure's support | Each kernel row's tied mass split in proportion to that row |
+| `MMDAmbiguitySet` | Where a scenario enters or leaves the support of $q^\star$, and tied highest losses once the radius saturates the set; the gradient stays continuous at the first | The interior-point maximizer, which splits tied mass by the central path |
 | `WassersteinAmbiguitySet` | Ties in a support point's best response $\ell_j - \gamma^\star c_{ij}$, including coincident support points with equal losses | The convex combination of the two extreme transport plans that spends the radius exactly |
 
 `tests/dro/test_gradients.py` checks each of these kinks by one-sided
@@ -211,11 +231,19 @@ The worst case is concave in $p$ and in $\rho$ (for CVaR, in the
 likelihood-ratio bound $1/\alpha$ rather than in $\rho$), so at a kink,
 such as a total
 variation radius that drains a scenario exactly, the returned derivative is
-a supergradient: one of the one-sided derivatives. Derivatives with respect
-to `nominal` and `radius` are first order: second derivatives that involve
-them are not supported, except on `PhiAmbiguitySet`. That set gets these
-derivatives, first and second order, from its dual objective, so, like its
-loss derivatives, they are exact once its inner dual solve has converged.
+a supergradient: one of the one-sided derivatives.
+
+Second derivatives that involve `nominal` and `radius`, mixed ones with
+`loss` included, are exact on the curved sets. `KLAmbiguitySet`,
+`ChiSquareAmbiguitySet` and `SinkhornAmbiguitySet` get them from the same
+implicit-function step that gives their loss Hessian, which takes `nominal`
+and `radius` as inputs too, so a recorded backward pass rebuilds the
+maximizer and both envelope derivatives with their exact Jacobians.
+`PhiAmbiguitySet` gets them from its dual objective, so, like its loss
+derivatives, they are exact once its inner dual solve has converged. On
+the total-variation, CVaR, Wasserstein, and MMD sets derivatives with
+respect to `nominal` and `radius` are first order: second derivatives that
+involve them are not supported.
 `tests/dro/test_parameter_gradients.py` checks every set against `gradcheck`
 and against finite differences of independent NumPy duals.
 

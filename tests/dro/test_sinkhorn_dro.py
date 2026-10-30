@@ -295,9 +295,10 @@ def test_gradient_is_a_distribution_inside_the_ball_attaining_the_worst_case(
         epsilon,
     )
     assert divergence <= radius * (1.0 + 1e-6) + 1e-9
-    # The divergence `contains` uses agrees with the reference up to the
-    # absolute floor its `eps` clamp of zero-mass rows sets, eps times the
-    # size of the potentials.
+    # The divergence `contains` uses agrees with the reference up to what
+    # its tol of 1e-9 on the L1 marginal violation resolves: a candidate that
+    # differs from the smoothed nominal only where the kernel is ~e^-40 meets
+    # that tol before the solve moves at all.
     measured = float(ambiguity_set.divergence(candidate, ambiguity_set.nominal))
     assert measured == pytest.approx(divergence, rel=1e-6, abs=1e-9)
 
@@ -403,6 +404,24 @@ def test_is_a_tilted_ambiguity_set() -> None:
     assert isinstance(ambiguity_set, TiltedAmbiguitySet)
     assert isinstance(ambiguity_set, AmbiguitySet)
     assert ambiguity_set.epsilon == 0.4
+
+
+def test_tilt_cost_counts_every_kernel_row() -> None:
+    # Each tilt evaluates an (n, n) matrix of rows, so the search must weigh
+    # n times the support against its launch-bound threshold, or it widens
+    # its steps on solves that are bound by arithmetic.
+    nominal, loss, cost = ASYMMETRIC.tensors()
+    ambiguity_set = SinkhornAmbiguitySet(nominal, cost, 0.4, 0.1)
+    support = nominal.shape[-1]
+    batch_shape = torch.Size((3, 2))
+    gap = torch.zeros(batch_shape + (support,), dtype=loss.dtype)
+
+    entries = ambiguity_set._tilt_entries(gap, batch_shape)
+
+    assert entries == math.prod(batch_shape) * support**2
+    assert entries == support * KLAmbiguitySet(nominal, 0.1)._tilt_entries(
+        gap, batch_shape
+    )
 
 
 # --- Validation --------------------------------------------------------------

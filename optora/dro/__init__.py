@@ -9,6 +9,7 @@ from optora.dro.calibration import (
 from optora.dro.kl_dro import KLAmbiguitySet
 from optora.dro.minibatch import MultilevelMonteCarloEstimator, StochasticPhiDual
 from optora.dro.minimax_solver import MinimaxProblem, MinimaxResult, MinimaxSolver
+from optora.dro.mmd_dro import MMDAmbiguitySet
 from optora.dro.phi_dro import (
     ChiSquareAmbiguitySet,
     CVaRAmbiguitySet,
@@ -27,6 +28,7 @@ __all__ = [
     "ChiSquareAmbiguitySet",
     "TotalVariationAmbiguitySet",
     "CVaRAmbiguitySet",
+    "MMDAmbiguitySet",
     "SinkhornAmbiguitySet",
     "WassersteinAmbiguitySet",
     "MinimaxProblem",

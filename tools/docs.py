@@ -18,6 +18,8 @@ DISPLAY_NAMES = {
     "f_divergence": "f-Divergence",
     "kl": "KL",
     "kl_dro": "KL-DRO",
+    "mmd": "MMD",
+    "mmd_dro": "MMD-DRO",
     "phi_dro": "Phi-DRO",
     "wasserstein_dro": "Wasserstein DRO",
 }

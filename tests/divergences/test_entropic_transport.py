@@ -1,6 +1,7 @@
 """Tests for `EntropicTransportDivergence`."""
 
 import math
+import warnings
 from collections.abc import Callable
 from typing import Any
 
@@ -10,12 +11,15 @@ from torch.autograd import gradcheck
 
 from optora.core.divergence_base import Divergence
 from optora.divergences.entropic_transport import EntropicTransportDivergence
+from optora.dro.sinkhorn_dro import SinkhornAmbiguitySet
 from tests.dro.duality import entropic_transport_divergence
 
 POINTS = torch.tensor([0.0, 1.0, 2.0, 3.0], dtype=torch.float64)
 COST = torch.abs(POINTS.unsqueeze(-1) - POINTS.unsqueeze(-2))
 NOMINAL = torch.tensor([0.1, 0.2, 0.3, 0.4], dtype=torch.float64)
 CANDIDATE = torch.tensor([0.25, 0.25, 0.25, 0.25], dtype=torch.float64)
+SPARSE_NOMINAL = torch.tensor([0.0, 0.4, 0.0, 0.6], dtype=torch.float64)
+SPARSE_CANDIDATE = torch.tensor([0.5, 0.0, 0.5, 0.0], dtype=torch.float64)
 
 
 def _smoothed(
@@ -183,7 +187,6 @@ def test_a_converged_sinkhorn_stops_early_and_skips_newton(
         ({"epsilon": 0.0}, "epsilon must be positive"),
         ({"epsilon": math.nan}, "epsilon must be positive"),
         ({"epsilon": 1.0, "tol": 0.0}, "tol must be positive"),
-        ({"epsilon": 1.0, "eps": -1.0}, "eps must be positive"),
         ({"epsilon": 1.0, "max_iter": 0}, "max_iter must be positive"),
         ({"epsilon": 1.0, "newton_max_iter": -1}, "newton_max_iter must be"),
         ({"epsilon": 1.0, "reference": torch.ones(3)}, "reference must have shape"),
@@ -192,6 +195,120 @@ def test_a_converged_sinkhorn_stops_early_and_skips_newton(
 def test_rejects_invalid_arguments(kwargs: dict[str, Any], match: str) -> None:
     with pytest.raises(ValueError, match=match):
         EntropicTransportDivergence(COST, **kwargs)
+
+
+# --- Zero-mass marginals (issue #75) -------------------------------------
+
+
+def _reference(
+    divergence: EntropicTransportDivergence,
+    candidate: torch.Tensor,
+    nominal: torch.Tensor,
+) -> float:
+    kernel = torch.exp(divergence.log_kernel(torch.float64))
+    return entropic_transport_divergence(
+        candidate.numpy(), nominal.numpy(), kernel.numpy(), divergence.epsilon
+    )
+
+
+@pytest.mark.parametrize("epsilon", [0.02, 0.3, 1.0])
+@pytest.mark.parametrize(
+    ("candidate", "nominal"),
+    [
+        (CANDIDATE, SPARSE_NOMINAL),
+        (SPARSE_CANDIDATE, NOMINAL),
+        (SPARSE_CANDIDATE, SPARSE_NOMINAL),
+    ],
+    ids=["zero_rows", "zero_columns", "both"],
+)
+def test_zero_mass_entries_match_the_dual_restricted_to_the_supports(
+    candidate: torch.Tensor, nominal: torch.Tensor, epsilon: float
+) -> None:
+    # The reference drops zero rows and columns by indexing; the divergence
+    # masks them, so the two agree to the solve's tolerance. epsilon = 0.02
+    # also runs the Newton phase on the masked problem.
+    divergence = EntropicTransportDivergence(COST, epsilon=epsilon)
+
+    value = divergence(candidate, nominal)
+
+    assert float(value) == pytest.approx(
+        _reference(divergence, candidate, nominal), rel=1e-9
+    )
+
+
+@pytest.mark.parametrize("weight", [1e-3, 1e-5, 1e-6])
+def test_a_tiny_divergence_with_zero_mass_rows_is_not_floored(weight: float) -> None:
+    # The former eps = 1e-12 clamp perturbed the semi-dual by eps times the
+    # size of the potentials, an absolute floor of ~1e-10 that returned 0.0
+    # for a divergence of that size.
+    divergence = EntropicTransportDivergence(COST, epsilon=0.5)
+    candidate = (1.0 - weight) * _smoothed(divergence, SPARSE_NOMINAL) + weight * (
+        CANDIDATE
+    )
+
+    value = divergence(candidate, SPARSE_NOMINAL)
+
+    expected = _reference(divergence, candidate, SPARSE_NOMINAL)
+    assert 0.0 < expected < 1e-6
+    assert float(value) == pytest.approx(expected, rel=1e-6)
+
+
+def test_vanishes_at_the_smoothed_reference_of_a_sparse_nominal() -> None:
+    divergence = EntropicTransportDivergence(COST, epsilon=0.5)
+
+    value = divergence(_smoothed(divergence, SPARSE_NOMINAL), SPARSE_NOMINAL)
+
+    assert float(value) == pytest.approx(0.0, abs=1e-15)
+
+
+def test_zero_patterns_differ_across_a_batch() -> None:
+    divergence = EntropicTransportDivergence(COST, epsilon=0.05)
+    candidates = torch.stack([CANDIDATE, SPARSE_CANDIDATE, SPARSE_CANDIDATE])
+    nominals = torch.stack([SPARSE_NOMINAL, NOMINAL, SPARSE_NOMINAL])
+
+    batched = divergence(candidates, nominals)
+
+    for index in range(3):
+        assert float(batched[index]) == pytest.approx(
+            _reference(divergence, candidates[index], nominals[index]), rel=1e-9
+        )
+
+
+def test_gradient_with_zero_mass_entries_is_finite_and_exact_on_the_support() -> None:
+    # The derivative in the mass of an empty column is -inf and is reported
+    # as zero; on the supports the envelope gradient stays exact.
+    divergence = EntropicTransportDivergence(COST, epsilon=0.3)
+    support = SPARSE_CANDIDATE > 0.0
+
+    def on_support(weights: torch.Tensor) -> torch.Tensor:
+        candidate = torch.zeros(4, dtype=torch.float64).masked_scatter(support, weights)
+        return divergence(candidate, SPARSE_NOMINAL)
+
+    weights = SPARSE_CANDIDATE[support].clone().requires_grad_(True)
+    assert gradcheck(on_support, (weights,), atol=1e-6)
+
+    candidate = SPARSE_CANDIDATE.clone().requires_grad_(True)
+    nominal = SPARSE_NOMINAL.clone().requires_grad_(True)
+    divergence(candidate, nominal).backward()
+    assert candidate.grad is not None and nominal.grad is not None
+    assert bool(torch.all(torch.isfinite(candidate.grad)))
+    assert bool(torch.all(torch.isfinite(nominal.grad)))
+    assert bool(torch.all(candidate.grad[~support] == 0.0))
+
+
+def test_eps_is_deprecated_and_ignored() -> None:
+    with pytest.warns(DeprecationWarning, match="eps is deprecated"):
+        deprecated = EntropicTransportDivergence(COST, epsilon=0.5, eps=1e-3)
+    with pytest.warns(DeprecationWarning, match="eps is deprecated"):
+        SinkhornAmbiguitySet(NOMINAL, COST, epsilon=0.5, radius=0.1, eps=1e-3)
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        default = EntropicTransportDivergence(COST, epsilon=0.5)
+        SinkhornAmbiguitySet(NOMINAL, COST, epsilon=0.5, radius=0.1)
+
+    assert float(deprecated(CANDIDATE, SPARSE_NOMINAL)) == float(
+        default(CANDIDATE, SPARSE_NOMINAL)
+    )
 
 
 def test_rejects_a_non_square_cost() -> None:

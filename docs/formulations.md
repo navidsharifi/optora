@@ -97,17 +97,20 @@ every radius, so the solve cannot stall the way minimizing the dual
 directly can: that minimizer runs off to $\eta \to \infty$ as the radius
 vanishes, and ceases to exist at all once the radius saturates the set.
 
-**The result is feasible, so it is a genuine bound.** Each halving keeps
-the endpoint that satisfied the radius constraint, so the reported value is
+**The result is feasible, so it is a genuine bound.** Each step keeps
+the largest tilt that satisfied the radius constraint, so the reported value is
 $\mathbb{E}_{q^\star}[\mathrm{loss}]$ at a distribution the set really
 contains. It can never exceed $\max\ell$, and it is never `nan`, whatever
 the support size or loss scale.
 
-**The cost is fixed and synchronization-free.** The number of halvings is
-read off the dtype (52 in float64, 23 in float32), so a solve is a fixed
+**The cost is fixed and synchronization-free.** The resolution is read
+off the dtype (52 bits in float64, 23 in float32), so a solve is a fixed
 sequence of device-side kernels with no convergence flag to read back and
-no tuning knobs. A batch of losses or a sweep of radii costs the same as a
-single element.
+no tuning knobs. A small problem, whose cost is kernel launches rather than
+arithmetic, tests up to 15 evenly spaced tilts per step in one batched call
+and so needs a quarter of the steps; a large one bisects. Size is that of
+one tilt evaluation, so a Sinkhorn set, whose tilt reweights all $n$ kernel
+rows, counts $n^2$ entries per batch element rather than $n$.
 
 **Saturation needs no special case.** Once the radius reaches
 $-\log P^\star$ (KL) or $1/P^\star - 1$ (chi-square), where $P^\star$ is
@@ -279,6 +282,42 @@ tends to the `WassersteinAmbiguitySet` worst case. Azizian, Iutzeler, and
 Malick (2023) also regularize the objective; that variant returns a
 penalized value rather than a worst-case expectation and is not
 implemented.
+
+### `MMDAmbiguitySet`
+
+MMD DRO (Staib and Jegelka, 2019; Zhu et al., 2021) bounds the maximum mean
+discrepancy of a positive semidefinite kernel with Gram matrix $K$ on the
+support, the distance between kernel mean embeddings:
+
+$$
+\sup_{q \in \Delta_n} \Big\{ \mathrm{loss}^\top q \;:\;
+    \lVert q - \mathrm{nominal} \rVert_K \le \mathrm{radius} \Big\},
+\qquad \lVert v \rVert_K = \sqrt{v^\top K v} .
+$$
+
+Like the Wasserstein ball, and unlike a $\varphi$-divergence ball, it
+contains distributions that put mass where the nominal has none, at a price
+set by the kernel's geometry.
+
+!!! note "A cone program, solved exactly"
+    The constraint $q \ge 0$ couples every scenario through $K$, so no
+    scalar bracket pins the maximizer, and the closed form
+    $\mathrm{loss}^\top \mathrm{nominal} + \mathrm{radius}\,
+    \lVert \mathrm{loss} \rVert_{K^{-1}}$, which drops $q \ge 0$, only
+    bounds the worst case. The set solves the second-order cone program
+    itself, with a batched primal-dual interior-point method using
+    Nesterov-Todd scaling and Mehrotra's predictor-corrector steps, to a
+    relative duality gap of `tol` ($10^{-10}$ by default). It converges in
+    a few tens of iterations whatever the support size; each iteration
+    factors one $n \times n$ matrix per batch element.
+
+The gradient in `loss` is the maximizer, and a zero-valued term from the
+implicit function theorem on the optimality conditions makes the Hessian in
+`loss` exact. Derivatives in `nominal` and `radius` are first order, from
+the multiplier of the radius constraint. Use a characteristic kernel such
+as the Laplacian $e^{-\lVert x - y \rVert}$: Gaussian Gram matrices on
+clustered points are numerically singular, which makes the ball degenerate
+in those directions.
 
 ### `MinimaxSolver`
 

@@ -86,6 +86,17 @@ concentration rate a uniform guarantee needs[^gao].
 $\sup_{q} \mathbb{E}_q[\ell] \ge \mathbb{E}_{P_0}[\ell]$ matters; it uses
 $z_{1-\alpha}^2$ in place of $z_{1-\alpha/2}^2$.
 
+!!! tip "Covering a $d$-dimensional parameter"
+
+    The three $\varphi$-divergence helpers accept `degrees_of_freedom=d`,
+    which replaces $\chi^2_{1,1-\alpha}$ by $\chi^2_{d,1-\alpha}$. The ball
+    is then a confidence region for a $d$-dimensional parameter at once,
+    such as every component of a vector mean, or the minimizer of a risk
+    over $d$ parameters[^dn]. A $d = 1$ radius used for a vector parameter
+    under-covers: for $d = 3$ at a nominal 95%, the region covers the true
+    mean only about 72% of the time. `one_sided` is defined for $d = 1$
+    only.
+
 !!! warning "Wasserstein on a finite support"
 
     `wasserstein_radius` calibrates transport anywhere in the input space.

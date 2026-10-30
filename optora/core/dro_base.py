@@ -2,13 +2,15 @@
 
 import math
 from abc import ABC, abstractmethod
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from typing import Any
 
 import torch
 from torch import nn
 from torch.func import jvp
 
+from optora.core._transforms import transforms_active
 from optora.core.divergence_base import Divergence
 from optora.core.precision import working_dtype
 from optora.core.solver_base import (
@@ -37,6 +39,39 @@ def _bisection_steps(dtype: torch.dtype) -> int:
         interval to `dtype`'s precision.
     """
     return int(-math.log2(torch.finfo(dtype).eps))
+
+
+# Entries of one batched tilt evaluation below which a solve is bound by
+# per-kernel launch overhead rather than by arithmetic: up to this size,
+# evaluating several tilts per step in one batched call costs about as much
+# as evaluating one, and cuts the number of steps.
+_LAUNCH_BOUND_ENTRIES = 2**14
+
+# Largest number of bits a search step resolves, 15 tilts per step.
+_MAX_SEARCH_BITS = 4
+
+
+def _search_bits(entries: int) -> int:
+    """Return the bits of the tilt each search step resolves.
+
+    A step that evaluates $2^b - 1$ evenly spaced tilts narrows the bracket
+    by $2^b$, so it replaces $b$ bisection steps at $2^b - 1$ times the
+    arithmetic per step. The largest $b$ whose batched evaluation stays
+    within `_LAUNCH_BOUND_ENTRIES` is chosen: small problems, whose steps
+    are dominated by kernel launches, take few wide steps, and large ones
+    bisect. The choice reads only shapes, so it never synchronizes.
+
+    Args:
+        entries: Number of entries of one tilt evaluation, the batch size
+            times the support size.
+
+    Returns:
+        The number of bits $b$, from one (bisection) to `_MAX_SEARCH_BITS`.
+    """
+    for bits in range(_MAX_SEARCH_BITS, 1, -1):
+        if (2**bits - 1) * entries <= _LAUNCH_BOUND_ENTRIES:
+            return bits
+    return 1
 
 
 def _mass_tolerance(nominal: torch.Tensor) -> float:
@@ -511,20 +546,33 @@ class _ParameterSensitivity(torch.autograd.Function):
         return grad_output, grad_nominal.to(dtype), grad_radius, None, None
 
 
-class _MaximizerExpectation(torch.autograd.Function):
-    r"""Expectation of `loss` under a detached maximizer, twice differentiable.
+Solution = Callable[..., tuple[torch.Tensor, torch.Tensor | None, torch.Tensor | None]]
+
+
+def _reduce_to(
+    gradient: torch.Tensor | None, like: torch.Tensor | None, needed: bool
+) -> torch.Tensor | None:
+    """Reduce a broadcast gradient to the shape and dtype of `like`, if needed."""
+    if not needed or gradient is None or like is None:
+        return None
+    return gradient.sum_to_size(like.shape).to(like.dtype)
+
+
+class _TiltedExpectation(torch.autograd.Function):
+    r"""Worst case of a tilted set, twice differentiable in loss, nominal, and radius.
 
     The forward pass returns $\max \ell + \sum_i q^\star_i (\ell_i - \max
-    \ell)$ for the detached maximizer $q^\star$, and the first-order
-    reverse-mode derivative is $q^\star$ itself, the Danskin gradient, at no
-    cost beyond the forward pass. Only when the backward pass is itself
-    recorded (`create_graph=True`, as in a Hessian-vector product), and in
-    forward mode, is $q^\star$ rebuilt as a differentiable function of
-    `loss` by `maximizer`, so that differentiating the gradient yields the
-    Jacobian $\partial q^\star / \partial \ell$, the Hessian of the
-    worst-case expectation, instead of zero.
+    \ell)$ for the detached maximizer $q^\star$. Its first-order
+    reverse-mode derivatives are the Danskin gradient $q^\star$ in `loss`
+    and the envelope derivatives in `nominal` and `radius`, all precomputed,
+    so a plain backward costs nothing beyond the forward pass. Only when
+    the backward pass is itself recorded (`create_graph=True`, as in a
+    Hessian-vector product), and in forward mode, are all three rebuilt by
+    `solution` as differentiable functions of `(loss, nominal, radius)`, so
+    that differentiating them yields every second derivative of the worst
+    case, mixed ones included, instead of zero.
 
-    Every tensor `maximizer` reads is passed in as an input rather than
+    Every tensor `solution` reads is passed in as an input rather than
     captured, which is what lets `torch.func` generate a `vmap` rule for
     this function.
     """
@@ -534,24 +582,35 @@ class _MaximizerExpectation(torch.autograd.Function):
     @staticmethod
     def forward(
         loss: torch.Tensor,
+        nominal: torch.Tensor,
+        radius: torch.Tensor | None,
         distribution: torch.Tensor,
         max_loss: torch.Tensor,
         scale: torch.Tensor,
         tilt: torch.Tensor,
-        maximizer: Callable[..., torch.Tensor],
+        nominal_gradient: torch.Tensor | None,
+        radius_gradient: torch.Tensor | None,
+        solution: Solution,
     ) -> torch.Tensor:
         """Evaluate the expectation as a correction to the maximum loss.
 
         Args:
             loss: Per-scenario loss values of shape `(..., n)`.
+            nominal: The ambiguity set's nominal distribution.
+            radius: The ambiguity set's `_radius_parameter`, or `None`.
             distribution: Detached maximizer of shape `batch_shape + (n,)`.
-            max_loss: Detached maximum of `loss` over the nominal's support,
-                with a trailing singleton dimension.
+            max_loss: Detached maximum of `loss` over the reachable
+                scenarios, with a trailing singleton dimension.
             scale: Detached positive loss spread, shaped like `max_loss`.
             tilt: Solved tilt of shape `batch_shape`.
-            maximizer: Map from `(loss, max_loss, scale, tilt)` to the
-                maximizer, differentiable with respect to `loss`, used only
-                by a recorded backward.
+            nominal_gradient: Detached derivative with respect to `nominal`,
+                of shape `batch_shape + (n,)`, or `None` if not needed.
+            radius_gradient: Detached derivative with respect to `radius`,
+                of shape `batch_shape`, or `None` if not needed.
+            solution: Map from `(loss, nominal, radius, max_loss, scale,
+                tilt, sensitivities)` to the maximizer and, when
+                `sensitivities` is set, the two parameter derivatives, all
+                differentiable in `(loss, nominal, radius)`.
 
         Returns:
             The expectation of `loss` under `distribution`, of shape
@@ -563,34 +622,104 @@ class _MaximizerExpectation(torch.autograd.Function):
     @staticmethod
     def setup_context(ctx: Any, inputs: tuple[Any, ...], output: Any) -> None:
         """Save the tensors the backward and forward-mode rules read."""
-        loss, distribution, max_loss, scale, tilt, maximizer = inputs
-        ctx.save_for_backward(loss, distribution, max_loss, scale, tilt)
-        ctx.save_for_forward(loss, max_loss, scale, tilt)
-        ctx.maximizer = maximizer
+        (
+            loss,
+            nominal,
+            radius,
+            distribution,
+            max_loss,
+            scale,
+            tilt,
+            nominal_gradient,
+            radius_gradient,
+            solution,
+        ) = inputs
+        ctx.save_for_backward(
+            loss,
+            nominal,
+            radius,
+            distribution,
+            max_loss,
+            scale,
+            tilt,
+            nominal_gradient,
+            radius_gradient,
+        )
+        ctx.save_for_forward(loss, nominal, radius, max_loss, scale, tilt)
+        ctx.solution = solution
 
     @staticmethod
     def backward(
         ctx: Any, grad_output: torch.Tensor
-    ) -> tuple[torch.Tensor, None, None, None, None, None]:
-        """Return the maximizer, rebuilt differentiably if the graph is recorded."""
-        loss, distribution, max_loss, scale, tilt = ctx.saved_tensors
+    ) -> tuple[torch.Tensor | None, ...]:
+        """Return the three derivatives, rebuilt differentiably if recorded."""
+        (
+            loss,
+            nominal,
+            radius,
+            distribution,
+            max_loss,
+            scale,
+            tilt,
+            nominal_gradient,
+            radius_gradient,
+        ) = ctx.saved_tensors
+        needs_loss, needs_nominal, needs_radius = ctx.needs_input_grad[:3]
         if torch.is_grad_enabled():
-            distribution = ctx.maximizer(loss, max_loss, scale, tilt)
-        grad_loss = (grad_output.unsqueeze(-1) * distribution).sum_to_size(loss.shape)
-        return grad_loss, None, None, None, None, None
+            distribution, nominal_gradient, radius_gradient = ctx.solution(
+                loss,
+                nominal,
+                radius,
+                max_loss,
+                scale,
+                tilt,
+                needs_nominal or needs_radius,
+            )
+        weight = grad_output.unsqueeze(-1)
+        return (
+            _reduce_to(weight * distribution, loss, needs_loss),
+            _reduce_to(
+                None if nominal_gradient is None else weight * nominal_gradient,
+                nominal,
+                needs_nominal,
+            ),
+            _reduce_to(
+                None if radius_gradient is None else grad_output * radius_gradient,
+                radius,
+                needs_radius,
+            ),
+            *(None,) * 7,
+        )
 
     @staticmethod
-    def jvp(ctx: Any, loss_tangent: torch.Tensor, *_: Any) -> torch.Tensor:
-        """Return the directional derivative along `loss_tangent`.
+    def jvp(
+        ctx: Any,
+        loss_tangent: torch.Tensor | None,
+        nominal_tangent: torch.Tensor | None,
+        radius_tangent: torch.Tensor | None,
+        *_: Any,
+    ) -> torch.Tensor:
+        """Return the directional derivative along the input tangents.
 
-        Forward mode is opt-in, so the maximizer is always rebuilt
+        Forward mode is opt-in, so the derivatives are always rebuilt
         differentiably here: reverse mode over forward mode, as in
-        `torch.func.jacrev(torch.func.jacfwd(...))`, then sees its Jacobian
-        rather than a constant. Forward mode over forward mode does not
-        differentiate a custom `jvp` rule in PyTorch, so it is unsupported.
+        `torch.func.jacrev(torch.func.jacfwd(...))`, then sees their
+        Jacobians rather than constants. Forward mode over forward mode does
+        not differentiate a custom `jvp` rule in PyTorch, so it is
+        unsupported.
         """
-        distribution = ctx.maximizer(*ctx.saved_tensors)
-        return torch.sum(distribution * loss_tangent, dim=-1)
+        parameters = nominal_tangent is not None or radius_tangent is not None
+        distribution, nominal_gradient, radius_gradient = ctx.solution(
+            *ctx.saved_tensors, parameters
+        )
+        result = torch.zeros((), dtype=distribution.dtype, device=distribution.device)
+        if loss_tangent is not None:
+            result = result + torch.sum(distribution * loss_tangent, dim=-1)
+        if nominal_tangent is not None and nominal_gradient is not None:
+            result = result + torch.sum(nominal_gradient * nominal_tangent, dim=-1)
+        if radius_tangent is not None and radius_gradient is not None:
+            result = result + radius_gradient * radius_tangent
+        return result
 
 
 class TiltedAmbiguitySet(AmbiguitySet):
@@ -619,10 +748,12 @@ class TiltedAmbiguitySet(AmbiguitySet):
       $[0, 1]$ is valid for every loss and every radius by construction, so
       bisection cannot fail to make progress the way an unconstrained
       first-order dual solve can when the minimizer runs off to infinity.
-    - **A fixed, synchronization-free trip count.** The number of halvings
-      is read off the dtype by `_bisection_steps`, so the solve is a fixed
-      number of device-side kernels with no host read of a convergence
-      flag, and a batch costs exactly what a single element costs.
+    - **A fixed, synchronization-free trip count.** The resolution is read
+      off the dtype by `_bisection_steps`, so the solve is a fixed number
+      of device-side kernels with no host read of a convergence flag. A
+      small problem, whose cost is kernel launches rather than arithmetic,
+      evaluates up to 15 tilts per step in one batched call and so needs a
+      quarter of the steps (`_search_bits`); a large one bisects.
     - **Feasibility by construction.** Each step keeps the endpoint that
       tested feasible, so the returned tilt always satisfies the radius
       constraint. The reported value is therefore a primal objective value
@@ -661,22 +792,23 @@ class TiltedAmbiguitySet(AmbiguitySet):
     backward pass while keeping the bisection itself out of the autograd
     graph.
 
-    Second derivatives are exact as well. A recorded backward pass
-    (`create_graph=True`, `torch.func.hessian`) rebuilds $q^\star$ from the
-    solved tilt by one implicit-function step (`_implicit_maximizer`), so
-    differentiating the gradient yields $\partial q^\star / \partial
-    \mathrm{loss}$, the Hessian of the worst case, rather than the zero a
-    detached maximizer would give. A plain `.backward()` never pays for
-    that step. Where the worst case is not differentiable (tied highest
-    losses once the radius saturates the set) the gradient is the
-    maximizer that splits the tied mass in proportion to `nominal`, a
-    subgradient of the convex worst case.
-
     The tilt path is solved on a detached `nominal`, and the first
     derivatives with respect to `nominal` and a tensor `radius` are
     attached afterwards by the envelope theorem, from the multiplier
     $\lambda^\star$ that each subclass reads off its solved tilt in closed
     form (`_standardized_sensitivities`).
+
+    Second derivatives are exact as well, in every pair of `loss`,
+    `nominal`, and `radius`. A recorded backward pass (`create_graph=True`,
+    `torch.func.hessian`) rebuilds the solved tilt as a function of all
+    three by one implicit-function step (`_implicit_solution`), and from it
+    $q^\star$ and the two envelope derivatives, so differentiating the
+    gradient yields their exact Jacobians rather than the zero detached
+    constants would give. A plain `.backward()` never pays for that step.
+    Where the worst case is not differentiable (tied highest losses once
+    the radius saturates the set) the gradient is the maximizer that splits
+    the tied mass in proportion to `nominal`, a subgradient of the convex
+    worst case.
 
     Attributes:
         nominal: Reference distribution the ambiguity set is centered on.
@@ -797,6 +929,40 @@ class TiltedAmbiguitySet(AmbiguitySet):
         return value.unsqueeze(-1) + scale * gap, scale.squeeze(-1) * multiplier
 
     @property
+    def _constant_nominal(self) -> torch.Tensor:
+        """`nominal` cut from the autograd graph, for the tilt path.
+
+        While `_implicit_solution` rebuilds the solution it is instead the
+        `nominal` that rebuild was given, so the tilt path and the envelope
+        derivatives, which read `nominal` only through this property, become
+        differentiable with respect to it, and inside a `torch.func`
+        transform read the rebuild's own operand rather than a tensor of an
+        enclosing transform level.
+        """
+        attached = self.__dict__.get("_attached_nominal")
+        return self.nominal.detach() if attached is None else attached
+
+    @property
+    def _nominal_is_attached(self) -> bool:
+        """Whether the tilt path is being evaluated on a rebuild's `nominal`.
+
+        A subclass that caches a function of `nominal` must not read the
+        cache then, since the cache is neither differentiable nor at the
+        rebuild's `torch.func` transform level.
+        """
+        return self.__dict__.get("_attached_nominal") is not None
+
+    @contextmanager
+    def _attached_path(self, nominal: torch.Tensor) -> Iterator[None]:
+        """Evaluate the tilt path on the attached `nominal` inside the block."""
+        previous = self.__dict__.get("_attached_nominal")
+        self.__dict__["_attached_nominal"] = nominal
+        try:
+            yield
+        finally:
+            self.__dict__["_attached_nominal"] = previous
+
+    @property
     def _reachable(self) -> torch.Tensor:
         """Boolean mask of the scenarios a tilted distribution can put mass on.
 
@@ -804,7 +970,7 @@ class TiltedAmbiguitySet(AmbiguitySet):
         scenarios with positive nominal mass. A formulation whose tilt
         reweights a different base distribution overrides this.
         """
-        return self.nominal > 0.0
+        return self._constant_nominal > 0.0
 
     def _center_expectation(
         self, loss: torch.Tensor, batch_shape: torch.Size
@@ -823,6 +989,25 @@ class TiltedAmbiguitySet(AmbiguitySet):
             The expectation, broadcast to `batch_shape`.
         """
         return self._nominal_expectation(loss, batch_shape)
+
+    def _tilt_entries(self, gap: torch.Tensor, batch_shape: torch.Size) -> int:
+        """Return the number of entries one tilt evaluation computes.
+
+        This is the size `_search_bits` weighs against the launch-bound
+        threshold. A tilt reweights the support once per batch element by
+        default; a formulation whose tilt evaluates a larger intermediate,
+        such as a matrix of kernel rows, overrides this so that a solve
+        bound by arithmetic is not mistaken for a launch-bound one.
+
+        Args:
+            gap: Standardized shortfall of every scenario, of shape
+                `(..., n)`.
+            batch_shape: Shape returned by `_batch_shape` for this loss.
+
+        Returns:
+            The batch size times the support size.
+        """
+        return math.prod(batch_shape) * gap.shape[-1]
 
     @staticmethod
     def _tilt_rate(tilt: torch.Tensor) -> torch.Tensor:
@@ -848,7 +1033,14 @@ class TiltedAmbiguitySet(AmbiguitySet):
         return (tilt / complement).unsqueeze(-1)
 
     def _solve_tilt(self, gap: torch.Tensor, batch_shape: torch.Size) -> torch.Tensor:
-        """Bisect the unit interval for the largest tilt inside the radius.
+        """Search the unit interval for the largest tilt inside the radius.
+
+        Each step evaluates $2^b - 1$ evenly spaced tilts inside the current
+        bracket, of width $2^{-bk}$ after $k$ steps, in one call batched
+        along a new leading dimension, and keeps the subinterval above the
+        largest feasible one, so the bracket ends on the same dyadic grid
+        bisection ($b = 1$) would reach. Every endpoint is a dyadic rational
+        and the width a power of two, so the candidates are exact.
 
         Args:
             gap: Standardized shortfall below the maximum loss, of shape
@@ -858,22 +1050,31 @@ class TiltedAmbiguitySet(AmbiguitySet):
 
         Returns:
             A tensor of shape `batch_shape` holding, per batch element, the
-            largest tilt the bisection found whose distribution lies inside
-            the ambiguity set. Elements are bisected independently through
-            elementwise `torch.where`, so a saturated or degenerate element
+            largest tilt the search found whose distribution lies inside
+            the ambiguity set. Elements are searched independently through
+            elementwise reductions, so a saturated or degenerate element
             cannot disturb the rest of its batch.
         """
+        bits = _search_bits(self._tilt_entries(gap, batch_shape))
+        points = 2**bits - 1
+        steps = -(-_bisection_steps(gap.dtype) // bits)
+        index = torch.arange(1, points + 1, dtype=gap.dtype, device=gap.device)
+        index = index.reshape((points,) + (1,) * len(batch_shape))
         lower = torch.zeros(batch_shape, dtype=gap.dtype, device=gap.device)
-        upper = torch.ones_like(lower)
-        for _ in range(_bisection_steps(gap.dtype)):
-            middle = 0.5 * (lower + upper)
-            _, divergence = self._tilted_distribution(gap, middle)
+        spacing = 1.0
+        for _ in range(steps):
+            spacing /= points + 1
+            _, divergence = self._tilted_distribution(gap, lower + spacing * index)
             # A non-finite divergence compares false and so counts as
             # infeasible, which is the correct reading: it means the tilt
-            # left the support of the nominal.
+            # left the support of the nominal. The largest feasible
+            # candidate is kept rather than the count of feasible ones, so
+            # the returned tilt was itself tested feasible even where
+            # rounding makes feasibility non-monotone.
             feasible = divergence <= self.radius
-            lower = torch.where(feasible, middle, lower)
-            upper = torch.where(feasible, upper, middle)
+            lower = lower + spacing * torch.amax(
+                torch.where(feasible, index, 0.0), dim=0
+            )
         return lower
 
     def worst_case_expectation(self, loss: torch.Tensor) -> torch.Tensor:
@@ -922,84 +1123,131 @@ class TiltedAmbiguitySet(AmbiguitySet):
         gap = torch.where(on_support, (max_loss - detached) / scale, 1.0)
         tilt = self._solve_tilt(gap, batch_shape)
         distribution, divergence = self._tilted_distribution(gap, tilt)
-        value: torch.Tensor = _MaximizerExpectation.apply(
-            working, distribution, max_loss, scale, tilt, self._implicit_maximizer
-        )
-        expectation = value.expand(batch_shape)
-        result = self._attach_parameter_gradients(
-            expectation,
-            lambda: self._parameter_sensitivities(
+        radius = self._radius_parameter
+        nominal_gradient = radius_gradient = None
+        if torch.is_grad_enabled() and (
+            self.nominal.requires_grad or (radius is not None and radius.requires_grad)
+        ):
+            shortfall = torch.sum(distribution * (detached - max_loss), dim=-1)
+            nominal_gradient, radius_gradient = self._parameter_sensitivities(
                 detached,
-                expectation.detach(),
+                max_loss.squeeze(-1) + shortfall,
                 max_loss,
                 scale,
                 tilt,
                 distribution,
                 divergence,
-            ),
+            )
+        value: torch.Tensor = _TiltedExpectation.apply(
+            working,
+            self.nominal,
+            radius,
+            distribution,
+            max_loss,
+            scale,
+            tilt,
+            nominal_gradient,
+            radius_gradient,
+            self._implicit_solution,
         )
-        return self._as_result(result, loss)
+        return self._as_result(value.expand(batch_shape), loss)
 
-    def _implicit_maximizer(
+    def _implicit_solution(
         self,
         loss: torch.Tensor,
+        nominal: torch.Tensor,
+        radius: torch.Tensor | None,
         max_loss: torch.Tensor,
         scale: torch.Tensor,
         tilt: torch.Tensor,
-    ) -> torch.Tensor:
-        r"""Rebuild the maximizer as a function of `loss` with an exact Jacobian.
+        sensitivities: bool,
+    ) -> tuple[torch.Tensor, torch.Tensor | None, torch.Tensor | None]:
+        r"""Rebuild the solution as a function of its inputs with exact Jacobians.
 
-        The solved tilt $t^\star$ is pinned by $D(t^\star, \mathrm{gap}) =
-        \mathrm{radius}$, so by the implicit function theorem it moves with
-        the loss at the rate $\partial t / \partial \ell = -(\partial D /
-        \partial \ell) / (\partial D / \partial t)$. One Newton step on that
-        constraint from $t^\star$, with the slope held fixed,
+        The solved tilt $t^\star$ is pinned by $D(t^\star; \ell, p) = \rho$,
+        so by the implicit function theorem it moves with $\theta = (\ell,
+        p, \rho)$ at the rate $\partial t / \partial \theta = -(\partial D /
+        \partial \theta - \partial \rho / \partial \theta) / (\partial D /
+        \partial t)$. One Newton step on that constraint from $t^\star$,
+        with the slope held fixed,
 
         $$
-        t(\ell) = t^\star
-            - \frac{D(t^\star, \mathrm{gap}(\ell)) - D(t^\star,
-              \mathrm{gap}(\ell^\star))}{\partial D / \partial t},
+        t(\theta) = t^\star
+            - \frac{D(t^\star; \ell, p) - D(t^\star; \ell^\star, p^\star)
+              - (\rho - \rho^\star)}{\partial D / \partial t},
         $$
 
         has exactly the value $t^\star$ and exactly that derivative, so the
-        tilted distribution at $t(\ell)$ is the maximizer with its exact
-        Jacobian, which is all a second derivative of the worst case needs.
-        The standardizing shift and scale stay fixed, which is harmless:
-        the tilt path for any fixed positive affine image of the loss is the
-        same family of distributions.
+        tilted distribution at $t(\theta)$, evaluated on the attached
+        nominal, is the maximizer with its exact Jacobian, and the envelope
+        derivatives, closed forms in the tilt, the maximizer, and the
+        nominal, come with theirs. That is all a second derivative of the
+        worst case needs. The standardizing shift and scale stay fixed,
+        which is harmless: the tilt path for any fixed positive affine image
+        of the loss is the same family of distributions.
 
         Where the slope vanishes the constraint is inactive (a saturated
         radius, a constant loss, or a zero tilt at a zero radius). The
-        maximizer is then locally constant away from ties, so it is
-        returned detached, with a zero Jacobian. Differentiating the tilted
+        solution is then locally constant away from ties, so it is returned
+        detached, with a zero Jacobian. Differentiating the tilted
         distribution there would instead multiply rounding errors by the
         astronomically large rate of a tilt at the top of its bracket.
 
         Args:
             loss: Per-scenario loss values of shape `(..., n)`, attached to
                 the graph the Jacobian is taken in.
-            max_loss: Detached maximum loss over the nominal's support used
-                by the forward pass.
+            nominal: The nominal, attached to the same graph.
+            radius: The tensor radius, attached to the same graph, or
+                `None` for a float radius.
+            max_loss: Detached maximum loss over the reachable scenarios
+                used by the forward pass.
             scale: Detached positive loss spread used by the forward pass.
             tilt: Solved tilt of shape `batch_shape`.
+            sensitivities: Whether to rebuild the envelope derivatives with
+                respect to `nominal` and `radius` too.
 
         Returns:
             The maximizer of shape `batch_shape + (n,)`, equal in value to
-            the forward pass's and differentiable with respect to `loss`.
+            the forward pass's, and, if `sensitivities` is set, the
+            derivatives with respect to `nominal` and `radius`, otherwise
+            `None` twice; all differentiable in `loss`, `nominal`, and
+            `radius`.
         """
-        gap = torch.where(self._reachable, (max_loss - loss) / scale, 1.0)
-        slope: torch.Tensor = jvp(
-            lambda path: self._tilted_distribution(gap.detach(), path)[1],
-            (tilt,),
-            (torch.ones_like(tilt),),
-        )[1]
-        _, divergence = self._tilted_distribution(gap, tilt)
+        with self._attached_path(nominal.detach()):
+            gap = torch.where(self._reachable, (max_loss - loss) / scale, 1.0)
+            slope: torch.Tensor = jvp(
+                lambda path: self._tilted_distribution(gap.detach(), path)[1],
+                (tilt,),
+                (torch.ones_like(tilt),),
+            )[1]
         active = slope > 0.0
-        step = (divergence - divergence.detach()) / torch.where(
-            active, slope, torch.ones_like(slope)
+        with self._attached_path(nominal):
+            _, divergence = self._tilted_distribution(gap, tilt)
+            residual = divergence - divergence.detach()
+            if radius is not None:
+                residual = residual - (radius - radius.detach())
+            moved = tilt - torch.where(
+                active, residual / torch.where(active, slope, 1.0), 0.0
+            )
+            distribution, divergence = self._tilted_distribution(gap, moved)
+            distribution = torch.where(
+                active.unsqueeze(-1), distribution, distribution.detach()
+            )
+            if not sensitivities:
+                return distribution, None, None
+            value = max_loss.squeeze(-1) + torch.sum(
+                distribution * (loss - max_loss), dim=-1
+            )
+            nominal_gradient, radius_gradient = self._parameter_sensitivities(
+                loss, value, max_loss, scale, moved, distribution, divergence
+            )
+        return (
+            distribution,
+            torch.where(
+                active.unsqueeze(-1), nominal_gradient, nominal_gradient.detach()
+            ),
+            torch.where(active, radius_gradient, radius_gradient.detach()),
         )
-        distribution, _ = self._tilted_distribution(gap, tilt - step)
-        return torch.where(active.unsqueeze(-1), distribution, distribution.detach())
 
 
 def _implicit_curvature(
@@ -1029,7 +1277,9 @@ def _implicit_curvature(
     therefore leaves the value and gradient untouched and makes every
     second derivative exact once the dual solve has converged. $H$ is held
     fixed, which costs nothing at second order. Where $H$ is not finite
-    and positive definite, the term is zero.
+    and positive definite, the term is zero. The slope and the rows of $H$
+    are taken with `torch.func`, which composes both with a recorded
+    autograd graph and with `torch.func` transforms of the caller.
 
     Args:
         dual_objective: Map from dual points of shape `batch_shape + d` to
@@ -1041,27 +1291,27 @@ def _implicit_curvature(
     Returns:
         The zero-valued correction, of shape `batch_shape`.
     """
-    with torch.enable_grad():
-        variable = point.detach().requires_grad_(True)
-        (slope,) = torch.autograd.grad(
-            dual_objective(variable).sum(), variable, create_graph=True
-        )
-        slope = slope.reshape(batch_shape + (-1,))
-        size = slope.shape[-1]
-        rows = [
-            torch.autograd.grad(
-                slope[..., row].sum(), variable, retain_graph=True, allow_unused=True
-            )[0]
-            for row in range(size)
-        ]
+
+    def total(dual: torch.Tensor) -> torch.Tensor:
+        return torch.sum(dual_objective(dual))
+
+    variable = point.detach()
+    slope, pullback = torch.func.vjp(torch.func.grad(total), variable)[:2]
+    slope = slope.reshape(batch_shape + (-1,))
+    size = slope.shape[-1]
+    identity = torch.eye(size, dtype=slope.dtype, device=slope.device)
+    # The summed objective separates over the batch, so its Hessian is block
+    # diagonal and one pullback of a basis vector, repeated over the batch,
+    # reads one row of every block at once.
     hessian = torch.stack(
         [
-            torch.zeros_like(slope) if row is None else row.reshape(slope.shape)
-            for row in rows
+            pullback(identity[row].expand(slope.shape).reshape(variable.shape))[0]
+            .reshape(slope.shape)
+            .detach()
+            for row in range(size)
         ],
         dim=-2,
     )
-    identity = torch.eye(size, dtype=hessian.dtype, device=hessian.device)
     finite = torch.isfinite(hessian).all(dim=-1).all(dim=-1)
     factor, info = torch.linalg.cholesky_ex(
         torch.where(finite[..., None, None], hessian, identity)
@@ -1339,8 +1589,9 @@ class DualAmbiguitySet(AmbiguitySet):
             detached, and `_implicit_curvature` adds, at zero value and zero
             first derivative, the second-order effect of the optimum moving
             with `loss`, `nominal`, and `radius`. It is built only when the
-            re-evaluated objective requires grad. The cached warm start is
-            reused only when its shape
+            re-evaluated objective requires grad or the call runs inside a
+            `torch.func` transform. The cached warm start is reused only
+            when its shape
             still matches the batch being solved. Both the initial point and
             the cache are kept in raw-loss units and converted to and from
             the standardized units the solver iterates in.
@@ -1368,8 +1619,11 @@ class DualAmbiguitySet(AmbiguitySet):
         )
         result = self.dual_solver.solve(problem)
         point = result.point.detach()
-        self._dual_warm_start = self._from_standard_units(point, shift, scale)
+        transformed = transforms_active()
+        if not transformed:
+            # A `torch.func` transform's optimum must not outlive the call.
+            self._dual_warm_start = self._from_standard_units(point, shift, scale)
         value = dual_objective(point)
-        if not value.requires_grad:
+        if not (value.requires_grad or transformed):
             return value
         return value + _implicit_curvature(dual_objective, point, batch_shape)

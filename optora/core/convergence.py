@@ -4,6 +4,8 @@ from functools import cached_property
 
 import torch
 
+from optora.core._transforms import vmap_active
+
 DEFAULT_CHECK_INTERVAL = 10
 
 
@@ -132,6 +134,7 @@ class ConvergenceTracker:
         """
         self.check_interval = check_interval
         self._tol = tol
+        self._host_readable = True
         self.converged = torch.zeros((), dtype=torch.bool, device=reference.device)
         self._num_iterations = torch.zeros(
             (), dtype=torch.long, device=reference.device
@@ -179,16 +182,31 @@ class ConvergenceTracker:
     def should_stop(self, iteration: int) -> bool:
         """Check whether the loop may exit, synchronizing at most periodically.
 
+        Inside `torch.func.vmap` the flag may be batched, with one value per
+        mapped element and so no single value to read on the host. The loop
+        then never exits early and runs its whole iteration budget, which
+        the frozen iterates make exact for every element.
+
         Args:
             iteration: Zero-based index of the iteration that just ran.
 
         Returns:
             `True` if this iteration is a checkpoint and the loop has
             converged, `False` otherwise.
+
+        Raises:
+            RuntimeError: If reading the flag fails for any reason other
+                than its being batched by `vmap`.
         """
-        if (iteration + 1) % self.check_interval != 0:
+        if not self._host_readable or (iteration + 1) % self.check_interval != 0:
             return False
-        return bool(self.converged)
+        try:
+            return bool(self.converged)
+        except RuntimeError:
+            if not vmap_active():
+                raise
+            self._host_readable = False
+            return False
 
     def status(self) -> ConvergenceStatus:
         """Hand the loop's final diagnostics over without synchronizing.

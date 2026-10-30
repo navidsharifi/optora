@@ -10,6 +10,9 @@ checks, in float64:
 
 - **smooth points**: `torch.autograd.gradcheck` over the softmax logits of
   the nominal and a tensor radius, unbatched and batched;
+- **second derivatives** of the tilted sets: `gradgradcheck` jointly over
+  the logits, the radius, and the loss, so every mixed derivative is
+  checked, and `torch.func.hessian` against reverse over reverse;
 - **independent references**: the radius and nominal derivatives against
   central differences of the NumPy duals in `tests.dro.duality`, which share
   no code with optora;
@@ -27,7 +30,7 @@ from collections.abc import Callable
 
 import pytest
 import torch
-from torch.autograd import gradcheck
+from torch.autograd import gradcheck, gradgradcheck
 
 from optora.core.dro_base import AmbiguitySet
 from optora.divergences import PhiDivergence
@@ -268,6 +271,96 @@ def test_tilted_set_gradients_vanish_once_the_radius_saturates(
         assert float(nominal_gradient @ tangent(size, index, 0)) == pytest.approx(
             0.0, abs=1e-9
         )
+
+
+# --- Second derivatives of the tilted sets (issue #77) ----------------------
+
+
+def worst_case_of_everything(
+    build: Builder, instance: Instance
+) -> Callable[[torch.Tensor, torch.Tensor, torch.Tensor], torch.Tensor]:
+    """Return `(logits, radius, loss) -> worst case` on `instance`'s cost."""
+    _, _, cost = instance.tensors()
+
+    def function(
+        logits: torch.Tensor, radius: torch.Tensor, loss: torch.Tensor
+    ) -> torch.Tensor:
+        nominal = torch.softmax(logits, dim=-1)
+        return build(nominal, cost, radius).worst_case_expectation(loss)
+
+    return function
+
+
+def everything(instance: Instance, radius: float) -> tuple[torch.Tensor, ...]:
+    """Return leaf `(logits, radius, loss)` at `instance` and `radius`."""
+    nominal, loss, _ = instance.tensors()
+    return (
+        torch.log(nominal).requires_grad_(True),
+        torch.tensor(radius, dtype=torch.float64, requires_grad=True),
+        loss.requires_grad_(True),
+    )
+
+
+@select_builders(TILTED)
+@instance_parameters
+@pytest.mark.parametrize("radius", [0.12, 0.33])
+def test_second_derivatives_in_loss_nominal_and_radius_match_finite_differences(
+    name: str, build: Builder, instance: Instance, radius: float
+) -> None:
+    # Jointly over all three inputs, so the mixed derivatives d2V/dloss
+    # dnominal and d2V/dloss dradius are checked along with the rest.
+    assert gradgradcheck(
+        worst_case_of_everything(build, instance),
+        everything(instance, radius),
+        eps=1e-6,
+        atol=1e-5,
+        rtol=1e-3,
+    )
+
+
+@select_builders(TILTED)
+def test_mixed_second_derivatives_are_symmetric(name: str, build: Builder) -> None:
+    function = worst_case_of_everything(build, GENERIC)
+    logits, radius, loss = everything(GENERIC, 0.33)
+
+    def loss_gradient(logits: torch.Tensor, radius: torch.Tensor) -> torch.Tensor:
+        (gradient,) = torch.autograd.grad(
+            function(logits, radius, loss), loss, create_graph=True
+        )
+        return gradient
+
+    def parameter_gradients(loss: torch.Tensor) -> tuple[torch.Tensor, ...]:
+        return torch.autograd.grad(
+            function(logits, radius, loss), (logits, radius), create_graph=True
+        )
+
+    loss_by_logits, loss_by_radius = torch.autograd.functional.jacobian(
+        loss_gradient, (logits, radius)
+    )
+    logits_by_loss, radius_by_loss = torch.autograd.functional.jacobian(
+        parameter_gradients, loss
+    )
+
+    torch.testing.assert_close(loss_by_logits, logits_by_loss.mT)
+    torch.testing.assert_close(loss_by_radius, radius_by_loss)
+    assert float(loss_by_radius.abs().max()) > 1e-3
+
+
+@select_builders(frozenset({"kl", "chi_square"}))
+def test_torch_func_hessian_in_every_input_matches_reverse_over_reverse(
+    name: str, build: Builder
+) -> None:
+    function = worst_case_of_everything(build, GENERIC)
+    inputs = tuple(tensor.detach() for tensor in everything(GENERIC, 0.33))
+
+    expected = torch.autograd.functional.hessian(function, inputs)
+    actual = torch.func.hessian(function, argnums=(0, 1, 2))(*inputs)
+
+    for row in range(3):
+        for column in range(3):
+            torch.testing.assert_close(
+                actual[row][column], expected[row][column], rtol=1e-9, atol=1e-12
+            )
 
 
 @builder_parameters

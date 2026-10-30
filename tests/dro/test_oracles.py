@@ -295,6 +295,24 @@ def test_chi_square_matches_the_active_set_closed_form(
 
 @pytest.mark.parametrize("instance", TILT_INSTANCES, ids=TILT_INSTANCE_IDS)
 @pytest.mark.parametrize("fraction", VANISHING_RADIUS_FRACTIONS)
+def test_kl_excess_matches_the_closed_form_at_a_vanishing_radius(
+    instance: Instance, fraction: float
+) -> None:
+    # The KL counterpart of the chi-square check below: the excess over the
+    # nominal mean, of order sqrt(2 * radius * variance), is compared
+    # relative to itself (issue #73).
+    nominal, loss, _ = instance.tensors()
+    radius = fraction * kl_saturation_radius(instance)
+    mean = float(instance.nominal_array @ instance.loss_array)
+
+    result = KLAmbiguitySet(nominal, radius=radius).worst_case_expectation(loss)
+
+    reference = kl_worst_case(instance.nominal_array, instance.loss_array, radius)
+    assert float(result) - mean == pytest.approx(reference - mean, rel=1e-6)
+
+
+@pytest.mark.parametrize("instance", TILT_INSTANCES, ids=TILT_INSTANCE_IDS)
+@pytest.mark.parametrize("fraction", VANISHING_RADIUS_FRACTIONS)
 def test_chi_square_excess_matches_the_closed_form_at_a_vanishing_radius(
     instance: Instance, fraction: float
 ) -> None:
@@ -452,12 +470,8 @@ def test_a_vanishing_radius_matches_the_oracles(
     # rather than against the value: an absolute check would pass on a
     # solver that simply returned the nominal expectation.
     #
-    # 1e-10 is the floor of what the oracles can referee, not of what the
-    # sets can do. Below it the oracles lose accuracy first: `brentq` roots
-    # a divergence of order `radius` that NumPy evaluates by direct
-    # summation, so its own noise swamps the answer. The regime below this
-    # is pinned instead against the exact small-radius expansion, in
-    # `tests/dro/test_kl_dro.py` and `tests/dro/test_phi_dro.py`.
+    # Radii below these are covered relative to the saturation radius by
+    # the two `..._at_a_vanishing_radius` tests above.
     nominal, loss, _ = instance.tensors()
     nominal_array, loss_array = instance.nominal_array, instance.loss_array
     nominal_expectation = float(np.sum(nominal_array * loss_array))
