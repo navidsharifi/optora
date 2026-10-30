@@ -112,6 +112,14 @@ Hessians and Hessian-vector products of the worst case with respect to
     step in `nominal` and `radius` gives the mixed derivatives. A plain
     `.backward()` never pays for that step.
 
+=== "MMD"
+
+    The worst case is curved in `loss`. A zero-valued term built from the
+    implicit function theorem on the optimality conditions over the
+    maximizer's support supplies the Jacobian $\partial q^\star / \partial
+    \ell$, so the Hessian is exact once the interior-point solve has
+    converged. It is built only when `loss` requires grad.
+
 === "Total variation and Wasserstein"
 
     The worst case is piecewise linear in `loss`, so its Hessian is zero
@@ -175,6 +183,7 @@ every device:
 | `TotalVariationAmbiguitySet` | Ties among the highest losses, and ties among the lowest-loss scenarios that mass is drained from | Ties broken by support index: tied low-loss scenarios drained in index order, all reallocated mass on the last tied maximum |
 | `CVaRAmbiguitySet` | Tied losses that straddle the boundary of the upper $\alpha$-tail | The tail filled in support-index order among the tied scenarios |
 | `SinkhornAmbiguitySet` | As KL, with ties among the highest losses on the reference measure's support | Each kernel row's tied mass split in proportion to that row |
+| `MMDAmbiguitySet` | Where a scenario enters or leaves the support of $q^\star$, and tied highest losses once the radius saturates the set; the gradient stays continuous at the first | The interior-point maximizer, which splits tied mass by the central path |
 | `WassersteinAmbiguitySet` | Ties in a support point's best response $\ell_j - \gamma^\star c_{ij}$, including coincident support points with equal losses | The convex combination of the two extreme transport plans that spends the radius exactly |
 
 `tests/dro/test_gradients.py` checks each of these kinks by one-sided
@@ -232,9 +241,9 @@ and `radius` as inputs too, so a recorded backward pass rebuilds the
 maximizer and both envelope derivatives with their exact Jacobians.
 `PhiAmbiguitySet` gets them from its dual objective, so, like its loss
 derivatives, they are exact once its inner dual solve has converged. On
-the total-variation, CVaR, and Wasserstein sets derivatives with respect to
-`nominal` and `radius` are first order: second derivatives that involve
-them are not supported.
+the total-variation, CVaR, Wasserstein, and MMD sets derivatives with
+respect to `nominal` and `radius` are first order: second derivatives that
+involve them are not supported.
 `tests/dro/test_parameter_gradients.py` checks every set against `gradcheck`
 and against finite differences of independent NumPy duals.
 

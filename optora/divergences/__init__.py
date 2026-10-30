@@ -8,12 +8,14 @@ from optora.divergences.f_divergence import (
 )
 from optora.divergences.kl import KLDivergence
 from optora.divergences.max_divergence import MaxDivergence
+from optora.divergences.mmd import MMDDivergence
 from optora.divergences.wasserstein import SinkhornDivergence
 
 __all__ = [
     "ChiSquareDivergence",
     "EntropicTransportDivergence",
     "KLDivergence",
+    "MMDDivergence",
     "MaxDivergence",
     "PhiDivergence",
     "SinkhornDivergence",

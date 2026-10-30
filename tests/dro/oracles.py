@@ -23,6 +23,8 @@ Two families of reference are used:
   `chi_square_worst_case`). The chi-square form is fully explicit; the KL
   form needs one monotone scalar root solve, done with
   `scipy.optimize.brentq`.
+- A second-order cone program (`mmd_worst_case`) solved by Clarabel's
+  interior-point method, an implementation independent of optora's.
 
 Each reference handles the saturated regime, where the radius is large
 enough that the ambiguity set contains a distribution supported entirely
@@ -32,7 +34,9 @@ as a separate branch rather than as a numerical limit.
 
 from typing import Final
 
+import clarabel
 import numpy as np
+import scipy.sparse as sparse
 from numpy.typing import NDArray
 from scipy.optimize import brentq, linprog
 
@@ -465,3 +469,83 @@ def chi_square_worst_case(nominal: Array, loss: Array, radius: float) -> float:
         return mean + float(np.sqrt(variance * budget))
 
     raise RuntimeError("no chi-square active set satisfied the optimality conditions.")
+
+
+def mmd_worst_case(nominal: Array, gram: Array, loss: Array, radius: float) -> float:
+    r"""Solve the MMD worst case as a second-order cone program with Clarabel.
+
+    With $K = F F^\top$ factored by an eigenvalue decomposition, the primal
+
+    $$
+    \max_q \; \mathrm{loss}^\top q
+    \quad \text{s.t.} \quad
+    \mathbf{1}^\top q = 1, \; q \ge 0, \;
+    \lVert F^\top (q - p) \rVert_2 \le \mathrm{radius}
+    $$
+
+    is written in Clarabel's conic form $A q + s = b$ with $s$ in the
+    product of a zero cone, the nonnegative orthant, and a second-order
+    cone, and solved to Clarabel's tightest dependable tolerances. Those
+    tolerances are absolute in the objective, so the program is solved on
+    the loss standardized to unit spread and mapped back: the feasible set
+    does not depend on the loss, so the worst case of $a \ell + b$ is
+    exactly $a$ times that of $\ell$ plus $b$ for $a > 0$.
+
+    Args:
+        nominal: Reference distribution of shape `(n,)`.
+        gram: Symmetric positive semidefinite Gram matrix of shape `(n, n)`.
+        loss: Per-scenario losses of shape `(n,)`.
+        radius: Positive bound on the maximum mean discrepancy.
+
+    Returns:
+        The worst-case expected loss.
+
+    Raises:
+        RuntimeError: If Clarabel does not reach an optimal or nearly
+            optimal solution.
+    """
+    nominal = _as_float64(nominal)
+    gram = _as_float64(gram)
+    loss = _as_float64(loss)
+    support_size = loss.shape[0]
+    low = float(loss.min())
+    spread = float(loss.max()) - low
+    if spread == 0.0:
+        return low
+    standardized = (loss - low) / spread
+    eigenvalues, vectors = np.linalg.eigh(0.5 * (gram + gram.T))
+    factor = vectors * np.sqrt(np.clip(eigenvalues, 0.0, None))
+
+    constraints = sparse.vstack(
+        [
+            sparse.csc_matrix(np.ones((1, support_size))),
+            -sparse.identity(support_size, format="csc"),
+            sparse.csc_matrix((1, support_size)),
+            sparse.csc_matrix(-factor.T),
+        ]
+    ).tocsc()
+    bounds = np.concatenate(
+        [[1.0], np.zeros(support_size), [radius], -factor.T @ nominal]
+    )
+    cones = [
+        clarabel.ZeroConeT(1),
+        clarabel.NonnegativeConeT(support_size),
+        clarabel.SecondOrderConeT(support_size + 1),
+    ]
+    settings = clarabel.DefaultSettings()
+    settings.verbose = False
+    settings.tol_gap_abs = 1e-12
+    settings.tol_gap_rel = 1e-12
+    settings.tol_feas = 1e-12
+    solver = clarabel.DefaultSolver(
+        sparse.csc_matrix((support_size, support_size)),
+        -standardized,
+        constraints,
+        bounds,
+        cones,
+        settings,
+    )
+    solution = solver.solve()
+    if str(solution.status) not in {"Solved", "AlmostSolved"}:
+        raise RuntimeError(f"Clarabel failed: {solution.status}")
+    return low + spread * float(-solution.obj_val)

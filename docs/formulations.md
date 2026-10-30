@@ -281,6 +281,42 @@ Malick (2023) also regularize the objective; that variant returns a
 penalized value rather than a worst-case expectation and is not
 implemented.
 
+### `MMDAmbiguitySet`
+
+MMD DRO (Staib and Jegelka, 2019; Zhu et al., 2021) bounds the maximum mean
+discrepancy of a positive semidefinite kernel with Gram matrix $K$ on the
+support, the distance between kernel mean embeddings:
+
+$$
+\sup_{q \in \Delta_n} \Big\{ \mathrm{loss}^\top q \;:\;
+    \lVert q - \mathrm{nominal} \rVert_K \le \mathrm{radius} \Big\},
+\qquad \lVert v \rVert_K = \sqrt{v^\top K v} .
+$$
+
+Like the Wasserstein ball, and unlike a $\varphi$-divergence ball, it
+contains distributions that put mass where the nominal has none, at a price
+set by the kernel's geometry.
+
+!!! note "A cone program, solved exactly"
+    The constraint $q \ge 0$ couples every scenario through $K$, so no
+    scalar bracket pins the maximizer, and the closed form
+    $\mathrm{loss}^\top \mathrm{nominal} + \mathrm{radius}\,
+    \lVert \mathrm{loss} \rVert_{K^{-1}}$, which drops $q \ge 0$, only
+    bounds the worst case. The set solves the second-order cone program
+    itself, with a batched primal-dual interior-point method using
+    Nesterov-Todd scaling and Mehrotra's predictor-corrector steps, to a
+    relative duality gap of `tol` ($10^{-10}$ by default). It converges in
+    a few tens of iterations whatever the support size; each iteration
+    factors one $n \times n$ matrix per batch element.
+
+The gradient in `loss` is the maximizer, and a zero-valued term from the
+implicit function theorem on the optimality conditions makes the Hessian in
+`loss` exact. Derivatives in `nominal` and `radius` are first order, from
+the multiplier of the radius constraint. Use a characteristic kernel such
+as the Laplacian $e^{-\lVert x - y \rVert}$: Gaussian Gram matrices on
+clustered points are numerically singular, which makes the ball degenerate
+in those directions.
+
 ### `MinimaxSolver`
 
 Wires any of the ambiguity sets above together with an outer solver
