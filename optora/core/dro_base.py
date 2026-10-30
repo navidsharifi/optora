@@ -573,8 +573,9 @@ class _TiltedExpectation(torch.autograd.Function):
     case, mixed ones included, instead of zero.
 
     Every tensor `solution` reads is passed in as an input rather than
-    captured, which is what lets `torch.func` generate a `vmap` rule for
-    this function.
+    captured, the subclass's `operands` included, which is what lets
+    `torch.func` generate a `vmap` rule for this function and lets its
+    forward-mode rule run at the level of an enclosing transform.
     """
 
     generate_vmap_rule = True
@@ -591,6 +592,7 @@ class _TiltedExpectation(torch.autograd.Function):
         nominal_gradient: torch.Tensor | None,
         radius_gradient: torch.Tensor | None,
         solution: Solution,
+        *operands: torch.Tensor,
     ) -> torch.Tensor:
         """Evaluate the expectation as a correction to the maximum loss.
 
@@ -608,9 +610,11 @@ class _TiltedExpectation(torch.autograd.Function):
             radius_gradient: Detached derivative with respect to `radius`,
                 of shape `batch_shape`, or `None` if not needed.
             solution: Map from `(loss, nominal, radius, max_loss, scale,
-                tilt, sensitivities)` to the maximizer and, when
+                tilt, sensitivities, operands)` to the maximizer and, when
                 `sensitivities` is set, the two parameter derivatives, all
                 differentiable in `(loss, nominal, radius)`.
+            *operands: Detached tensors other than `nominal` that the tilt
+                path reads, from `TiltedAmbiguitySet._path_operands`.
 
         Returns:
             The expectation of `loss` under `distribution`, of shape
@@ -633,6 +637,7 @@ class _TiltedExpectation(torch.autograd.Function):
             nominal_gradient,
             radius_gradient,
             solution,
+            *operands,
         ) = inputs
         ctx.save_for_backward(
             loss,
@@ -644,8 +649,9 @@ class _TiltedExpectation(torch.autograd.Function):
             tilt,
             nominal_gradient,
             radius_gradient,
+            *operands,
         )
-        ctx.save_for_forward(loss, nominal, radius, max_loss, scale, tilt)
+        ctx.save_for_forward(loss, nominal, radius, max_loss, scale, tilt, *operands)
         ctx.solution = solution
 
     @staticmethod
@@ -663,6 +669,7 @@ class _TiltedExpectation(torch.autograd.Function):
             tilt,
             nominal_gradient,
             radius_gradient,
+            *operands,
         ) = ctx.saved_tensors
         needs_loss, needs_nominal, needs_radius = ctx.needs_input_grad[:3]
         if torch.is_grad_enabled():
@@ -674,6 +681,7 @@ class _TiltedExpectation(torch.autograd.Function):
                 scale,
                 tilt,
                 needs_nominal or needs_radius,
+                tuple(operands),
             )
         weight = grad_output.unsqueeze(-1)
         return (
@@ -688,7 +696,7 @@ class _TiltedExpectation(torch.autograd.Function):
                 radius,
                 needs_radius,
             ),
-            *(None,) * 7,
+            *(None,) * (7 + len(operands)),
         )
 
     @staticmethod
@@ -709,8 +717,9 @@ class _TiltedExpectation(torch.autograd.Function):
         unsupported.
         """
         parameters = nominal_tangent is not None or radius_tangent is not None
+        saved = ctx.saved_tensors
         distribution, nominal_gradient, radius_gradient = ctx.solution(
-            *ctx.saved_tensors, parameters
+            *saved[:6], parameters, saved[6:]
         )
         result = torch.zeros((), dtype=distribution.dtype, device=distribution.device)
         if loss_tangent is not None:
@@ -942,6 +951,34 @@ class TiltedAmbiguitySet(AmbiguitySet):
         attached = self.__dict__.get("_attached_nominal")
         return self.nominal.detach() if attached is None else attached
 
+    def _path_operands(self, dtype: torch.dtype) -> tuple[torch.Tensor, ...]:
+        """Return the tensors other than `nominal` that the tilt path reads.
+
+        A tensor the set holds, such as a cached kernel, belongs to the
+        `torch.func` transform level it was built at when the set is built
+        inside a transformed function, and a forward-mode rule runs outside
+        that level. `_TiltedExpectation` therefore takes these as inputs,
+        which `torch.func` unwraps to each rule's own level, and while the
+        solution is rebuilt the tilt path reads them back through
+        `_attached_operands` instead of from the set. The tilt path of the
+        nominal alone reads no other tensor, so this is empty by default.
+
+        Args:
+            dtype: Working dtype of the loss being evaluated.
+
+        Returns:
+            The tensors, in the order the subclass reads them back.
+        """
+        return ()
+
+    @property
+    def _attached_operands(self) -> tuple[torch.Tensor, ...] | None:
+        """The rebuild's `_path_operands`, or `None` outside a rebuild."""
+        operands: tuple[torch.Tensor, ...] | None = self.__dict__.get(
+            "_attached_operands"
+        )
+        return operands
+
     @property
     def _nominal_is_attached(self) -> bool:
         """Whether the tilt path is being evaluated on a rebuild's `nominal`.
@@ -953,14 +990,23 @@ class TiltedAmbiguitySet(AmbiguitySet):
         return self.__dict__.get("_attached_nominal") is not None
 
     @contextmanager
-    def _attached_path(self, nominal: torch.Tensor) -> Iterator[None]:
-        """Evaluate the tilt path on the attached `nominal` inside the block."""
-        previous = self.__dict__.get("_attached_nominal")
+    def _attached_path(
+        self, nominal: torch.Tensor, operands: tuple[torch.Tensor, ...]
+    ) -> Iterator[None]:
+        """Evaluate the tilt path on the attached `nominal` and `operands`."""
+        previous = (
+            self.__dict__.get("_attached_nominal"),
+            self.__dict__.get("_attached_operands"),
+        )
         self.__dict__["_attached_nominal"] = nominal
+        self.__dict__["_attached_operands"] = operands
         try:
             yield
         finally:
-            self.__dict__["_attached_nominal"] = previous
+            (
+                self.__dict__["_attached_nominal"],
+                self.__dict__["_attached_operands"],
+            ) = previous
 
     @property
     def _reachable(self) -> torch.Tensor:
@@ -1149,6 +1195,7 @@ class TiltedAmbiguitySet(AmbiguitySet):
             nominal_gradient,
             radius_gradient,
             self._implicit_solution,
+            *(operand.detach() for operand in self._path_operands(working.dtype)),
         )
         return self._as_result(value.expand(batch_shape), loss)
 
@@ -1161,6 +1208,7 @@ class TiltedAmbiguitySet(AmbiguitySet):
         scale: torch.Tensor,
         tilt: torch.Tensor,
         sensitivities: bool,
+        operands: tuple[torch.Tensor, ...],
     ) -> tuple[torch.Tensor, torch.Tensor | None, torch.Tensor | None]:
         r"""Rebuild the solution as a function of its inputs with exact Jacobians.
 
@@ -1205,6 +1253,8 @@ class TiltedAmbiguitySet(AmbiguitySet):
             tilt: Solved tilt of shape `batch_shape`.
             sensitivities: Whether to rebuild the envelope derivatives with
                 respect to `nominal` and `radius` too.
+            operands: The forward pass's `_path_operands`, at the caller's
+                transform level.
 
         Returns:
             The maximizer of shape `batch_shape + (n,)`, equal in value to
@@ -1213,7 +1263,7 @@ class TiltedAmbiguitySet(AmbiguitySet):
             `None` twice; all differentiable in `loss`, `nominal`, and
             `radius`.
         """
-        with self._attached_path(nominal.detach()):
+        with self._attached_path(nominal.detach(), operands):
             gap = torch.where(self._reachable, (max_loss - loss) / scale, 1.0)
             slope: torch.Tensor = jvp(
                 lambda path: self._tilted_distribution(gap.detach(), path)[1],
@@ -1221,7 +1271,7 @@ class TiltedAmbiguitySet(AmbiguitySet):
                 (torch.ones_like(tilt),),
             )[1]
         active = slope > 0.0
-        with self._attached_path(nominal):
+        with self._attached_path(nominal, operands):
             _, divergence = self._tilted_distribution(gap, tilt)
             residual = divergence - divergence.detach()
             if radius is not None:

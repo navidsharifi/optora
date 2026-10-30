@@ -145,16 +145,11 @@ Hessians and Hessian-vector products of the worst case with respect to
 
 !!! warning "Unsupported second-order paths"
 
-    - `torch.func.jacfwd(torch.func.jacfwd(...))` on `KLAmbiguitySet` or
-      `ChiSquareAmbiguitySet`: PyTorch does not differentiate a custom
-      forward-mode rule a second time. Use `torch.func.hessian`
+    - `torch.func.jacfwd(torch.func.jacfwd(...))` on `KLAmbiguitySet`,
+      `ChiSquareAmbiguitySet`, or `SinkhornAmbiguitySet`: PyTorch does not
+      differentiate a custom forward-mode rule a second time, so the result
+      is silently wrong rather than an error. Use `torch.func.hessian`
       (forward over reverse) or reverse over reverse.
-    - Forward-mode `torch.func` transforms (`torch.func.hessian`,
-      `torch.func.jacfwd`) of a function that constructs a
-      `SinkhornAmbiguitySet`: its forward-mode rule reads the kernel the set
-      caches, which the transform then sees at the wrong level. Construct
-      the set outside the transformed function, or use reverse over
-      reverse.
 
 ## Non-differentiable points
 
@@ -361,6 +356,15 @@ it for a low-dimensional decision variable solved to convergence with
 reported diagnostics; prefer the loop above when the decision variable is
 an `nn.Module`'s parameters, since `torch.optim` already owns that state.
 Both minimize the identical objective and reach the same optimum.
+
+`MinimaxSolver` with a `GradientDescent` outer solver, and
+`SaddlePointSolver`, compose with `torch.func` transforms. For example,
+`torch.func.vmap` over a tensor radius solves one robust problem per radius
+in a single call. Under `vmap` a batched convergence flag has no single
+value to read, so every mapped problem runs the solver's whole `max_iter`
+budget, frozen once it converges. Each iterate is detached, so an
+enclosing `torch.func.grad` sees the solution as a constant rather than
+differentiating through the solver's steps.
 
 For a complete training run held against an ERM baseline and two controls,
 see [Training under subpopulation shift](examples/subpopulation_shift_training.md).

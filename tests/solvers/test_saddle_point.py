@@ -287,3 +287,92 @@ def test_invalid_tol_raises_value_error() -> None:
 
 def test_is_a_solver_instance() -> None:
     assert isinstance(SaddlePointSolver(), Solver)
+
+
+def _coupled_saddle(
+    center: torch.Tensor, cap: float | None = None
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Solve min_x max_y ||x - c||^2 + <x, y> - ||y + c||^2 from the origin.
+
+    Its saddle point is x = 6c / 5, y = -2c / 5; a `cap` projects the dual
+    iterate onto y <= cap after every ascent step.
+    """
+    problem = SaddlePointProblem(
+        objective=lambda x, y: (
+            torch.sum((x - center) ** 2)
+            + torch.sum(x * y)
+            - torch.sum((y + center) ** 2)
+        ),
+        primal_initial_point=torch.zeros_like(center),
+        dual_initial_point=torch.zeros_like(center),
+        dual_projection=None if cap is None else lambda y: torch.clamp(y, max=cap),
+    )
+    solver = SaddlePointSolver(
+        primal_step_size=0.1, dual_step_size=0.1, max_iter=2000, tol=1e-12
+    )
+    result = solver.solve(problem)
+    return result.primal_point, result.dual_point
+
+
+CENTERS = torch.tensor([[1.0, -2.0], [0.5, 3.0], [0.0, 0.0]], dtype=torch.float64)
+
+
+def test_solves_inside_torch_func_vmap() -> None:
+    # Each mapped element converges on its own and is frozen there, so the
+    # solution is the one an independent solve would return.
+    primal, dual = torch.func.vmap(_coupled_saddle)(CENTERS)
+
+    torch.testing.assert_close(primal, 1.2 * CENTERS, rtol=0.0, atol=1e-10)
+    torch.testing.assert_close(dual, -0.4 * CENTERS, rtol=0.0, atol=1e-10)
+    for index, center in enumerate(CENTERS):
+        alone = _coupled_saddle(center)
+        torch.testing.assert_close(primal[index], alone[0], rtol=0.0, atol=1e-12)
+        torch.testing.assert_close(dual[index], alone[1], rtol=0.0, atol=1e-12)
+
+
+def test_solves_inside_torch_func_vmap_with_a_dual_projection() -> None:
+    primal, dual = torch.func.vmap(lambda center: _coupled_saddle(center, cap=-0.5))(
+        CENTERS
+    )
+
+    assert bool(torch.all(dual <= -0.5))
+    for index, center in enumerate(CENTERS):
+        alone = _coupled_saddle(center, cap=-0.5)
+        torch.testing.assert_close(primal[index], alone[0], rtol=0.0, atol=1e-12)
+        torch.testing.assert_close(dual[index], alone[1], rtol=0.0, atol=1e-12)
+
+
+def test_solves_inside_torch_func_grad_without_differentiating_its_steps() -> None:
+    # Every iterate is detached, so the returned point is a constant to the
+    # enclosing transform and the gradient below is the point itself.
+    center = CENTERS[0]
+    expected, _ = _coupled_saddle(center)
+
+    gradient = torch.func.grad(
+        lambda scale: torch.sum(scale * _coupled_saddle(center)[0])
+    )(torch.ones(2, dtype=torch.float64))
+
+    torch.testing.assert_close(gradient, expected)
+
+
+def test_inside_a_transform_an_ignored_iterate_has_a_zero_gradient() -> None:
+    # torch.func cannot tell an ignored iterate from a stationary one, so the
+    # primal point stays where it started instead of raising.
+    def solve(target: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+        problem = SaddlePointProblem(
+            objective=lambda x, y: -torch.sum((y - target) ** 2),
+            primal_initial_point=torch.ones(1, dtype=torch.float64),
+            dual_initial_point=torch.zeros(1, dtype=torch.float64),
+        )
+        solver = SaddlePointSolver(
+            primal_step_size=0.1, dual_step_size=0.1, max_iter=500, tol=1e-12
+        )
+        result = solver.solve(problem)
+        return result.primal_point, result.dual_point
+
+    targets = torch.tensor([[5.0], [-1.0]], dtype=torch.float64)
+
+    primal, dual = torch.func.vmap(solve)(targets)
+
+    torch.testing.assert_close(primal, torch.ones(2, 1, dtype=torch.float64))
+    torch.testing.assert_close(dual, targets, rtol=0.0, atol=1e-10)

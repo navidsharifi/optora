@@ -114,6 +114,12 @@ class MinimaxSolver(Solver[MinimaxProblem, MinimaxResult]):
     is tuned for cheap inner loops and would keep running frozen — and
     therefore wasted — inner solves after the outer loop has converged.
 
+    The solve composes with `torch.func` transforms of its caller whenever
+    `solver` does, as `optora.solvers.GradientDescent` does: every
+    ambiguity set's `worst_case_expectation` already supports them, so
+    `torch.func.vmap` over, for example, a tensor radius solves one robust
+    problem per radius in one call.
+
     Attributes:
         solver: Solver minimizing the composed worst-case-expectation
             objective over the decision variable. Should use

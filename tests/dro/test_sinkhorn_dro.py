@@ -339,6 +339,51 @@ def test_inside_the_radius_the_hessian_is_nonzero() -> None:
     assert float(torch.linalg.eigvalsh(hessian).min()) >= -1e-12
 
 
+@pytest.mark.parametrize(
+    "cost_dtype", [torch.float64, torch.float32], ids=["f64_cost", "f32_cost"]
+)
+@pytest.mark.parametrize("partial_reference", [False, True], ids=["full", "partial"])
+def test_forward_mode_transforms_of_a_set_built_inside_match_reverse_mode(
+    cost_dtype: torch.dtype, partial_reference: bool
+) -> None:
+    # Built inside the transformed function, the set's kernel and reachable
+    # mask belong to the innermost transform level, which the forward-mode
+    # rule runs outside (issue #80). A float32 cost has its kernel rebuilt in
+    # the float64 working dtype, and a partial reference makes the mask
+    # matter.
+    instance = SMOOTH[1]
+    nominal, loss, cost = instance.tensors()
+    reference = (
+        torch.tensor([1.0, 1.0, 0.0, 1.0, 1.0, 1.0, 0.0], dtype=torch.float64)
+        if partial_reference
+        else None
+    )
+
+    def function(loss: torch.Tensor) -> torch.Tensor:
+        return SinkhornAmbiguitySet(
+            nominal, cost.to(cost_dtype), 0.5, 0.3, reference=reference
+        ).worst_case_expectation(loss)
+
+    expected = torch.autograd.functional.hessian(function, loss)
+
+    torch.testing.assert_close(
+        torch.func.hessian(function)(loss), expected, rtol=0.0, atol=1e-14
+    )
+    torch.testing.assert_close(
+        torch.func.jacrev(torch.func.jacfwd(function))(loss),
+        expected,
+        rtol=0.0,
+        atol=1e-14,
+    )
+    torch.testing.assert_close(
+        torch.func.vmap(torch.func.hessian(function))(torch.stack([loss, -loss]))[0],
+        expected,
+        rtol=0.0,
+        atol=1e-14,
+    )
+    assert float(torch.linalg.eigvalsh(expected).max()) > 1e-2
+
+
 # --- Batching and buffers ----------------------------------------------------
 
 

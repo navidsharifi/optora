@@ -146,13 +146,27 @@ class SinkhornAmbiguitySet(TiltedAmbiguitySet):
     @property
     def _reachable(self) -> torch.Tensor:
         """Scenarios the worst case can reach: the support of the reference."""
+        attached = self._attached_operands
+        if attached is not None:
+            return attached[1]
         return self.divergence.reference > 0.0
 
     def _kernel(self, dtype: torch.dtype) -> torch.Tensor:
-        """Return `log_kernel` in `dtype`, recomputing it rather than rounding it."""
+        """Return `log_kernel` in `dtype`, recomputing it rather than rounding it.
+
+        While the solution is rebuilt it is the rebuild's own kernel, already
+        in the working dtype `dtype`.
+        """
+        attached = self._attached_operands
+        if attached is not None:
+            return attached[0]
         if self.log_kernel.dtype == dtype:
             return self.log_kernel
         return self.divergence.log_kernel(dtype)
+
+    def _path_operands(self, dtype: torch.dtype) -> tuple[torch.Tensor, ...]:
+        """Return the kernel in `dtype` and the reachable mask, read back above."""
+        return self._kernel(dtype), self._reachable
 
     def smoothed_nominal(self, dtype: torch.dtype | None = None) -> torch.Tensor:
         r"""Return the kernel-smoothed nominal $P^0 = \hat p^\top Q$, the ball's centre.
