@@ -338,7 +338,7 @@ def test_first_order_backward_does_not_rebuild_the_maximizer(
     def unexpected(*_: object) -> torch.Tensor:
         raise AssertionError("a first-order backward rebuilt the maximizer")
 
-    monkeypatch.setattr(ambiguity_set, "_implicit_maximizer", unexpected)
+    monkeypatch.setattr(ambiguity_set, "_implicit_solution", unexpected)
     loss = leaf_loss(GENERIC)
     ambiguity_set.worst_case_expectation(loss).backward()
 
