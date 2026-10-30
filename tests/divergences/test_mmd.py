@@ -62,9 +62,13 @@ def test_batches_and_broadcasts() -> None:
 
     values = divergence(candidates, Q)
 
+    # A batched quadratic form runs as a matrix product and a single one as a
+    # matrix-vector product, whose BLAS reduction orders may differ by an ulp.
     assert values.shape == (3,)
     for index in range(3):
-        assert float(values[index]) == float(divergence(candidates[index], Q))
+        assert float(values[index]) == pytest.approx(
+            float(divergence(candidates[index], Q)), rel=1e-15
+        )
 
 
 def test_rounding_below_zero_is_clamped_on_a_singular_gram() -> None:
