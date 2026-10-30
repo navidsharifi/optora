@@ -39,6 +39,39 @@ def _bisection_steps(dtype: torch.dtype) -> int:
     return int(-math.log2(torch.finfo(dtype).eps))
 
 
+# Entries of one batched tilt evaluation below which a solve is bound by
+# per-kernel launch overhead rather than by arithmetic: up to this size,
+# evaluating several tilts per step in one batched call costs about as much
+# as evaluating one, and cuts the number of steps.
+_LAUNCH_BOUND_ENTRIES = 2**14
+
+# Largest number of bits a search step resolves, 15 tilts per step.
+_MAX_SEARCH_BITS = 4
+
+
+def _search_bits(entries: int) -> int:
+    """Return the bits of the tilt each search step resolves.
+
+    A step that evaluates $2^b - 1$ evenly spaced tilts narrows the bracket
+    by $2^b$, so it replaces $b$ bisection steps at $2^b - 1$ times the
+    arithmetic per step. The largest $b$ whose batched evaluation stays
+    within `_LAUNCH_BOUND_ENTRIES` is chosen: small problems, whose steps
+    are dominated by kernel launches, take few wide steps, and large ones
+    bisect. The choice reads only shapes, so it never synchronizes.
+
+    Args:
+        entries: Number of entries of one tilt evaluation, the batch size
+            times the support size.
+
+    Returns:
+        The number of bits $b$, from one (bisection) to `_MAX_SEARCH_BITS`.
+    """
+    for bits in range(_MAX_SEARCH_BITS, 1, -1):
+        if (2**bits - 1) * entries <= _LAUNCH_BOUND_ENTRIES:
+            return bits
+    return 1
+
+
 def _mass_tolerance(nominal: torch.Tensor) -> float:
     """Return the tolerance allowed on a nominal distribution's total mass.
 
@@ -619,10 +652,12 @@ class TiltedAmbiguitySet(AmbiguitySet):
       $[0, 1]$ is valid for every loss and every radius by construction, so
       bisection cannot fail to make progress the way an unconstrained
       first-order dual solve can when the minimizer runs off to infinity.
-    - **A fixed, synchronization-free trip count.** The number of halvings
-      is read off the dtype by `_bisection_steps`, so the solve is a fixed
-      number of device-side kernels with no host read of a convergence
-      flag, and a batch costs exactly what a single element costs.
+    - **A fixed, synchronization-free trip count.** The resolution is read
+      off the dtype by `_bisection_steps`, so the solve is a fixed number
+      of device-side kernels with no host read of a convergence flag. A
+      small problem, whose cost is kernel launches rather than arithmetic,
+      evaluates up to 15 tilts per step in one batched call and so needs a
+      quarter of the steps (`_search_bits`); a large one bisects.
     - **Feasibility by construction.** Each step keeps the endpoint that
       tested feasible, so the returned tilt always satisfies the radius
       constraint. The reported value is therefore a primal objective value
@@ -848,7 +883,14 @@ class TiltedAmbiguitySet(AmbiguitySet):
         return (tilt / complement).unsqueeze(-1)
 
     def _solve_tilt(self, gap: torch.Tensor, batch_shape: torch.Size) -> torch.Tensor:
-        """Bisect the unit interval for the largest tilt inside the radius.
+        """Search the unit interval for the largest tilt inside the radius.
+
+        Each step evaluates $2^b - 1$ evenly spaced tilts inside the current
+        bracket, of width $2^{-bk}$ after $k$ steps, in one call batched
+        along a new leading dimension, and keeps the subinterval above the
+        largest feasible one, so the bracket ends on the same dyadic grid
+        bisection ($b = 1$) would reach. Every endpoint is a dyadic rational
+        and the width a power of two, so the candidates are exact.
 
         Args:
             gap: Standardized shortfall below the maximum loss, of shape
@@ -858,22 +900,31 @@ class TiltedAmbiguitySet(AmbiguitySet):
 
         Returns:
             A tensor of shape `batch_shape` holding, per batch element, the
-            largest tilt the bisection found whose distribution lies inside
-            the ambiguity set. Elements are bisected independently through
-            elementwise `torch.where`, so a saturated or degenerate element
+            largest tilt the search found whose distribution lies inside
+            the ambiguity set. Elements are searched independently through
+            elementwise reductions, so a saturated or degenerate element
             cannot disturb the rest of its batch.
         """
+        bits = _search_bits(math.prod(batch_shape) * gap.shape[-1])
+        points = 2**bits - 1
+        steps = -(-_bisection_steps(gap.dtype) // bits)
+        index = torch.arange(1, points + 1, dtype=gap.dtype, device=gap.device)
+        index = index.reshape((points,) + (1,) * len(batch_shape))
         lower = torch.zeros(batch_shape, dtype=gap.dtype, device=gap.device)
-        upper = torch.ones_like(lower)
-        for _ in range(_bisection_steps(gap.dtype)):
-            middle = 0.5 * (lower + upper)
-            _, divergence = self._tilted_distribution(gap, middle)
+        spacing = 1.0
+        for _ in range(steps):
+            spacing /= points + 1
+            _, divergence = self._tilted_distribution(gap, lower + spacing * index)
             # A non-finite divergence compares false and so counts as
             # infeasible, which is the correct reading: it means the tilt
-            # left the support of the nominal.
+            # left the support of the nominal. The largest feasible
+            # candidate is kept rather than the count of feasible ones, so
+            # the returned tilt was itself tested feasible even where
+            # rounding makes feasibility non-monotone.
             feasible = divergence <= self.radius
-            lower = torch.where(feasible, middle, lower)
-            upper = torch.where(feasible, upper, middle)
+            lower = lower + spacing * torch.amax(
+                torch.where(feasible, index, 0.0), dim=0
+            )
         return lower
 
     def worst_case_expectation(self, loss: torch.Tensor) -> torch.Tensor:

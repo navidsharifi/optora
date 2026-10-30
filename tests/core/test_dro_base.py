@@ -1,5 +1,6 @@
 """Tests for the `AmbiguitySet` ABC contract."""
 
+import math
 from collections.abc import Callable
 from typing import Any
 
@@ -9,7 +10,14 @@ from torch import nn
 
 from optora.core.convergence import ConvergenceStatus
 from optora.core.divergence_base import Divergence
-from optora.core.dro_base import AmbiguitySet, DualAmbiguitySet
+from optora.core.dro_base import (
+    _LAUNCH_BOUND_ENTRIES,
+    AmbiguitySet,
+    DualAmbiguitySet,
+    TiltedAmbiguitySet,
+    _bisection_steps,
+    _search_bits,
+)
 from optora.core.solver_base import (
     MinimizationProblem,
     MinimizationResult,
@@ -353,3 +361,97 @@ def test_implicit_curvature_is_skipped_when_nothing_requires_grad(
         ambiguity_set.worst_case_expectation(loss.requires_grad_(True))
     with pytest.raises(AssertionError, match="implicit curvature was built"):
         ambiguity_set.worst_case_expectation(loss)
+
+
+# --- The tilt search of `TiltedAmbiguitySet` (issue #63) ---------------------
+
+
+class _ScheduledTiltAmbiguitySet(TiltedAmbiguitySet):
+    """Tilted set whose divergence along the path is a given function of the tilt."""
+
+    def __init__(
+        self,
+        nominal: torch.Tensor,
+        radius: float | torch.Tensor,
+        schedule: Callable[[torch.Tensor], torch.Tensor],
+    ) -> None:
+        super().__init__(
+            nominal=nominal, divergence=_AbsoluteDifferenceDivergence(), radius=radius
+        )
+        self.schedule = schedule
+        self.evaluations = 0
+
+    def _tilted_distribution(
+        self, gap: torch.Tensor, tilt: torch.Tensor
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        self.evaluations += 1
+        distribution = self.nominal.expand(tilt.shape + gap.shape[-1:])
+        return distribution, self.schedule(tilt)
+
+
+def _solve(
+    ambiguity_set: TiltedAmbiguitySet, batch_shape: tuple[int, ...], dtype: torch.dtype
+) -> torch.Tensor:
+    gap = torch.zeros(batch_shape + (ambiguity_set.nominal.shape[-1],), dtype=dtype)
+    return ambiguity_set._solve_tilt(gap, torch.Size(batch_shape))
+
+
+def test_search_widens_its_steps_only_while_launch_bound() -> None:
+    assert _search_bits(1) == 4
+    assert _search_bits(_LAUNCH_BOUND_ENTRIES // 15) == 4
+    assert _search_bits(_LAUNCH_BOUND_ENTRIES // 15 + 1) == 3
+    assert _search_bits(_LAUNCH_BOUND_ENTRIES // 3) == 2
+    assert _search_bits(_LAUNCH_BOUND_ENTRIES // 3 + 1) == 1
+    assert _search_bits(10**9) == 1
+
+
+@pytest.mark.parametrize("dtype", [torch.float32, torch.float64])
+@pytest.mark.parametrize("batch", [(), (3,), (_LAUNCH_BOUND_ENTRIES // 2,)])
+def test_search_resolves_the_tilt_to_the_dtype_precision(
+    dtype: torch.dtype, batch: tuple[int, ...]
+) -> None:
+    # With D(t) = t the answer is the radius itself, so every search width,
+    # from 15 tilts per step down to bisection, must land within the dtype's
+    # resolution below it, and never above it.
+    generator = torch.Generator().manual_seed(0)
+    radius = torch.rand(batch, generator=generator, dtype=dtype)
+    nominal = torch.tensor([0.5, 0.5], dtype=dtype)
+    ambiguity_set = _ScheduledTiltAmbiguitySet(nominal, radius, lambda tilt: tilt)
+
+    tilt = _solve(ambiguity_set, batch, dtype)
+
+    assert bool(torch.all(tilt <= radius))
+    assert bool(torch.all(radius - tilt <= 2.0 ** -_bisection_steps(dtype)))
+
+
+@pytest.mark.parametrize("dtype", [torch.float32, torch.float64])
+@pytest.mark.parametrize(
+    ("batch", "bits"), [((), 4), ((_LAUNCH_BOUND_ENTRIES // 2,), 1)]
+)
+def test_search_takes_a_fixed_number_of_steps(
+    dtype: torch.dtype, batch: tuple[int, ...], bits: int
+) -> None:
+    nominal = torch.tensor([0.5, 0.5], dtype=dtype)
+    ambiguity_set = _ScheduledTiltAmbiguitySet(nominal, 0.3, lambda tilt: tilt)
+
+    _solve(ambiguity_set, batch, dtype)
+
+    assert ambiguity_set.evaluations == math.ceil(_bisection_steps(dtype) / bits)
+
+
+def test_search_keeps_a_tested_feasible_tilt_where_feasibility_is_not_monotone() -> (
+    None
+):
+    # Rounding can make a feasibility test non-monotone along the path. Here
+    # 7/16, one of the first step's 15 candidates, spuriously tests
+    # infeasible while 8/16 is feasible: counting the feasible candidates
+    # would keep 7/16, a tilt that tested infeasible.
+    def schedule(tilt: torch.Tensor) -> torch.Tensor:
+        return torch.where(tilt == 7.0 / 16.0, torch.inf, tilt)
+
+    nominal = torch.tensor([0.5, 0.5], dtype=torch.float64)
+    ambiguity_set = _ScheduledTiltAmbiguitySet(nominal, 0.5, schedule)
+
+    tilt = _solve(ambiguity_set, (), torch.float64)
+
+    assert float(tilt) == 0.5

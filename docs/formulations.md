@@ -97,17 +97,18 @@ every radius, so the solve cannot stall the way minimizing the dual
 directly can: that minimizer runs off to $\eta \to \infty$ as the radius
 vanishes, and ceases to exist at all once the radius saturates the set.
 
-**The result is feasible, so it is a genuine bound.** Each halving keeps
-the endpoint that satisfied the radius constraint, so the reported value is
+**The result is feasible, so it is a genuine bound.** Each step keeps
+the largest tilt that satisfied the radius constraint, so the reported value is
 $\mathbb{E}_{q^\star}[\mathrm{loss}]$ at a distribution the set really
 contains. It can never exceed $\max\ell$, and it is never `nan`, whatever
 the support size or loss scale.
 
-**The cost is fixed and synchronization-free.** The number of halvings is
-read off the dtype (52 in float64, 23 in float32), so a solve is a fixed
+**The cost is fixed and synchronization-free.** The resolution is read
+off the dtype (52 bits in float64, 23 in float32), so a solve is a fixed
 sequence of device-side kernels with no convergence flag to read back and
-no tuning knobs. A batch of losses or a sweep of radii costs the same as a
-single element.
+no tuning knobs. A small problem, whose cost is kernel launches rather than
+arithmetic, tests up to 15 evenly spaced tilts per step in one batched call
+and so needs a quarter of the steps; a large one bisects.
 
 **Saturation needs no special case.** Once the radius reaches
 $-\log P^\star$ (KL) or $1/P^\star - 1$ (chi-square), where $P^\star$ is
