@@ -231,3 +231,36 @@ def test_invalid_tol_raises_value_error() -> None:
 
 def test_is_a_solver_instance() -> None:
     assert isinstance(GradientDescent(), Solver)
+
+
+def _minimizer(target: torch.Tensor) -> torch.Tensor:
+    """Solve min_x ||x - target||^2 from the origin."""
+    problem = MinimizationProblem(
+        objective=lambda point: torch.sum((point - target) ** 2),
+        initial_point=torch.zeros_like(target),
+    )
+    return GradientDescent(step_size=0.25, max_iter=200, tol=1e-12).solve(problem).point
+
+
+def test_solves_inside_torch_func_vmap() -> None:
+    # Each mapped element converges on its own and is frozen there, so the
+    # solution is the one an independent solve would return.
+    targets = torch.tensor([[1.0, -2.0], [0.5, 3.0], [0.0, 0.0]], dtype=torch.float64)
+
+    solutions = torch.func.vmap(_minimizer)(targets)
+
+    torch.testing.assert_close(solutions, targets, rtol=0.0, atol=1e-10)
+    for target, solution in zip(targets, solutions, strict=True):
+        torch.testing.assert_close(solution, _minimizer(target), rtol=0.0, atol=1e-12)
+
+
+def test_solves_inside_torch_func_grad_without_differentiating_its_steps() -> None:
+    # Every iterate is detached, so the returned point is a constant to the
+    # enclosing transform and the gradient below is the point itself.
+    target = torch.tensor([1.0, -2.0], dtype=torch.float64)
+
+    gradient = torch.func.grad(lambda scale: torch.sum(scale * _minimizer(target)))(
+        torch.ones(2, dtype=torch.float64)
+    )
+
+    torch.testing.assert_close(gradient, _minimizer(target))

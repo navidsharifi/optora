@@ -10,6 +10,7 @@ import torch
 from torch import nn
 from torch.func import jvp
 
+from optora.core._transforms import transforms_active
 from optora.core.divergence_base import Divergence
 from optora.core.precision import working_dtype
 from optora.core.solver_base import (
@@ -1257,7 +1258,9 @@ def _implicit_curvature(
     therefore leaves the value and gradient untouched and makes every
     second derivative exact once the dual solve has converged. $H$ is held
     fixed, which costs nothing at second order. Where $H$ is not finite
-    and positive definite, the term is zero.
+    and positive definite, the term is zero. The slope and the rows of $H$
+    are taken with `torch.func`, which composes both with a recorded
+    autograd graph and with `torch.func` transforms of the caller.
 
     Args:
         dual_objective: Map from dual points of shape `batch_shape + d` to
@@ -1269,27 +1272,27 @@ def _implicit_curvature(
     Returns:
         The zero-valued correction, of shape `batch_shape`.
     """
-    with torch.enable_grad():
-        variable = point.detach().requires_grad_(True)
-        (slope,) = torch.autograd.grad(
-            dual_objective(variable).sum(), variable, create_graph=True
-        )
-        slope = slope.reshape(batch_shape + (-1,))
-        size = slope.shape[-1]
-        rows = [
-            torch.autograd.grad(
-                slope[..., row].sum(), variable, retain_graph=True, allow_unused=True
-            )[0]
-            for row in range(size)
-        ]
+
+    def total(dual: torch.Tensor) -> torch.Tensor:
+        return torch.sum(dual_objective(dual))
+
+    variable = point.detach()
+    slope, pullback = torch.func.vjp(torch.func.grad(total), variable)[:2]
+    slope = slope.reshape(batch_shape + (-1,))
+    size = slope.shape[-1]
+    identity = torch.eye(size, dtype=slope.dtype, device=slope.device)
+    # The summed objective separates over the batch, so its Hessian is block
+    # diagonal and one pullback of a basis vector, repeated over the batch,
+    # reads one row of every block at once.
     hessian = torch.stack(
         [
-            torch.zeros_like(slope) if row is None else row.reshape(slope.shape)
-            for row in rows
+            pullback(identity[row].expand(slope.shape).reshape(variable.shape))[0]
+            .reshape(slope.shape)
+            .detach()
+            for row in range(size)
         ],
         dim=-2,
     )
-    identity = torch.eye(size, dtype=hessian.dtype, device=hessian.device)
     finite = torch.isfinite(hessian).all(dim=-1).all(dim=-1)
     factor, info = torch.linalg.cholesky_ex(
         torch.where(finite[..., None, None], hessian, identity)
@@ -1567,8 +1570,9 @@ class DualAmbiguitySet(AmbiguitySet):
             detached, and `_implicit_curvature` adds, at zero value and zero
             first derivative, the second-order effect of the optimum moving
             with `loss`, `nominal`, and `radius`. It is built only when the
-            re-evaluated objective requires grad. The cached warm start is
-            reused only when its shape
+            re-evaluated objective requires grad or the call runs inside a
+            `torch.func` transform. The cached warm start is reused only
+            when its shape
             still matches the batch being solved. Both the initial point and
             the cache are kept in raw-loss units and converted to and from
             the standardized units the solver iterates in.
@@ -1596,8 +1600,11 @@ class DualAmbiguitySet(AmbiguitySet):
         )
         result = self.dual_solver.solve(problem)
         point = result.point.detach()
-        self._dual_warm_start = self._from_standard_units(point, shift, scale)
+        transformed = transforms_active()
+        if not transformed:
+            # A `torch.func` transform's optimum must not outlive the call.
+            self._dual_warm_start = self._from_standard_units(point, shift, scale)
         value = dual_objective(point)
-        if not value.requires_grad:
+        if not (value.requires_grad or transformed):
             return value
         return value + _implicit_curvature(dual_objective, point, batch_shape)

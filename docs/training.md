@@ -129,14 +129,18 @@ Hessians and Hessian-vector products of the worst case with respect to
     The term costs a few passes over the dual objective per call, against
     the solve's many, and is skipped when nothing requires grad.
 
+    `torch.func` transforms work too: inside one the inner
+    `GradientDescent` differentiates the dual with `torch.func` rather than
+    `torch.autograd`. Under `torch.func.vmap` a batched convergence flag
+    has no single value to read, so every mapped element runs the dual
+    solver's whole `max_iter` budget; keep it modest there.
+
 !!! warning "Unsupported second-order paths"
 
     - `torch.func.jacfwd(torch.func.jacfwd(...))` on `KLAmbiguitySet` or
       `ChiSquareAmbiguitySet`: PyTorch does not differentiate a custom
       forward-mode rule a second time. Use `torch.func.hessian`
       (forward over reverse) or reverse over reverse.
-    - `torch.func` transforms on `PhiAmbiguitySet`: its inner dual solve
-      calls `torch.autograd.grad`. Use `torch.autograd` directly.
     - Forward-mode `torch.func` transforms (`torch.func.hessian`,
       `torch.func.jacfwd`) of a function that constructs a
       `SinkhornAmbiguitySet`: its forward-mode rule reads the kernel the set

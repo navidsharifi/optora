@@ -4,6 +4,7 @@ from collections.abc import Callable
 
 import torch
 
+from optora.core._transforms import transforms_active
 from optora.core.convergence import (
     DEFAULT_CHECK_INTERVAL,
     ConvergenceTracker,
@@ -56,6 +57,15 @@ class GradientDescent(Solver[MinimizationProblem, MinimizationResult]):
     `ConvergenceTracker` exists to avoid. The frozen-step rule makes the
     extra steps exact no-ops for elements that already converged.
 
+    The solve composes with `torch.func` transforms of its caller. Inside
+    one, where `Tensor.requires_grad_` and `torch.autograd.grad` are
+    unsupported, the gradient is taken with `torch.func.grad_and_value`
+    instead, and under `torch.func.vmap` every mapped element runs the
+    whole iteration budget, since a batched convergence flag has no single
+    value to read on the host (see `ConvergenceTracker.should_stop`). Each
+    iterate is detached either way, so a caller differentiating through the
+    solve sees none of its steps.
+
     Attributes:
         step_size: Positive learning rate applied to each gradient step.
         max_iter: Maximum number of gradient steps.
@@ -98,24 +108,33 @@ class GradientDescent(Solver[MinimizationProblem, MinimizationResult]):
         self.tol = tol
         self.check_interval = validate_check_interval(check_interval)
 
+    @staticmethod
     def _evaluate(
-        self,
         objective: Callable[[torch.Tensor], torch.Tensor],
         point: torch.Tensor,
+        functional: bool,
     ) -> tuple[torch.Tensor, torch.Tensor]:
-        """Evaluate the objective and its gradient at a differentiable point.
+        """Evaluate the objective and its gradient at a detached point.
 
         Args:
             objective: Differentiable scalar-valued objective.
-            point: Iterate the objective is evaluated at, requiring grad.
+            point: Detached iterate the objective is evaluated at.
+            functional: Whether to differentiate with `torch.func`, as a
+                `torch.func` transform of the caller requires. An objective
+                that ignores the point then has a zero gradient rather than
+                raising, since `torch.func` cannot tell the two apart.
 
         Returns:
             The objective value and its gradient with respect to `point`.
 
         Raises:
-            ValueError: If `objective` does not depend on `point` through
-                autograd.
+            ValueError: If `functional` is unset and `objective` does not
+                depend on `point` through autograd.
         """
+        if functional:
+            gradient, value = torch.func.grad_and_value(objective)(point)
+            return value, gradient
+        point = point.requires_grad_(True)
         value = objective(point)
         (raw_grad,) = torch.autograd.grad(value, point, allow_unused=True)
         return value, require_gradient(raw_grad, "the point")
@@ -132,9 +151,10 @@ class GradientDescent(Solver[MinimizationProblem, MinimizationResult]):
 
         Raises:
             ValueError: If `problem.objective` does not depend on its
-                argument through autograd.
+                argument through autograd, outside a `torch.func` transform.
         """
-        point = problem.initial_point.detach().clone().requires_grad_(True)
+        functional = transforms_active()
+        point = problem.initial_point.detach().clone()
         tracker = ConvergenceTracker(self.tol, self.check_interval, point)
         # Each iteration steps with the gradient of the previous evaluation
         # and then evaluates the new iterate, so the last evaluation is
@@ -142,13 +162,13 @@ class GradientDescent(Solver[MinimizationProblem, MinimizationResult]):
         # loop instead would need the convergence flag on the host, one
         # synchronization per solve, which nesting multiplies by the outer
         # iteration count.
-        value, grad = self._evaluate(problem.objective, point)
+        value, grad = self._evaluate(problem.objective, point, functional)
         frozen = tracker.start(torch.linalg.vector_norm(grad))
         for iteration in range(self.max_iter):
-            with torch.no_grad():
-                point = torch.where(frozen, point, point - self.step_size * grad)
-            point = point.detach().requires_grad_(True)
-            value, grad = self._evaluate(problem.objective, point)
+            point = torch.where(
+                frozen, point.detach(), point.detach() - self.step_size * grad.detach()
+            )
+            value, grad = self._evaluate(problem.objective, point, functional)
             frozen = tracker.update(torch.linalg.vector_norm(grad))
             if tracker.should_stop(iteration):
                 break
