@@ -279,20 +279,45 @@ def _tilted_distribution(nominal: Array, loss: Array, inverse_eta: float) -> Arr
     return tilted / tilted.sum()
 
 
-def _kl_divergence(candidate: Array, nominal: Array) -> float:
-    r"""Return $D_{\mathrm{KL}}(q \,\|\, p)$, treating $q_i = 0$ as contributing zero.
+def _tilt_divergence(nominal: Array, centered_loss: Array, inverse_eta: float) -> float:
+    r"""Return the KL divergence of the tilt $q_\beta$ without cancellation.
+
+    Summing $q_i \log(q_i / p_i)$ directly loses every digit once $q_\beta$
+    is close to $p$: each term is of order $\beta$ while their sum is of
+    order $\beta^2$, so the result is rounding noise of size $n \epsilon$
+    at a vanishing radius. Substituting $\log(q_i/p_i) = \beta c_i -
+    \log \mathbb{E}_p[e^{\beta c}]$ for the centered loss
+    $c = \mathrm{loss} - \mathbb{E}_p[\mathrm{loss}]$ gives
+
+    $$
+    D_{\mathrm{KL}}(q_\beta \,\|\, p)
+    = \beta\, \mathbb{E}_{q_\beta}[c]
+    - \operatorname{log1p}\!\big(\mathbb{E}_p[\operatorname{expm1}(\beta c)]\big),
+    $$
+
+    two terms of order $\beta^2$ whose difference is about half of
+    either, so the divergence keeps its relative precision at every tilt.
+    Above $\beta \max_i |c_i| = 1$ the shifted log-sum-exp replaces the
+    `log1p` form, which would overflow at a large tilt.
 
     Args:
-        candidate: Candidate distribution of shape `(n,)`.
-        nominal: Reference distribution of shape `(n,)`.
+        nominal: Reference distribution of shape `(n,)`, strictly positive.
+        centered_loss: Losses minus their nominal mean, of shape `(n,)`.
+        inverse_eta: Tilt strength $\beta = 1/\eta \ge 0$.
 
     Returns:
-        The Kullback-Leibler divergence in nats.
+        The Kullback-Leibler divergence of the tilted distribution in nats.
     """
-    support = candidate > 0.0
-    return float(
-        np.sum(candidate[support] * np.log(candidate[support] / nominal[support]))
-    )
+    tilted = _tilted_distribution(nominal, centered_loss, inverse_eta)
+    exponent = inverse_eta * centered_loss
+    if float(np.abs(exponent).max()) <= 1.0:
+        log_partition = float(np.log1p(np.sum(nominal * np.expm1(exponent))))
+    else:
+        shift = float(exponent.max())
+        log_partition = shift + float(
+            np.log(np.sum(nominal * np.exp(exponent - shift)))
+        )
+    return float(inverse_eta * np.sum(tilted * centered_loss)) - log_partition
 
 
 def kl_worst_case(nominal: Array, loss: Array, radius: float) -> float:
@@ -340,19 +365,23 @@ def kl_worst_case(nominal: Array, loss: Array, radius: float) -> float:
     if radius >= -np.log(_saturation_mass(nominal, loss)):
         return float(loss.max())
 
+    mean = float(np.sum(nominal * loss))
+    centered_loss = loss - mean
+
     def excess_divergence(inverse_eta: float) -> float:
-        return (
-            _kl_divergence(_tilted_distribution(nominal, loss, inverse_eta), nominal)
-            - radius
-        )
+        return _tilt_divergence(nominal, centered_loss, inverse_eta) - radius
 
     upper = 1.0
     while excess_divergence(upper) < 0.0:
         upper *= 2.0
         if upper > 1e12:
             return float(loss.max())
-    inverse_eta = brentq(excess_divergence, 0.0, upper, xtol=1e-15, rtol=8.9e-16)
-    return float(np.sum(_tilted_distribution(nominal, loss, inverse_eta) * loss))
+    # The tilt scales like sqrt(radius), so the root is located to a relative
+    # tolerance only; an absolute one would cap the excess's precision at a
+    # vanishing radius.
+    inverse_eta = brentq(excess_divergence, 0.0, upper, xtol=1e-300, rtol=8.9e-16)
+    tilted = _tilted_distribution(nominal, centered_loss, inverse_eta)
+    return mean + float(np.sum(tilted * centered_loss))
 
 
 def chi_square_worst_case(nominal: Array, loss: Array, radius: float) -> float:
