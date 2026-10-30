@@ -108,7 +108,9 @@ off the dtype (52 bits in float64, 23 in float32), so a solve is a fixed
 sequence of device-side kernels with no convergence flag to read back and
 no tuning knobs. A small problem, whose cost is kernel launches rather than
 arithmetic, tests up to 15 evenly spaced tilts per step in one batched call
-and so needs a quarter of the steps; a large one bisects.
+and so needs a quarter of the steps; a large one bisects. Size is that of
+one tilt evaluation, so a Sinkhorn set, whose tilt reweights all $n$ kernel
+rows, counts $n^2$ entries per batch element rather than $n$.
 
 **Saturation needs no special case.** Once the radius reaches
 $-\log P^\star$ (KL) or $1/P^\star - 1$ (chi-square), where $P^\star$ is

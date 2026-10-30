@@ -406,6 +406,24 @@ def test_is_a_tilted_ambiguity_set() -> None:
     assert ambiguity_set.epsilon == 0.4
 
 
+def test_tilt_cost_counts_every_kernel_row() -> None:
+    # Each tilt evaluates an (n, n) matrix of rows, so the search must weigh
+    # n times the support against its launch-bound threshold, or it widens
+    # its steps on solves that are bound by arithmetic.
+    nominal, loss, cost = ASYMMETRIC.tensors()
+    ambiguity_set = SinkhornAmbiguitySet(nominal, cost, 0.4, 0.1)
+    support = nominal.shape[-1]
+    batch_shape = torch.Size((3, 2))
+    gap = torch.zeros(batch_shape + (support,), dtype=loss.dtype)
+
+    entries = ambiguity_set._tilt_entries(gap, batch_shape)
+
+    assert entries == math.prod(batch_shape) * support**2
+    assert entries == support * KLAmbiguitySet(nominal, 0.1)._tilt_entries(
+        gap, batch_shape
+    )
+
+
 # --- Validation --------------------------------------------------------------
 
 

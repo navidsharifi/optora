@@ -174,6 +174,10 @@ class SinkhornAmbiguitySet(TiltedAmbiguitySet):
         center = self.smoothed_nominal(loss.dtype)
         return torch.sum(center * loss, dim=-1).expand(batch_shape)
 
+    def _tilt_entries(self, gap: torch.Tensor, batch_shape: torch.Size) -> int:
+        """Return the entries of one tilt: every kernel row, `n` times the default."""
+        return super()._tilt_entries(gap, batch_shape) * gap.shape[-1]
+
     def _tilted_distribution(
         self, gap: torch.Tensor, tilt: torch.Tensor
     ) -> tuple[torch.Tensor, torch.Tensor]:

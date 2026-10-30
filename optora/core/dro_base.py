@@ -990,6 +990,25 @@ class TiltedAmbiguitySet(AmbiguitySet):
         """
         return self._nominal_expectation(loss, batch_shape)
 
+    def _tilt_entries(self, gap: torch.Tensor, batch_shape: torch.Size) -> int:
+        """Return the number of entries one tilt evaluation computes.
+
+        This is the size `_search_bits` weighs against the launch-bound
+        threshold. A tilt reweights the support once per batch element by
+        default; a formulation whose tilt evaluates a larger intermediate,
+        such as a matrix of kernel rows, overrides this so that a solve
+        bound by arithmetic is not mistaken for a launch-bound one.
+
+        Args:
+            gap: Standardized shortfall of every scenario, of shape
+                `(..., n)`.
+            batch_shape: Shape returned by `_batch_shape` for this loss.
+
+        Returns:
+            The batch size times the support size.
+        """
+        return math.prod(batch_shape) * gap.shape[-1]
+
     @staticmethod
     def _tilt_rate(tilt: torch.Tensor) -> torch.Tensor:
         r"""Map a tilt in $[0, 1)$ to the unbounded natural parameter $t / (1 - t)$.
@@ -1036,7 +1055,7 @@ class TiltedAmbiguitySet(AmbiguitySet):
             elementwise reductions, so a saturated or degenerate element
             cannot disturb the rest of its batch.
         """
-        bits = _search_bits(math.prod(batch_shape) * gap.shape[-1])
+        bits = _search_bits(self._tilt_entries(gap, batch_shape))
         points = 2**bits - 1
         steps = -(-_bisection_steps(gap.dtype) // bits)
         index = torch.arange(1, points + 1, dtype=gap.dtype, device=gap.device)
