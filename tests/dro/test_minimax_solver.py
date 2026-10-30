@@ -8,14 +8,23 @@ import pytest
 import torch
 
 from optora.core.convergence import ConvergenceStatus
+from optora.core.dro_base import AmbiguitySet
 from optora.core.solver_base import (
     MinimizationProblem,
     MinimizationResult,
     Solver,
 )
+from optora.divergences import PhiDivergence
 from optora.dro.kl_dro import KLAmbiguitySet
 from optora.dro.minimax_solver import MinimaxProblem, MinimaxResult, MinimaxSolver
-from optora.dro.phi_dro import ChiSquareAmbiguitySet, TotalVariationAmbiguitySet
+from optora.dro.mmd_dro import MMDAmbiguitySet
+from optora.dro.phi_dro import (
+    ChiSquareAmbiguitySet,
+    CVaRAmbiguitySet,
+    PhiAmbiguitySet,
+    TotalVariationAmbiguitySet,
+)
+from optora.dro.sinkhorn_dro import SinkhornAmbiguitySet
 from optora.dro.wasserstein_dro import WassersteinAmbiguitySet
 from optora.solvers.gradient_descent import GradientDescent
 
@@ -393,3 +402,87 @@ def test_minimax_result_is_a_plain_dataclass_of_the_expected_shape() -> None:
     assert isinstance(result.value, torch.Tensor)
     assert isinstance(result.converged, bool)
     assert isinstance(result.num_iterations, int)
+
+
+# --- torch.func transforms ---------------------------------------------------
+
+_SUPPORT = torch.tensor([0.0, 0.4, 1.0], dtype=torch.float64)
+_NOMINAL = torch.tensor([0.5, 0.3, 0.2], dtype=torch.float64)
+_TARGETS = torch.tensor([1.0, 2.0, 5.0], dtype=torch.float64)
+_DISTANCE = torch.abs(_SUPPORT.unsqueeze(-1) - _SUPPORT)
+
+# Every ambiguity-set family as a function of a tensor size parameter, so
+# torch.func.vmap can map one solve over several sizes. CVaR's parameter is
+# its tail fraction, which shrinks the set as it grows.
+_SETS: dict[str, Callable[[torch.Tensor], AmbiguitySet]] = {
+    "kl": lambda radius: KLAmbiguitySet(_NOMINAL, radius),
+    "chi_square": lambda radius: ChiSquareAmbiguitySet(_NOMINAL, radius),
+    "total_variation": lambda radius: TotalVariationAmbiguitySet(_NOMINAL, radius),
+    "cvar": lambda radius: CVaRAmbiguitySet(_NOMINAL, 1.0 - radius),
+    "wasserstein": lambda radius: WassersteinAmbiguitySet(_NOMINAL, _DISTANCE, radius),
+    "sinkhorn": lambda radius: SinkhornAmbiguitySet(_NOMINAL, _DISTANCE, 0.5, radius),
+    "mmd": lambda radius: MMDAmbiguitySet(_NOMINAL, torch.exp(-(_DISTANCE**2)), radius),
+    "phi": lambda radius: PhiAmbiguitySet(
+        _NOMINAL,
+        PhiDivergence(lambda t: t * torch.log(t) - t + 1.0),
+        radius,
+        phi_conjugate=lambda s: torch.expm1(s),
+        dual_solver=GradientDescent(step_size=0.5, max_iter=200, tol=1e-12),
+    ),
+}
+
+_RADII = torch.tensor([0.1, 0.3], dtype=torch.float64)
+
+# Outside a transform the phi set warm-starts each inner dual solve from the
+# previous optimum and inside one it does not, so the two agree only to the
+# accuracy of the inner solve; every other set is exact.
+_TRANSFORM_TOLERANCE = {"phi": 1e-6}
+
+
+def _robust_decision(name: str, radius: torch.Tensor) -> torch.Tensor:
+    """Solve the robust location problem of `_TARGETS` under set `name`."""
+    problem = MinimaxProblem(
+        ambiguity_set=_SETS[name](radius),
+        loss_fn=lambda x: (x - _TARGETS) ** 2,
+        initial_point=torch.tensor(0.0, dtype=torch.float64),
+    )
+    solver = MinimaxSolver(
+        solver=GradientDescent(step_size=0.1, max_iter=10, tol=1e-30, check_interval=1)
+    )
+    return solver.solve(problem).point
+
+
+@pytest.mark.parametrize("name", list(_SETS))
+def test_solves_inside_torch_func_vmap_over_the_radius(name: str) -> None:
+    # One mapped solve per radius, equal to the solves run one at a time, and
+    # the robust decision moves with the radius.
+    decisions = torch.func.vmap(lambda radius: _robust_decision(name, radius))(_RADII)
+
+    for index, radius in enumerate(_RADII):
+        torch.testing.assert_close(
+            decisions[index],
+            _robust_decision(name, radius),
+            rtol=0.0,
+            atol=_TRANSFORM_TOLERANCE.get(name, 1e-12),
+        )
+    assert float(torch.abs(decisions[1] - decisions[0])) > 1e-3
+
+
+@pytest.mark.parametrize("name", list(_SETS))
+def test_solves_inside_torch_func_grad_without_differentiating_its_steps(
+    name: str,
+) -> None:
+    # The outer iterates are detached, so the decision is a constant to the
+    # enclosing transform: the gradient below is the decision itself.
+    radius = _RADII[0]
+
+    gradient = torch.func.grad(lambda scale: scale * _robust_decision(name, radius))(
+        torch.tensor(1.0, dtype=torch.float64)
+    )
+
+    torch.testing.assert_close(
+        gradient,
+        _robust_decision(name, radius),
+        rtol=0.0,
+        atol=_TRANSFORM_TOLERANCE.get(name, 1e-12),
+    )

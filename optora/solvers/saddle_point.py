@@ -5,6 +5,7 @@ from dataclasses import dataclass
 
 import torch
 
+from optora.core._transforms import transforms_active
 from optora.core.convergence import (
     DEFAULT_CHECK_INTERVAL,
     ConvergenceDiagnostics,
@@ -27,9 +28,10 @@ class SaddlePointProblem:
         objective: Differentiable scalar-valued function
             `objective(primal_point, dual_point)`, minimized over its first
             argument and maximized over its second. It must depend on both
-            arguments through autograd; the solver rejects an objective
-            whose value is disconnected from either iterate rather than
-            treating it as stationary in that variable.
+            arguments through autograd; outside a `torch.func` transform the
+            solver rejects an objective whose value is disconnected from
+            either iterate rather than treating it as stationary in that
+            variable.
         primal_initial_point: Starting point for the primal (minimizing)
             variable.
         dual_initial_point: Starting point for the dual (maximizing)
@@ -102,6 +104,16 @@ class SaddlePointSolver(Solver[SaddlePointProblem, SaddlePointResult]):
     `optora.core.convergence.ConvergenceStatus`), so a solve nobody
     inspects never synchronizes for them.
 
+    The solve composes with `torch.func` transforms of its caller, as
+    `optora.solvers.GradientDescent` does. Inside one, where
+    `Tensor.requires_grad_` and `torch.autograd.grad` are unsupported, both
+    gradients are taken with `torch.func.grad_and_value` instead, and under
+    `torch.func.vmap` every mapped element runs the whole iteration budget,
+    since a batched convergence flag has no single value to read on the
+    host (see `ConvergenceTracker.should_stop`). Each iterate is detached
+    either way, so a caller differentiating through the solve sees none of
+    its steps.
+
     Attributes:
         primal_step_size: Positive learning rate for the descent step on
             the primal variable.
@@ -162,22 +174,35 @@ class SaddlePointSolver(Solver[SaddlePointProblem, SaddlePointResult]):
         objective: Callable[[torch.Tensor, torch.Tensor], torch.Tensor],
         primal_point: torch.Tensor,
         dual_point: torch.Tensor,
+        functional: bool,
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-        """Evaluate the objective and both gradients at differentiable iterates.
+        """Evaluate the objective and both gradients at detached iterates.
 
         Args:
             objective: Differentiable scalar-valued minimax objective.
-            primal_point: Primal iterate, requiring grad.
-            dual_point: Dual iterate, requiring grad.
+            primal_point: Detached primal iterate.
+            dual_point: Detached dual iterate.
+            functional: Whether to differentiate with `torch.func`, as a
+                `torch.func` transform of the caller requires. An objective
+                that ignores an iterate then has a zero gradient in it
+                rather than raising, since `torch.func` cannot tell the two
+                apart.
 
         Returns:
             The objective value and its gradients with respect to the
             primal and the dual iterate.
 
         Raises:
-            ValueError: If `objective` does not depend on both iterates
-                through autograd.
+            ValueError: If `functional` is unset and `objective` does not
+                depend on both iterates through autograd.
         """
+        if functional:
+            (primal_grad, dual_grad), value = torch.func.grad_and_value(
+                objective, argnums=(0, 1)
+            )(primal_point, dual_point)
+            return value, primal_grad, dual_grad
+        primal_point = primal_point.requires_grad_(True)
+        dual_point = dual_point.requires_grad_(True)
         value = objective(primal_point, dual_point)
         raw_primal_grad, raw_dual_grad = torch.autograd.grad(
             value, (primal_point, dual_point), allow_unused=True
@@ -201,17 +226,15 @@ class SaddlePointSolver(Solver[SaddlePointProblem, SaddlePointResult]):
 
         Raises:
             ValueError: If `problem.objective` does not depend on both of
-                its arguments through autograd.
+                its arguments through autograd, outside a `torch.func`
+                transform.
         """
+        functional = transforms_active()
         dual_projection = problem.dual_projection or (lambda point: point)
-        primal_point = (
-            problem.primal_initial_point.detach().clone().requires_grad_(True)
-        )
-        dual_point = (
-            dual_projection(problem.dual_initial_point.detach().clone())
-            .detach()
-            .requires_grad_(True)
-        )
+        primal_point = problem.primal_initial_point.detach().clone()
+        dual_point = dual_projection(
+            problem.dual_initial_point.detach().clone()
+        ).detach()
         tracker = ConvergenceTracker(self.tol, self.check_interval, primal_point)
         # Each iteration steps with the gradients of the previous evaluation
         # and then evaluates the new iterates, so the last evaluation is
@@ -220,27 +243,26 @@ class SaddlePointSolver(Solver[SaddlePointProblem, SaddlePointResult]):
         # synchronization per solve, which nesting multiplies by the outer
         # iteration count.
         value, primal_grad, dual_grad = self._evaluate(
-            problem.objective, primal_point, dual_point
+            problem.objective, primal_point, dual_point, functional
         )
         frozen = tracker.start(
             torch.linalg.vector_norm(primal_grad) + torch.linalg.vector_norm(dual_grad)
         )
         for iteration in range(self.max_iter):
-            with torch.no_grad():
-                primal_point = torch.where(
-                    frozen,
-                    primal_point,
-                    primal_point - self.primal_step_size * primal_grad,
-                )
-                dual_point = torch.where(
-                    frozen,
-                    dual_point,
-                    dual_projection(dual_point + self.dual_step_size * dual_grad),
-                )
-            primal_point = primal_point.detach().requires_grad_(True)
-            dual_point = dual_point.detach().requires_grad_(True)
+            primal_point = torch.where(
+                frozen,
+                primal_point.detach(),
+                primal_point.detach() - self.primal_step_size * primal_grad.detach(),
+            )
+            dual_point = torch.where(
+                frozen,
+                dual_point.detach(),
+                dual_projection(
+                    dual_point.detach() + self.dual_step_size * dual_grad.detach()
+                ).detach(),
+            )
             value, primal_grad, dual_grad = self._evaluate(
-                problem.objective, primal_point, dual_point
+                problem.objective, primal_point, dual_point, functional
             )
             frozen = tracker.update(
                 torch.linalg.vector_norm(primal_grad)
