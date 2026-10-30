@@ -6,7 +6,10 @@ import torch
 
 from optora.core.convergence import DEFAULT_CHECK_INTERVAL
 from optora.core.dro_base import TiltedAmbiguitySet
-from optora.divergences.entropic_transport import EntropicTransportDivergence
+from optora.divergences.entropic_transport import (
+    EntropicTransportDivergence,
+    _warn_deprecated_eps,
+)
 
 # Divergence above which a row's KL divergence is read from its direct form
 # rather than its centered form, as in `optora.dro.kl_dro`.
@@ -73,7 +76,7 @@ class SinkhornAmbiguitySet(TiltedAmbiguitySet):
         reference: torch.Tensor | None = None,
         max_iter: int = 1000,
         tol: float = 1e-9,
-        eps: float = 1e-12,
+        eps: float | None = None,
         check_interval: int = DEFAULT_CHECK_INTERVAL,
         validate: bool = False,
     ) -> None:
@@ -94,7 +97,9 @@ class SinkhornAmbiguitySet(TiltedAmbiguitySet):
             max_iter: Sinkhorn iterations for `contains` only; the worst
                 case does not iterate.
             tol: Sinkhorn tolerance for `contains` only.
-            eps: Marginal clamp for `contains` only.
+            eps: Deprecated and ignored, as in
+                `EntropicTransportDivergence`; passing it emits a
+                `DeprecationWarning`.
             check_interval: Sinkhorn host-read interval for `contains` only.
             validate: Whether to run the value checks that synchronize with
                 the device on `nominal`, a tensor `radius`, `cost`, and
@@ -110,6 +115,8 @@ class SinkhornAmbiguitySet(TiltedAmbiguitySet):
                 f"cost must have shape ({nominal.shape[-1]}, {nominal.shape[-1]}) "
                 f"to match nominal, got {tuple(cost.shape)}."
             )
+        if eps is not None:
+            _warn_deprecated_eps(stacklevel=2)
         super().__init__(
             nominal=nominal,
             divergence=EntropicTransportDivergence(
@@ -118,7 +125,6 @@ class SinkhornAmbiguitySet(TiltedAmbiguitySet):
                 reference=reference,
                 max_iter=max_iter,
                 tol=tol,
-                eps=eps,
                 check_interval=check_interval,
                 validate=validate,
             ),

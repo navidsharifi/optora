@@ -1,5 +1,7 @@
 """Entropic optimal transport cost relative to a kernel-smoothed reference."""
 
+import warnings
+
 import torch
 
 from optora.core.convergence import (
@@ -15,6 +17,21 @@ from optora.core.precision import working_dtype
 # between gradient-like and pure Newton steps as the model earns trust.
 _DAMPING_FACTOR = 4.0
 _DAMPING_BOUNDS = (1e-12, 1e12)
+
+
+def _warn_deprecated_eps(stacklevel: int) -> None:
+    """Warn that the `eps` marginal clamp is deprecated and has no effect.
+
+    Args:
+        stacklevel: Stack level of the warning, counted from this helper's
+            caller, so it points at the line that passed `eps`.
+    """
+    warnings.warn(
+        "eps is deprecated and has no effect: zero-mass marginal entries are "
+        "excluded from the solve exactly. Drop the argument.",
+        DeprecationWarning,
+        stacklevel=stacklevel + 1,
+    )
 
 
 def _log_on_support(weights: torch.Tensor) -> torch.Tensor:
@@ -35,22 +52,31 @@ def _semi_dual(
 ) -> torch.Tensor:
     r"""Evaluate the semi-dual $\sum_j p_j g_j - \sum_i q_i \log \sum_j Q_{ij} e^{g_j}$.
 
+    A column outside the solve carries the potential $-\infty$, which drops
+    it from every row's normalizer; its term $p_j g_j$ is the limit
+    $0 \cdot (-\infty) = 0$ and is read as zero, so it neither turns the
+    value into `nan` nor sends a gradient into $p_j$.
+
     Args:
-        g: Column potentials of shape `(..., n)`, zero on unreachable
-            columns.
+        g: Column potentials of shape `(..., n)`, `-inf` on the columns
+            outside the solve.
         rows: Row marginal $q$ of shape `(..., n)`.
-        columns: Column marginal $p$ of shape `(..., n)`.
+        columns: Column marginal $p$ of shape `(..., n)`, zero wherever `g`
+            is `-inf`.
         log_kernel: Row-stochastic $\log Q$ of shape `(n, n)`.
 
     Returns:
         The semi-dual value over the batch, of shape `(...)`.
     """
     log_normalizer = torch.logsumexp(g.unsqueeze(-2) + log_kernel, dim=-1)
-    return torch.sum(columns * g, dim=-1) - torch.sum(rows * log_normalizer, dim=-1)
+    finite_g = torch.where(torch.isneginf(g), 0.0, g)
+    return torch.sum(columns * finite_g, dim=-1) - torch.sum(
+        rows * log_normalizer, dim=-1
+    )
 
 
 def _marginal_violation(
-    columns: torch.Tensor, marginal: torch.Tensor, reachable: torch.Tensor
+    columns: torch.Tensor, marginal: torch.Tensor, active: torch.Tensor
 ) -> torch.Tensor:
     """Return the largest L1 column-marginal violation over the batch.
 
@@ -60,13 +86,13 @@ def _marginal_violation(
     Args:
         columns: Target column marginal of shape `(..., n)`.
         marginal: Column marginal of the current plan, of shape `(..., n)`.
-        reachable: Boolean mask of shape `(n,)` of the columns the kernel
-            can reach.
+        active: Boolean mask of shape `(..., n)` of the columns in the
+            solve.
 
     Returns:
         A zero-dimensional tensor.
     """
-    violation = torch.where(reachable, torch.abs(columns - marginal), 0.0)
+    violation = torch.where(active, torch.abs(columns - marginal), 0.0)
     return torch.amax(torch.sum(violation, dim=-1))
 
 
@@ -124,6 +150,15 @@ class EntropicTransportDivergence(Divergence):
     potentials are held fixed under autograd, so by the envelope theorem
     the gradient is exact once the solve has converged.
 
+    Zero-mass entries of either marginal are excluded from the solve
+    exactly, never clamped: a row with $q_i = 0$ transports nothing, and a
+    column with $p_j = 0$ takes the potential $-\infty$, the semi-dual's
+    maximizer in that coordinate, which removes it from every row's
+    normalizer. The value is then that of the problem restricted to the two
+    supports, with no accuracy floor. The derivative with respect to the
+    mass of an empty column is $-\infty$, the slope of $t \log t$ at zero,
+    and is not representable; autograd reports zero for it.
+
     Attributes:
         cost: Square ground cost matrix of shape `(n, n)`.
         reference: Nonnegative reference measure $\nu$ of shape `(n,)`. Only
@@ -135,8 +170,7 @@ class EntropicTransportDivergence(Divergence):
         tol: Convergence tolerance on the L1 column-marginal violation,
             floored at $n$ times the machine epsilon of the working dtype,
             the rounding floor of the violation itself.
-        eps: Small positive constant clamping the marginals away from zero
-            before their logarithm.
+        eps: Deprecated and unused; `None` unless passed explicitly.
         check_interval: Sinkhorn iterations between host reads of the
             convergence flag; the potentials freeze once converged. The
             Newton phase, whose iterations are expensive, reads it after
@@ -154,7 +188,7 @@ class EntropicTransportDivergence(Divergence):
         max_iter: int = 1000,
         newton_max_iter: int = 50,
         tol: float = 1e-9,
-        eps: float = 1e-12,
+        eps: float | None = None,
         check_interval: int = DEFAULT_CHECK_INTERVAL,
         validate: bool = False,
     ) -> None:
@@ -174,8 +208,10 @@ class EntropicTransportDivergence(Divergence):
                 over the whole batched problem. It is floored at `n` times
                 the machine epsilon of the working dtype, below which the
                 violation is rounding error.
-            eps: Small positive constant clamping the marginals away from
-                zero before their logarithm.
+            eps: Deprecated and ignored. Zero-mass marginal entries are
+                excluded from the solve exactly, so there is nothing left to
+                clamp; passing it emits a `DeprecationWarning`, and it will
+                be removed in a future minor release.
             check_interval: Sinkhorn iterations between host reads of the
                 convergence flag.
             validate: Whether to check that `cost` is finite and `reference`
@@ -199,9 +235,11 @@ class EntropicTransportDivergence(Divergence):
                 f"reference must have shape ({cost.shape[0]},), "
                 f"got {tuple(reference.shape)}."
             )
-        for name, value in (("epsilon", epsilon), ("tol", tol), ("eps", eps)):
+        for name, value in (("epsilon", epsilon), ("tol", tol)):
             if not value > 0:
                 raise ValueError(f"{name} must be positive, got {value}.")
+        if eps is not None:
+            _warn_deprecated_eps(stacklevel=2)
         if max_iter <= 0:
             raise ValueError(f"max_iter must be positive, got {max_iter}.")
         if newton_max_iter < 0:
@@ -282,20 +320,21 @@ class EntropicTransportDivergence(Divergence):
         columns = candidate + torch.zeros_like(reference)
         rows = reference + torch.zeros_like(candidate)
         with torch.no_grad():
-            row_mass = torch.clamp(rows, min=self.eps)
-            column_mass = torch.clamp(columns, min=self.eps)
+            # Mass off the reachable columns makes the value infinite below;
+            # dropping it from the solve keeps the batch's other elements
+            # well posed.
+            column_mass = torch.where(reachable, columns, 0.0)
+            active = column_mass > 0.0
             # No coupling meets marginals of different total mass, so a
             # rounding-level mismatch would floor the marginal violation
             # above `tol`; the solve matches the totals instead.
             column_mass = column_mass * (
-                torch.sum(row_mass, dim=-1, keepdim=True)
+                torch.sum(rows, dim=-1, keepdim=True)
                 / torch.sum(column_mass, dim=-1, keepdim=True)
             )
-            g, converged = self._sinkhorn(
-                row_mass, column_mass, log_kernel, reachable, tol
-            )
+            g, converged = self._sinkhorn(rows, column_mass, log_kernel, active, tol)
             if not converged and self.newton_max_iter > 0:
-                g = self._newton(g, row_mass, column_mass, log_kernel, reachable, tol)
+                g = self._newton(g, rows, column_mass, log_kernel, active, tol)
         divergence = torch.clamp(
             self.epsilon * _semi_dual(g, rows, columns, log_kernel), min=0.0
         )
@@ -307,35 +346,36 @@ class EntropicTransportDivergence(Divergence):
         row_mass: torch.Tensor,
         column_mass: torch.Tensor,
         log_kernel: torch.Tensor,
-        reachable: torch.Tensor,
+        active: torch.Tensor,
         tol: float,
     ) -> tuple[torch.Tensor, bool]:
         r"""Run log-domain Sinkhorn scaling on the column potentials.
 
         Args:
-            row_mass: Positive row marginal of shape `(..., n)`.
-            column_mass: Positive column marginal of shape `(..., n)`.
+            row_mass: Nonnegative row marginal of shape `(..., n)`.
+            column_mass: Column marginal of shape `(..., n)`, positive
+                exactly on `active`.
             log_kernel: Row-stochastic $\log Q$ of shape `(n, n)`.
-            reachable: Boolean mask of shape `(n,)` of the columns the
-                kernel can reach; the potential stays zero elsewhere.
+            active: Boolean mask of shape `(..., n)` of the columns in the
+                solve; the potential stays `-inf` elsewhere.
             tol: Floored tolerance on the marginal violation.
 
         Returns:
             The column potentials, and whether the marginal violation fell
             below `tol` at a checkpoint.
         """
-        log_rows = torch.log(row_mass)
-        log_columns = torch.log(column_mass)
-        g = torch.zeros_like(log_columns)
+        log_rows = _log_on_support(row_mass)
+        log_columns = _log_on_support(column_mass)
+        g = torch.where(active, 0.0, -torch.inf).to(log_columns.dtype)
         tracker = ConvergenceTracker(tol, self.check_interval, g)
         for iteration in range(self.max_iter):
             f = log_rows - torch.logsumexp(g.unsqueeze(-2) + log_kernel, dim=-1)
             log_scale = torch.logsumexp(f.unsqueeze(-1) + log_kernel, dim=-2)
             residual = _marginal_violation(
-                column_mass, torch.exp(g + log_scale), reachable
+                column_mass, torch.exp(g + log_scale), active
             )
             converged = tracker.update(residual)
-            g = torch.where(converged | ~reachable, g, log_columns - log_scale)
+            g = torch.where(converged | ~active, g, log_columns - log_scale)
             if tracker.should_stop(iteration):
                 return g, True
         return g, False
@@ -346,7 +386,7 @@ class EntropicTransportDivergence(Divergence):
         row_mass: torch.Tensor,
         column_mass: torch.Tensor,
         log_kernel: torch.Tensor,
-        reachable: torch.Tensor,
+        active: torch.Tensor,
         tol: float,
     ) -> torch.Tensor:
         r"""Refine column potentials by damped Newton ascent on the semi-dual.
@@ -363,15 +403,18 @@ class EntropicTransportDivergence(Divergence):
         Newton method improve it by less than that, so a strict increase
         test would reject them. The solve does not check for singularity: a
         failed solve yields a non-finite trial, which is rejected like any
-        other non-improving step.
+        other non-improving step. Columns outside the solve are pinned by an
+        identity block in the system and keep the potential `-inf`; rows of
+        zero mass carry no plan and drop out of the Hessian.
 
         Args:
             g: Warm-start column potentials of shape `(..., n)`.
-            row_mass: Positive row marginal of shape `(..., n)`.
-            column_mass: Positive column marginal of shape `(..., n)`.
+            row_mass: Nonnegative row marginal of shape `(..., n)`.
+            column_mass: Column marginal of shape `(..., n)`, positive
+                exactly on `active`.
             log_kernel: Row-stochastic $\log Q$ of shape `(n, n)`.
-            reachable: Boolean mask of shape `(n,)` of the columns the
-                kernel can reach; the potential stays zero elsewhere.
+            active: Boolean mask of shape `(..., n)` of the columns in the
+                solve; the potential stays `-inf` elsewhere.
             tol: Floored tolerance on the marginal violation.
 
         Returns:
@@ -379,8 +422,9 @@ class EntropicTransportDivergence(Divergence):
         """
         size = g.shape[-1]
         rounding = size * torch.finfo(g.dtype).eps
-        log_rows = torch.log(row_mass)
-        unreachable = torch.diag_embed((~reachable).to(g.dtype))
+        log_rows = _log_on_support(row_mass)
+        safe_rows = torch.where(row_mass > 0.0, row_mass, 1.0)
+        inactive = torch.diag_embed((~active).to(g.dtype))
         damping = torch.ones(g.shape[:-1], dtype=g.dtype, device=g.device)
         value = _semi_dual(g, row_mass, column_mass, log_kernel)
         tracker = ConvergenceTracker(tol, 1, g)
@@ -389,28 +433,29 @@ class EntropicTransportDivergence(Divergence):
             f = log_rows - log_normalizer
             plan = torch.exp(f.unsqueeze(-1) + g.unsqueeze(-2) + log_kernel)
             marginal = torch.sum(plan, dim=-2)
-            tracker.update(_marginal_violation(column_mass, marginal, reachable))
+            tracker.update(_marginal_violation(column_mass, marginal, active))
             if tracker.should_stop(iteration):
                 break
-            gradient = torch.where(reachable, column_mass - marginal, 0.0)
+            gradient = torch.where(active, column_mass - marginal, 0.0)
             hessian = torch.diag_embed(marginal) - plan.mT @ (
-                plan / row_mass.unsqueeze(-1)
+                plan / safe_rows.unsqueeze(-1)
             )
             system = (
                 hessian
                 + 1.0 / size
                 + damping[..., None, None] * torch.diag_embed(marginal)
-                + unreachable
+                + inactive
             )
             step = torch.linalg.solve_ex(system, gradient.unsqueeze(-1))[0]
             step = step.squeeze(-1)
             trial = torch.where(
-                reachable, g + step - step.mean(dim=-1, keepdim=True), 0.0
+                active, g + step - step.mean(dim=-1, keepdim=True), -torch.inf
             )
             trial_value = _semi_dual(trial, row_mass, column_mass, log_kernel)
-            magnitude = torch.sum(torch.abs(column_mass * g), dim=-1) + torch.sum(
-                row_mass * torch.abs(log_normalizer), dim=-1
-            )
+            finite_g = torch.where(active, g, 0.0)
+            magnitude = torch.sum(
+                torch.abs(column_mass * finite_g), dim=-1
+            ) + torch.sum(row_mass * torch.abs(log_normalizer), dim=-1)
             accept = trial_value >= value - rounding * magnitude
             g = torch.where(accept.unsqueeze(-1), trial, g)
             value = torch.where(accept, trial_value, value)

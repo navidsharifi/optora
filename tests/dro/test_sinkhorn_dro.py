@@ -295,11 +295,10 @@ def test_gradient_is_a_distribution_inside_the_ball_attaining_the_worst_case(
         epsilon,
     )
     assert divergence <= radius * (1.0 + 1e-6) + 1e-9
-    # The divergence `contains` uses agrees with the reference up to the
-    # absolute floor its `eps` clamp of zero-mass rows sets, eps times the
-    # size of the potentials.
+    # The divergence `contains` uses excludes zero-mass rows and columns
+    # exactly, so it agrees with the reference to the solve tolerance alone.
     measured = float(ambiguity_set.divergence(candidate, ambiguity_set.nominal))
-    assert measured == pytest.approx(divergence, rel=1e-6, abs=1e-9)
+    assert measured == pytest.approx(divergence, rel=1e-6, abs=1e-12)
 
 
 SMOOTH = (
