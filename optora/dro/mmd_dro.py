@@ -271,7 +271,8 @@ def _solve(
     Returns:
         The maximizer, projected onto the simplex to absorb the solve's
         residual, and the multipliers of the orthant and of the radius
-        constraint.
+        constraint, the latter recovered from stationarity on elements that
+        did not converge.
     """
     point = program.initial_point()
     degree = program.loss.shape[-1] + 1
@@ -310,11 +311,63 @@ def _solve(
         alpha = torch.where(done | ~finite, 0.0, torch.clamp(alpha, max=1.0))
         point = point.step(_Point(*(torch.nan_to_num(d) for d in direction)), alpha)
     distribution = torch.clamp(point.x, min=0.0)
+    distribution = distribution / torch.sum(distribution, dim=-1, keepdim=True)
     return _Solution(
-        distribution / torch.sum(distribution, dim=-1, keepdim=True),
+        distribution,
         point.z1,
-        point.z20,
+        torch.where(
+            done,
+            point.z20,
+            _stationary_radius_dual(program, distribution, point.z1, point.z20),
+        ),
     )
+
+
+def _stationary_radius_dual(
+    program: _Program,
+    distribution: torch.Tensor,
+    orthant_dual: torch.Tensor,
+    radius_dual: torch.Tensor,
+) -> torch.Tensor:
+    r"""Recover the radius multiplier from stationarity on the support.
+
+    On the support $S$, $\ell_S = \nu \mathbf{1} + \tilde\lambda\, [K (q -
+    p)]_S$ with $\tilde\lambda = \lambda / \epsilon$, so $\tilde\lambda$ is
+    the slope of the least-squares line through the points $([K (q -
+    p)]_i, \ell_i)_{i \in S}$. It replaces the interior-point iterate of
+    $\lambda$ on elements that did not converge: in float32 the normal
+    matrix's Cholesky factorization can break down near the solution, which
+    freezes the element at an iterate whose maximizer is accurate but whose
+    multiplier can be off by orders of magnitude. The iterate is kept where
+    the line is undefined (fewer than two support points or a constant
+    deviation) or its slope is negative.
+
+    Args:
+        program: The solved cone program.
+        distribution: The maximizer, of shape `batch_shape + (n,)`.
+        orthant_dual: Multipliers of $q \ge 0$, of the same shape.
+        radius_dual: Interior-point iterate of $\lambda$, of shape
+            `batch_shape`.
+
+    Returns:
+        The multiplier $\lambda$, of shape `batch_shape`.
+    """
+    on_support = (distribution > orthant_dual).to(distribution.dtype)
+    count = torch.sum(on_support, dim=-1, keepdim=True)
+    deviation = program.cone_adjoint(program.cone_part(distribution) - program.image)
+    centered = on_support * (
+        deviation - torch.sum(on_support * deviation, dim=-1, keepdim=True) / count
+    )
+    spread = torch.sum(centered * centered, dim=-1)
+    slope = torch.sum(centered * program.loss, dim=-1) / spread
+    recovered = slope * program.radius
+    floor = (
+        distribution.shape[-1]
+        * torch.finfo(distribution.dtype).eps
+        * torch.sum(on_support * deviation * deviation, dim=-1)
+    )
+    usable = (spread > floor) & torch.isfinite(recovered) & (recovered >= 0.0)
+    return torch.where(usable, recovered, radius_dual)
 
 
 def _max_step(point: _Point, direction: _Point) -> torch.Tensor:
@@ -487,10 +540,8 @@ def _loss_hessian(
     pairs = on_support.unsqueeze(-1) * on_support.unsqueeze(-2)
     # K on the support padded with the identity off it is positive definite,
     # and its inverse is K_SS^{-1} on the support. Only a Cholesky factor is
-    # needed, the kernel the interior-point method already relies on: the
-    # full nonsymmetric system was fragile in batched float32 (invalid LU
-    # pivots on Windows MKL after `torch.set_num_threads`, one wrong batch
-    # element from QR on macOS with torch 2.14.1).
+    # needed: batched float32 LU of the full nonsymmetric system returned
+    # invalid pivots on Windows MKL after `torch.set_num_threads`.
     cholesky, info = torch.linalg.cholesky_ex(
         gram * pairs + torch.diag_embed(1.0 - on_support)
     )
