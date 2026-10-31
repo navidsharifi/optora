@@ -880,11 +880,12 @@ class CVaRAmbiguitySet(AmbiguitySet):
 
         # Normalizing by the filled mass rather than by alpha keeps the
         # maximizer a distribution under rounding, and is what turns the
-        # floored alpha = 0 limit into an exact point mass.
+        # floored alpha = 0 limit into an exact point mass. Normalizing
+        # before multiplying by the loss keeps the products out of the
+        # subnormal range there, where a tail mass of finfo.tiny times a
+        # loss below one would lose relative precision.
         filled = torch.sum(weight, dim=-1, keepdim=True)
-        value = (
-            torch.sum(weight * sorted_loss, dim=-1, keepdim=True) / filled
-        ).squeeze(-1)
+        value = torch.sum(weight / filled * sorted_loss, dim=-1)
         result = self._attach_parameter_gradients(
             value.expand(batch_shape),
             lambda: self._parameter_sensitivities(

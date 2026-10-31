@@ -690,6 +690,22 @@ def test_cvar_at_level_zero_is_the_maximum_loss_on_the_nominal_support() -> None
     assert float(result) == 5.0
 
 
+@pytest.mark.parametrize("scale", [1.0, 1e-3, 1e-12, 1e-30])
+def test_cvar_at_level_zero_is_bitwise_the_maximum_at_any_loss_scale(
+    dtype: torch.dtype, scale: float
+) -> None:
+    # The floored level is finfo.tiny: weighting a loss below one by it
+    # before normalizing went subnormal, ~1e-5 relative off in float32 at a
+    # loss of 2e-3 (found by the group-DRO example).
+    nominal = torch.tensor([0.0, 0.3, 0.3, 0.4], dtype=dtype)
+    loss = torch.tensor([9.0, 0.3, 0.9, 0.2], dtype=dtype) * scale
+    ambiguity_set = CVaRAmbiguitySet(nominal, alpha=0.0)
+
+    result = ambiguity_set.worst_case_expectation(loss)
+
+    assert torch.equal(result, loss[2])
+
+
 def test_cvar_gradient_is_the_tail_maximizer() -> None:
     loss = CVAR_LOSS.clone().requires_grad_(True)
 
