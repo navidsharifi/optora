@@ -506,10 +506,17 @@ def _loss_hessian(
         ],
         dim=-2,
     )
-    solved, info = torch.linalg.solve_ex(jacobian, right)
+    # QR rather than LU: once `torch.set_num_threads` has been called, a
+    # batched float32 LU on Windows MKL returns invalid pivots for these
+    # systems, raising or silently giving nan, while QR factors each batch
+    # element separately. A singular Jacobian yields a non-finite solution.
+    orthogonal, triangular = torch.linalg.qr(jacobian)
+    solved = torch.linalg.solve_triangular(
+        triangular, orthogonal.mT @ right, upper=True
+    )
     hessian = solved[..., :size, :]
     hessian = 0.5 * (hessian + hessian.mT)
-    usable = (info == 0) & (rate > 0.0) & torch.isfinite(hessian).all(-1).all(-1)
+    usable = (rate > 0.0) & torch.isfinite(hessian).all(-1).all(-1)
     return torch.where(usable[..., None, None], hessian, torch.zeros_like(hessian))
 
 
@@ -535,7 +542,14 @@ class MMDAmbiguitySet(AmbiguitySet):
     interior-point method with Nesterov-Todd scaling (see the module
     docstring), to a relative duality gap of `tol` on the loss standardized
     to unit spread: in float64 the value is within about `tol` times the
-    loss spread of the true worst case. Each iteration factors one
+    loss spread of the true worst case. In float32 the accuracy is set by
+    the Gram matrix instead: factoring it in float32 costs up to about its
+    condition number $\kappa(K)$ in units of float32 epsilon, relative to
+    the loss spread, which for nearly coincident support points or a smooth
+    kernel can exceed the robust excess itself. Pass `nominal`, `gram`, and
+    `loss` in float64 when $\kappa(K)$ is large or the radius small; the
+    gradient still reaches a float32 `loss` through the cast (see
+    `docs/numerics.md`). Each iteration factors one
     `(n, n)` matrix per batch element, and a few tens of iterations
     suffice for supports into the thousands. The closed-form bound
     $\ell^\top p + \epsilon \lVert \ell \rVert_{K^{-1}}$ of Staib and

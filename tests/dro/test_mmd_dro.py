@@ -390,6 +390,44 @@ def test_float32_agrees_with_float64_to_its_precision() -> None:
     assert float(value) == pytest.approx(expected, abs=1e-4 * spread(SMOOTH.loss))
 
 
+def test_float32_second_derivatives_survive_a_thread_count_change() -> None:
+    # On Windows MKL, any torch.set_num_threads call left the batched float32
+    # LU of the Hessian system returning invalid pivots: the backward pass
+    # raised, or got nan and silently zeroed the Hessian. Setting the current
+    # count again is enough to trigger it and changes nothing else.
+    torch.set_num_threads(torch.get_num_threads())
+    size, batch = 256, 16
+    points = torch.linspace(0.0, 1.0, size, dtype=DTYPE)
+    gram = torch.exp(-torch.abs(points[:, None] - points[None, :]))
+    generator = torch.Generator().manual_seed(0)
+    loss = torch.randn(batch, size, generator=generator, dtype=DTYPE)
+    direction = torch.randn(batch, size, generator=generator, dtype=DTYPE)
+
+    def hessian_vector_product(dtype: torch.dtype) -> torch.Tensor:
+        ambiguity_set = MMDAmbiguitySet(
+            torch.full((size,), 1.0 / size, dtype=dtype), gram.to(dtype), 0.1
+        )
+        point = loss.to(dtype).requires_grad_()
+        value = ambiguity_set.worst_case_expectation(point).sum()
+        (gradient,) = torch.autograd.grad(value, point, create_graph=True)
+        (product,) = torch.autograd.grad(
+            torch.sum(gradient * direction.to(dtype)), point
+        )
+        return product.double()
+
+    single = hessian_vector_product(torch.float32)
+    expected = hessian_vector_product(torch.float64)
+
+    # Float32 accuracy is set by the Gram matrix's condition number, about
+    # 1e5 here (see docs/numerics.md): the worst element is ~1e-2 off.
+    eigenvalues = torch.linalg.eigvalsh(gram)
+    condition = float(eigenvalues[-1] / eigenvalues[0])
+    norms = torch.linalg.vector_norm(expected, dim=-1)
+    assert bool(torch.all(norms > 0.0))
+    errors = torch.linalg.vector_norm(single - expected, dim=-1) / norms
+    assert float(errors.max()) < 4.0 * condition * torch.finfo(torch.float32).eps
+
+
 def test_reads_the_convergence_flag_only_at_checkpoints(
     host_sync_counter: Callable[[], Any],
 ) -> None:
