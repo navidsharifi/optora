@@ -24,7 +24,9 @@ and chi-square duals are smooth and convex in one scalar, and are minimized
 with a bounded Brent search over a logarithmic reparameterization that
 reaches both the vanishing-radius regime, where the minimizer runs off to
 infinity, and the saturated regime, where it is approached only in the
-limit.
+limit. The Cressie-Read dual, which has no closed form in either variable,
+is minimized by nested bounded searches: convex in its multiplier for a
+fixed scale, and unimodal in the scale after that inner minimization.
 """
 
 from collections.abc import Callable
@@ -218,6 +220,84 @@ def chi_square_dual_minimum(nominal: Array, loss: Array, radius: float) -> float
         ),
         spread,
     )
+
+
+def cressie_read_generator(ratio: Array, power: float) -> Array:
+    r"""Evaluate the Cressie-Read generator of order $k > 1$.
+
+    $\phi_k(t) = (t^k - k t + k - 1) / (k (k - 1))$, with $\phi_2(t) =
+    (t - 1)^2 / 2$, half the chi-square generator (Cressie and Read 1984).
+
+    Args:
+        ratio: Nonnegative likelihood ratios.
+        power: Order $k > 1$.
+
+    Returns:
+        The generator evaluated elementwise.
+    """
+    return (ratio**power - power * ratio + power - 1.0) / (power * (power - 1.0))
+
+
+def cressie_read_conjugate(shift: Array, power: float) -> Array:
+    r"""Evaluate the conjugate of the Cressie-Read generator restricted to $t \ge 0$.
+
+    $\phi_k^*(s) = (((k - 1) s + 1)_+^{k / (k - 1)} - 1) / k$.
+
+    Args:
+        shift: Real dual arguments.
+        power: Order $k > 1$.
+
+    Returns:
+        The conjugate evaluated elementwise.
+    """
+    base = np.maximum((power - 1.0) * shift + 1.0, 0.0)
+    return (base ** (power / (power - 1.0)) - 1.0) / power
+
+
+def cressie_read_dual_minimum(
+    nominal: Array, loss: Array, radius: float, power: float
+) -> float:
+    r"""Minimize the Cressie-Read phi dual by nested bounded searches.
+
+    The dual is $\inf_{\eta > 0, \lambda} \eta\,\mathrm{radius} + \lambda +
+    \eta\,\mathbb{E}_p[\phi_k^*((\ell - \lambda) / \eta)]$. For a fixed
+    $\eta$ it is convex in $\lambda$, whose minimizer lies between the
+    minimum loss less $\eta\,\phi_k'(1/p_{\min})$ and the maximum loss;
+    after that minimization it is convex in $\eta$, searched on a log
+    scale.
+
+    Args:
+        nominal: Reference distribution of shape `(n,)`.
+        loss: Per-scenario losses of shape `(n,)`.
+        radius: Nonnegative Cressie-Read budget.
+        power: Order $k > 1$.
+
+    Returns:
+        The dual minimum, equal to the worst case by strong duality.
+    """
+    positive_nominal, positive_loss = _positive_support(nominal, loss)
+    maximum = float(positive_loss.max())
+    minimum = float(positive_loss.min())
+    spread = maximum - minimum
+    if spread == 0.0:
+        return maximum
+    reach = (float(positive_nominal.min()) ** (1.0 - power) - 1.0) / (power - 1.0)
+
+    def inner(eta: float) -> float:
+        def dual(lam: float) -> float:
+            shift = (positive_loss - lam) / eta
+            conjugate = cressie_read_conjugate(shift, power)
+            return float(eta * radius + lam + eta * positive_nominal @ conjugate)
+
+        solution = minimize_scalar(
+            dual,
+            bounds=(minimum - eta * reach, maximum),
+            method="bounded",
+            options={"xatol": _SEARCH_TOLERANCE * spread},
+        )
+        return min(float(solution.fun), dual(maximum))
+
+    return _minimize_on_log_scale(inner, spread)
 
 
 def total_variation_dual(

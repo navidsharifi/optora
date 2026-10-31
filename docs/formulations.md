@@ -210,10 +210,19 @@ $$
     + \eta \, \mathbb{E}_{\mathrm{nominal}}\!\left[\phi^*\!\left(\frac{\mathrm{loss} - \lambda}{\eta}\right)\right]
 $$
 
-where `phi*` is `phi`'s convex conjugate. This is the fallback for a
-generator optora does not recognize: it needs an injected `dual_solver`,
-and it inherits both failure modes the bracketed bisection avoids, so keep
-its radius well inside the saturation threshold.
+where `phi*` is `phi`'s convex conjugate. By the KKT conditions its
+maximizer is $q_i = \mathrm{nominal}_i \, (\phi^*)'(\mu - a\,\mathrm{gap}_i)$
+for a rate $a = 1/\eta$ and a level $\mu$ that normalizes it, and the
+derivative condition of the dual in $\eta$ reads, by Fenchel's equality,
+$\mathbb{E}_{\mathrm{nominal}}[\phi(q / \mathrm{nominal})] =
+\mathrm{radius}$. So, without a `dual_solver`, `PhiAmbiguitySet` solves any
+generator exactly with the same bracketed bisection as the KL and
+chi-square sets, the rate outside and the level inside, using only `phi`
+and `phi_conjugate` through autograd: the Cressie-Read family, for example,
+is checked against an independent dual minimization. The nested search
+costs tens of milliseconds on a small support, against about one for the
+dedicated sets, so prefer those for their own generators. Passing a
+`dual_solver` minimizes the dual above instead, with that solver's accuracy.
 
 <figure class="figure" markdown="span">
   ![The generators of the KL, chi-square, total-variation and CVaR balls and their convex conjugates](assets/figures/phi-generators-light.svg#only-light){ loading=lazy }
@@ -225,7 +234,7 @@ its radius well inside the saturation threshold.
   and <code>cvar_conjugate</code>.</figcaption>
 </figure>
 
-!!! warning "`PhiAmbiguitySet` step sizes are relative to a unit-spread loss"
+!!! warning "With a `dual_solver`, step sizes are relative to a unit-spread loss"
     The dual is minimized on the standardized loss, so a step size means
     the same thing at every loss scale: order one (up to about 2) for a
     KL-like generator, and far less for a stiffer one. A step tuned on a

@@ -5,11 +5,14 @@ from collections.abc import Callable
 
 import torch
 
+from optora.core._transforms import transforms_active
 from optora.core.dro_base import (
     AmbiguitySet,
     DualAmbiguitySet,
     TiltedAmbiguitySet,
+    _bisection_steps,
     _broadcast_batch_shapes,
+    _search_bits,
 )
 from optora.core.solver_base import (
     MinimizationProblem,
@@ -133,6 +136,229 @@ def cvar_conjugate(
     return torch.relu(scaled_shift) / alpha
 
 
+# Extra halvings of the level bracket beyond the unit-interval count. The
+# level is searched as v = log(1 + mu - phi'(1)) on [0, V], where V is at most
+# the logarithm of the largest finite float, about 710 wide, which these ten
+# bits absorb.
+_LOG_RATIO_BITS = 10
+
+
+def _elementwise_derivative(
+    function: Callable[[torch.Tensor], torch.Tensor],
+    point: torch.Tensor,
+) -> torch.Tensor:
+    """Return the derivative of an elementwise `function` at `point`.
+
+    Where the result must carry derivatives itself, because `point` requires
+    grad or a `torch.func` transform is active, it is taken with
+    `torch.func`, which composes with both. Otherwise a detached leaf and
+    `torch.autograd.grad` give the same value at a third of the overhead,
+    which matters inside a search that evaluates it hundreds of times.
+    """
+    if transforms_active() or point.requires_grad:
+        result: torch.Tensor = torch.func.grad(
+            lambda value: torch.sum(function(value))
+        )(point)
+        return result
+    with torch.enable_grad():
+        leaf = point.detach().requires_grad_(True)
+        (derivative,) = torch.autograd.grad(torch.sum(function(leaf)), leaf)
+    return derivative
+
+
+class _PhiTilt(TiltedAmbiguitySet):
+    r"""Exact worst case of a general phi-divergence ball, as a bracketed tilt.
+
+    By the KKT conditions of the phi ball, the maximizer is
+    $q_i = p_i\, (\phi^*)'(\mu - a\,\mathrm{gap}_i)$ on the standardized
+    shortfall, for a rate $a = 1/\eta \ge 0$ and a level $\mu$ that makes
+    $q$ sum to one. Along the rate its divergence
+    $\mathbb{E}_p[\phi(q / p)]$ grows from zero at $a = 0$ to the divergence
+    of the distribution concentrated on the highest-loss scenarios, which is
+    the derivative condition of the convex dual written with Fenchel's
+    equality, so `TiltedAmbiguitySet` bisects the rate exactly as it does
+    for KL and chi-square.
+
+    The level has no closed form for a general generator. For each rate it
+    solves $\mathbb{E}_p[(\phi^*)'(\mu - a\,\mathrm{gap})] = 1$, which is
+    nondecreasing in $\mu$. The root lies in $[\phi'(1), \bar\mu]$: at
+    $\mu = \phi'(1)$ no ratio exceeds one, and $\bar\mu$ is the smaller of
+    $\phi'(1/P)$, at which the highest-loss scenarios, of nominal mass $P$,
+    carry the whole mass alone, and $\phi'(1) + a$, at which no ratio falls
+    below one. It is searched as $v = \log(1 + \mu - \phi'(1))$, which
+    resolves the level to relative precision whatever the bracket's width,
+    with the batched multi-point search of the tilt itself. Derivatives of
+    $\phi$ and $\phi^*$ come from autograd. The search runs detached; where
+    derivatives are recorded, one Newton step on the normalization from the
+    solved level attaches the level's exact derivative (implicit function
+    theorem), which is what the base class's implicit solution needs.
+
+    Attributes:
+        phi_conjugate: Convex conjugate of the generator, finite and
+            differentiable on the real line.
+    """
+
+    divergence: PhiDivergence
+
+    def __init__(
+        self,
+        nominal: torch.Tensor,
+        divergence: PhiDivergence,
+        radius: float | torch.Tensor,
+        phi_conjugate: Callable[[torch.Tensor], torch.Tensor],
+    ) -> None:
+        """Initialize the tilt from an existing set's state, without copies."""
+        super().__init__(nominal=nominal, divergence=divergence, radius=radius)
+        self.phi_conjugate = phi_conjugate
+
+    def _level(self, gap: torch.Tensor, rate: torch.Tensor) -> torch.Tensor:
+        r"""Return the normalizing level at `rate`, attached where recorded.
+
+        Args:
+            gap: Standardized shortfall of shape `(..., n)`.
+            rate: Tilt rate with a trailing singleton dimension.
+
+        Returns:
+            The level $\mu$ with a trailing singleton dimension.
+        """
+        nominal = self._constant_nominal.to(gap.dtype)
+        on_support = self._reachable
+        conjugate = self.phi_conjugate
+
+        def slope(point: torch.Tensor) -> torch.Tensor:
+            return _elementwise_derivative(conjugate, point)
+
+        def curvature(point: torch.Tensor) -> torch.Tensor:
+            return _elementwise_derivative(slope, point)
+
+        def mass(
+            level: torch.Tensor,
+            nominal: torch.Tensor,
+            gap: torch.Tensor,
+            rate: torch.Tensor,
+            function: Callable[[torch.Tensor], torch.Tensor],
+        ) -> torch.Tensor:
+            values = function(level - rate * gap)
+            return torch.sum(
+                torch.where(on_support, nominal * values, 0.0), dim=-1, keepdim=True
+            )
+
+        fixed_nominal, fixed_gap, fixed_rate = (
+            nominal.detach(),
+            gap.detach(),
+            rate.detach(),
+        )
+        top = torch.sum(
+            torch.where(on_support & (fixed_gap == 0.0), fixed_nominal, 0.0),
+            dim=-1,
+            keepdim=True,
+        )
+        base = _elementwise_derivative(self.divergence.phi, torch.ones_like(top))
+        concentrated = _elementwise_derivative(self.divergence.phi, 1.0 / top)
+        ceiling = torch.minimum(
+            torch.where(torch.isfinite(concentrated), concentrated, torch.inf),
+            base + fixed_rate,
+        )
+        width = torch.log1p(torch.clamp(ceiling - base, min=0.0))
+        bits = _search_bits(math.prod(fixed_rate.shape) * gap.shape[-1])
+        points = 2**bits - 1
+        index = torch.arange(1, points + 1, dtype=gap.dtype, device=gap.device)
+        index = index.reshape((points,) + (1,) * fixed_rate.ndim)
+        lower = torch.zeros_like(width)
+        spacing = width
+        steps = -(-(_bisection_steps(gap.dtype) + _LOG_RATIO_BITS) // bits)
+        for _ in range(steps):
+            spacing = spacing / (points + 1)
+            candidates = base + torch.expm1(lower + spacing * index)
+            below = mass(candidates, fixed_nominal, fixed_gap, fixed_rate, slope) <= 1.0
+            lower = lower + spacing * torch.amax(torch.where(below, index, 0.0), dim=0)
+        level = (base + torch.expm1(lower)).detach()
+        recorded = transforms_active() or any(
+            tensor.requires_grad for tensor in (nominal, gap, rate)
+        )
+        if not recorded:
+            return level
+        residual = mass(level, nominal, gap, rate, slope) - 1.0
+        derivative = mass(level, nominal, gap, rate, curvature)
+        usable = derivative > 0.0
+        return level - torch.where(
+            usable, residual / torch.where(usable, derivative, 1.0), 0.0
+        )
+
+    def _tilted_distribution(
+        self, gap: torch.Tensor, tilt: torch.Tensor
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        r"""Evaluate the conjugate-slope tilt and its phi-divergence.
+
+        Args:
+            gap: Standardized shortfall below the maximum loss, of shape
+                `(..., n)`.
+            tilt: Path parameter in $[0, 1)$ of shape `batch_shape`.
+
+        Returns:
+            The tilted distribution and its phi-divergence from `nominal`.
+        """
+        nominal = self._constant_nominal.to(gap.dtype)
+        on_support = self._reachable
+        rate = self._tilt_rate(tilt)
+        level = self._level(gap, rate)
+        weight = torch.where(
+            on_support,
+            _elementwise_derivative(self.phi_conjugate, level - rate * gap),
+            0.0,
+        )
+        normalizer = torch.sum(nominal * weight, dim=-1, keepdim=True)
+        ratio = weight / normalizer
+        smallest = torch.finfo(ratio.dtype).tiny
+        terms = nominal * self.divergence.phi(torch.clamp(ratio, min=smallest))
+        divergence = torch.sum(torch.where(on_support, terms, 0.0), dim=-1)
+        return nominal * ratio, torch.clamp(divergence, min=0.0)
+
+    def _standardized_sensitivities(
+        self,
+        gap: torch.Tensor,
+        tilt: torch.Tensor,
+        distribution: torch.Tensor,
+        divergence: torch.Tensor,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        r"""Return the envelope derivatives of the conjugate-slope tilt.
+
+        The multiplier of the radius constraint is $\eta^\star = 1/a$, and
+        the derivative with respect to $\mathrm{nominal}_i$ is
+        $\eta^\star (\phi^*(s_i) - \mathbb{E}_p[\phi^*(s)])$ at
+        $s = \mu - a\,\mathrm{gap}$, on every scenario including those
+        without nominal mass. At a zero rate it is the limit
+        $\mathbb{E}_p[\mathrm{gap}] - \mathrm{gap}_i$, as for KL.
+
+        Args:
+            gap: Standardized shortfall of every scenario, of shape
+                `(..., n)`.
+            tilt: Solved tilt of shape `batch_shape`.
+            distribution: Maximizer at `tilt`, unused.
+            divergence: Phi-divergence of the maximizer, unused.
+
+        Returns:
+            The derivative with respect to `nominal` and the multiplier
+            $\eta^\star$, infinite at a zero tilt.
+        """
+        nominal = self._constant_nominal.to(gap.dtype)
+        on_support = self._reachable
+        rate = self._tilt_rate(tilt)
+        conjugate = self.phi_conjugate(self._level(gap, rate) - rate * gap)
+
+        def nominal_mean(values: torch.Tensor) -> torch.Tensor:
+            weighted = torch.where(on_support, nominal * values, 0.0)
+            return torch.sum(weighted, dim=-1, keepdim=True)
+
+        positive = rate > 0.0
+        nominal_gradient = torch.where(
+            positive,
+            (conjugate - nominal_mean(conjugate)) / torch.where(positive, rate, 1.0),
+            nominal_mean(gap) - gap,
+        )
+        return nominal_gradient, torch.reciprocal(rate.squeeze(-1))
+
+
 class PhiAmbiguitySet(DualAmbiguitySet):
     r"""Phi-divergence-constrained ambiguity set solved via its convex dual.
 
@@ -158,30 +384,36 @@ class PhiAmbiguitySet(DualAmbiguitySet):
     `KLAmbiguitySet` dual to an arbitrary phi-divergence at the cost of a
     second dual variable $\lambda$; setting $\phi(t) = t \log t - t + 1$
     (whose conjugate is $\phi^*(s) = \exp(s) - 1$) recovers the KL-DRO dual
-    exactly. `dual_solver` minimizes this joint objective over
-    $(\log(\eta), \lambda)$ rather than $(\eta, \lambda)$ directly, so the
-    unconstrained `GradientDescent` solver keeps $\eta$ strictly positive
-    throughout the iteration.
+    exactly.
 
-    This base class assumes `phi_conjugate` is finite everywhere on the real
-    line (true for, for example, `chi_square_conjugate`). Phi-divergences
-    whose conjugate has a hard finite feasibility boundary (for example
-    total variation, whose conjugate is `+inf` past a threshold) are not
-    solved robustly by this unconstrained joint dual, since gradient
-    descent can step past the boundary into a region of infinite objective
-    value; `TotalVariationAmbiguitySet` instead computes its worst-case
-    expectation from a dedicated closed form.
+    Without a `dual_solver`, the default, the worst case is solved exactly
+    for any generator, as a bracketed tilt. By the KKT conditions the
+    maximizer is $q_i = \mathrm{nominal}_i\,(\phi^*)'(\mu - a\,
+    \mathrm{gap}_i)$ for a rate $a = 1/\eta$ and a normalizing level
+    $\mu$, and its divergence grows monotonically with the rate, so
+    `optora.core.dro_base.TiltedAmbiguitySet` bisects the rate in a
+    guaranteed bracket, as it does for `KLAmbiguitySet` and
+    `ChiSquareAmbiguitySet`, while an inner bisection pins the level. The
+    solve has a fixed trip count, never synchronizes with the host, reaches
+    the maximum loss exactly at saturation, and carries exact first and
+    second derivatives in `loss`, `nominal`, and `radius`. It needs only
+    `divergence.phi` and `phi_conjugate`, differentiated with `torch.func`,
+    so both must be differentiable functions of tensors. The nested
+    bisection makes it slower than the dedicated sets: prefer
+    `KLAmbiguitySet`, `ChiSquareAmbiguitySet`, or `CVaRAmbiguitySet` for
+    their generators.
 
-    A fixed-step first-order solver on this joint dual is the fallback for
-    a generator optora does not recognize, not the preferred route. It is
-    sensitive to the support size and to the radius: the minimizer runs off
-    to infinity as the radius vanishes, and a large support can push the
-    iterate into a region the conjugate overflows. `KLAmbiguitySet` and
-    `ChiSquareAmbiguitySet` therefore do not use it, and instead pin their
-    known maximizer with the bracketed bisection of
-    `optora.core.dro_base.TiltedAmbiguitySet`. Prefer them over an
-    equivalent `PhiAmbiguitySet`, and keep a general `phi_conjugate`'s
-    radius well inside the saturation threshold.
+    With a `dual_solver`, the convex dual above is minimized over
+    $(\log(\eta), \lambda)$ by that solver instead, from a warm start (see
+    `optora.core.dro_base.DualAmbiguitySet`); its accuracy is then the
+    solver's, and a fixed-step `GradientDescent` is sensitive to its step
+    size, to the support size, and to a radius near zero or saturation.
+
+    `phi_conjugate` must be finite everywhere on the real line (true for,
+    for example, `chi_square_conjugate` and `kl_conjugate`). A generator
+    whose conjugate has a hard finite feasibility boundary, such as total
+    variation, is solved by its dedicated closed form,
+    `TotalVariationAmbiguitySet`.
 
     Attributes:
         nominal: Reference distribution the ambiguity set is centered on.
@@ -193,12 +425,14 @@ class PhiAmbiguitySet(DualAmbiguitySet):
         phi_conjugate: Convex (Legendre-Fenchel) conjugate of
             `divergence.phi`, finite everywhere on the real line.
         dual_solver: Solver minimizing the dual objective over
-            `(log(eta), lam)`.
+            `(log(eta), lam)`, or `None` for the exact bracketed tilt.
         initial_dual_point: Values of `(log(eta), lam)` the first dual solve
             starts from, in the units of the raw loss (`eta` and `lam` have
             the units of `loss`); later solves warm-start from the previous
             optimum (see `optora.core.dro_base.DualAmbiguitySet`).
     """
+
+    divergence: PhiDivergence
 
     def __init__(
         self,
@@ -226,8 +460,9 @@ class PhiAmbiguitySet(DualAmbiguitySet):
             phi_conjugate: Convex conjugate of `divergence.phi`, finite
                 everywhere on the real line.
             dual_solver: Solver minimizing the dual objective over
-                `(log(eta), lam)`. Required when evaluating a positive-radius
-                set.
+                `(log(eta), lam)`. `None`, the default, solves the worst
+                case exactly as a bracketed tilt instead, and ignores the
+                initial dual point.
             initial_log_eta: Value of `log(eta)` the first dual solve starts
                 from, in the units of the raw loss (`eta` has the units of
                 `loss`). Later calls warm-start from the previous solve's
@@ -269,6 +504,35 @@ class PhiAmbiguitySet(DualAmbiguitySet):
             validate=validate,
         )
         self.phi_conjugate = phi_conjugate
+
+    def worst_case_expectation(self, loss: torch.Tensor) -> torch.Tensor:
+        """Compute the worst-case expected loss over the phi-divergence ball.
+
+        Args:
+            loss: Per-scenario loss values of shape `(..., n)`, one trailing
+                entry per element of `nominal`'s support. Leading dimensions
+                are a batch of independent loss vectors, solved together.
+
+        Returns:
+            A tensor of shape `(...)` holding the worst-case expected loss:
+            the exact `sum(nominal * loss)` when `radius` is a zero float,
+            otherwise the expectation under the maximizer found by the
+            bracketed tilt, or, with a `dual_solver`, the dual objective at
+            the optimum that solver found.
+
+        Raises:
+            ValueError: If `loss`'s trailing dimension does not match
+                `nominal`'s support size, its batch shape does not
+                broadcast against `nominal` and `radius`, or `validate` is
+                set and `loss` is not finite.
+        """
+        if self.dual_solver is not None:
+            return super().worst_case_expectation(loss)
+        # Built per call from this set's own tensors, never registered as a
+        # submodule, so `nominal` and a tensor `radius` exist once.
+        tilt = _PhiTilt(self.nominal, self.divergence, self.radius, self.phi_conjugate)
+        tilt.validate = self.validate
+        return tilt.worst_case_expectation(loss)
 
     def _dual_objective(
         self,

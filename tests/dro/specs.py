@@ -5,9 +5,11 @@ suite (`tests/dro/test_properties.py`) and the gradient suite
 (`tests/dro/test_gradients.py`) run against, so adding a set to the
 verification suites means adding one `SetSpec` here.
 
-`PhiAmbiguitySet` is excluded: its general fixed-step dual is a documented
-fallback whose accuracy depends on the radius and step size, so it does not
-satisfy the invariants or the gradient checks to a fixed tolerance.
+`PhiAmbiguitySet` enters through its exact path, without a `dual_solver`,
+with the chi-square generator: the same ball as `ChiSquareAmbiguitySet`, so
+it is checked against the same references, while its solve knows nothing of
+the generator but `phi` and `phi_conjugate`. Its fixed-step dual path stays
+out, since its accuracy depends on the radius and the step size.
 """
 
 import math
@@ -19,11 +21,15 @@ import pytest
 import torch
 
 from optora.core.dro_base import AmbiguitySet
+from optora.divergences.f_divergence import PhiDivergence
 from optora.dro.kl_dro import KLAmbiguitySet
 from optora.dro.phi_dro import (
     ChiSquareAmbiguitySet,
     CVaRAmbiguitySet,
+    PhiAmbiguitySet,
     TotalVariationAmbiguitySet,
+    _PhiTilt,
+    chi_square_conjugate,
 )
 from optora.dro.wasserstein_dro import WassersteinAmbiguitySet
 from tests.dro.duality import (
@@ -47,6 +53,33 @@ from tests.dro.duality import (
 from tests.dro.instances import Instance
 
 Radius = float | torch.Tensor
+
+
+def chi_square_generator(ratio: torch.Tensor) -> torch.Tensor:
+    """Return the chi-square generator `(t - 1) ** 2`."""
+    return (ratio - 1.0) ** 2
+
+
+def general_phi_set(nominal: torch.Tensor, radius: Radius) -> PhiAmbiguitySet:
+    """Build the chi-square ball through `PhiAmbiguitySet`'s exact path."""
+    return PhiAmbiguitySet(
+        nominal,
+        divergence=PhiDivergence(phi=chi_square_generator),
+        radius=radius,
+        phi_conjugate=chi_square_conjugate,
+    )
+
+
+def solving_object(ambiguity_set: AmbiguitySet) -> object:
+    """Return where the methods a worst-case solve calls must be patched.
+
+    `PhiAmbiguitySet` without a `dual_solver` delegates each solve to a
+    private `_PhiTilt` built per call, so a test that replaces one of the
+    tilt's methods patches that class rather than the set.
+    """
+    if isinstance(ambiguity_set, PhiAmbiguitySet) and ambiguity_set.dual_solver is None:
+        return _PhiTilt
+    return ambiguity_set
 
 
 def cvar_level(radius: Radius) -> Radius:
@@ -104,6 +137,23 @@ SPECS = (
     SetSpec(
         name="chi_square",
         build=lambda nominal, _, radius: ChiSquareAmbiguitySet(nominal, radius),
+        dual=lambda instance, radius, coordinate: chi_square_dual(
+            instance.nominal_array,
+            instance.loss_array,
+            radius,
+            float(np.sinh(coordinate)),
+        ),
+        dual_minimum=lambda instance, radius: chi_square_dual_minimum(
+            instance.nominal_array, instance.loss_array, radius
+        ),
+        divergence=lambda instance, candidate: chi_square_divergence(
+            candidate, instance.nominal_array
+        ),
+        off_support=False,
+    ),
+    SetSpec(
+        name="phi",
+        build=lambda nominal, _, radius: general_phi_set(nominal, radius),
         dual=lambda instance, radius, coordinate: chi_square_dual(
             instance.nominal_array,
             instance.loss_array,

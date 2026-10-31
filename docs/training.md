@@ -80,8 +80,9 @@ inner problem. This has three practical consequences:
 
     The identity holds *at* the maximizer. `KLAmbiguitySet` and
     `ChiSquareAmbiguitySet` bisect to the dtype's precision on every
-    call; a `PhiAmbiguitySet` with a loose inner `tol` biases the outer
-    gradient, so tighten it before blaming the optimizer.
+    call, and so does `PhiAmbiguitySet` without a `dual_solver`; given
+    one with a loose `tol`, it biases the outer gradient, so tighten it
+    before blaming the optimizer.
 
 </div>
 
@@ -141,7 +142,10 @@ Hessians and Hessian-vector products of the worst case with respect to
 
 === "General phi-divergence"
 
-    `PhiAmbiguitySet` re-evaluates its dual objective $F$ at the detached
+    Without a `dual_solver`, `PhiAmbiguitySet` is a tilted set like KL and
+    chi-square, with the same exact implicit-function Hessian; its inner
+    normalizing level gets its derivative from one Newton step of its own.
+    With a `dual_solver`, it re-evaluates its dual objective $F$ at the detached
     optimum $x^\star$, which alone would miss how $x^\star$ moves with the
     loss. It also adds a term that is zero in value and in first
     derivative but whose Hessian is the implicit-function correction
@@ -248,8 +252,8 @@ Second derivatives that involve `nominal` and `radius`, mixed ones with
 implicit-function step that gives their loss Hessian, which takes `nominal`
 and `radius` as inputs too, so a recorded backward pass rebuilds the
 maximizer and both envelope derivatives with their exact Jacobians.
-`PhiAmbiguitySet` gets them from its dual objective, so, like its loss
-derivatives, they are exact once its inner dual solve has converged. On
+`PhiAmbiguitySet` gets them the same way without a `dual_solver`, and
+from its dual objective with one, exact once that solve has converged. On
 the total-variation, CVaR, Wasserstein, and MMD sets derivatives with
 respect to `nominal` and `radius` are first order: second derivatives that
 involve them are not supported.
