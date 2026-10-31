@@ -6,6 +6,7 @@ from optora.dro.calibration import (
     phi_divergence_radius,
     wasserstein_radius,
 )
+from optora.dro.group_dro import OnlineGroupDRO, group_losses
 from optora.dro.kl_dro import KLAmbiguitySet
 from optora.dro.minibatch import MultilevelMonteCarloEstimator, StochasticPhiDual
 from optora.dro.minimax_solver import MinimaxProblem, MinimaxResult, MinimaxSolver
@@ -36,9 +37,11 @@ __all__ = [
     "MinimaxSolver",
     "MultilevelMonteCarloEstimator",
     "StochasticPhiDual",
+    "OnlineGroupDRO",
     "chi_square_conjugate",
     "cvar_conjugate",
     "kl_conjugate",
+    "group_losses",
     "chi_square_radius",
     "kl_radius",
     "phi_divergence_radius",

@@ -350,6 +350,79 @@ provides the two standard remedies:
 measures the plug-in's bias and trains with all three estimators against
 the exact full-batch optimum.
 
+## Group DRO
+
+When the training data come from known groups $g = 1, \dots, G$, for
+example the combinations of a label and a spurious attribute, group DRO
+minimizes the risk of the worst group, $\min_\theta \max_g R_g(\theta)$
+(Sagawa et al. 2020). [`optora.dro.group_dro`](api/dro/group_dro.md) adds
+two pieces: `group_losses(loss, groups, num_groups)` averages per-sample
+losses within each group, and `OnlineGroupDRO` keeps the group weights for
+minibatch training. Over the group losses, the worst group is an existing
+ambiguity set, centred on the group proportions:
+
+=== "Exact, on a fixed dataset"
+
+    ```python
+    import torch
+
+    from optora import CVaRAmbiguitySet
+    from optora.dro import group_losses
+
+    counts = torch.bincount(groups, minlength=num_groups)
+    worst_group = CVaRAmbiguitySet(counts / counts.sum(), alpha=0.0)
+
+    for _ in range(num_steps):
+        optimizer.zero_grad()
+        per_sample_loss = (model(features).squeeze(-1) - targets) ** 2
+        group_loss = group_losses(per_sample_loss, groups, num_groups)
+        worst_group.worst_case_expectation(group_loss).backward()
+        optimizer.step()
+    ```
+
+    `CVaRAmbiguitySet` at `alpha=0.0` is exactly the maximum over the
+    groups present, and its level interpolates to ERM at `alpha=1.0`.
+    `TotalVariationAmbiguitySet` at radius one is the maximum over every
+    group, and `KLAmbiguitySet` or `ChiSquareAmbiguitySet` around the
+    proportions are softer balls around the group mix that reach the worst
+    group once the radius passes $\log(1/p_{g^\star})$, respectively
+    $1/p_{g^\star} - 1$.
+
+=== "Online, on minibatches"
+
+    ```python
+    import torch
+
+    from optora import OnlineGroupDRO
+    from optora.dro import group_losses
+
+    adversary = OnlineGroupDRO(torch.full((num_groups,), 1.0 / num_groups), step_size=0.01)
+
+    for features, targets, groups in loader:
+        optimizer.zero_grad()
+        per_sample_loss = (model(features).squeeze(-1) - targets) ** 2
+        group_loss = group_losses(per_sample_loss, groups, num_groups)
+        adversary.step(group_loss)
+        adversary(group_loss).backward()
+        optimizer.step()
+    ```
+
+    The maximum of minibatch group means overestimates the worst group
+    risk. `OnlineGroupDRO` is Sagawa et al.'s Algorithm 1 instead: `step`
+    moves the group weights by exponentiated-gradient ascent,
+    $q_g \propto q_g e^{\eta \hat\ell_g}$, and `forward` is the weighted
+    loss $\sum_g q_g \hat\ell_g$ the model descends. Call `step` first, as
+    above, and outside any `torch.func` transform; `forward` is a pure
+    function and composes with all of them.
+
+| Topic | Guidance |
+| --- | --- |
+| Regularization | Necessary when the model can fit the training set. Once every training group's loss is near zero there is nothing left to upweight, and group DRO ends where ERM does. Use a strong L2 penalty or early stopping, as [Group DRO under a spurious correlation](examples/group_dro_training.md) shows. |
+| Absent groups | `group_losses` gives a group without samples loss zero, so `step` leaves its unnormalized weight unchanged, which is how Algorithm 1 treats an unsampled group. Sampling a fixed number of examples per group keeps every group in every minibatch. |
+| Generalization adjustment | Sagawa et al. add $C / \sqrt{n_g}$ to each group's loss to favour small groups. Pass the adjusted losses to `step` and the raw ones to `forward`; the adjustment is constant in $\theta$, so it changes the weights and not the gradient's form. |
+| Many models at once | Initial weights of shape `(..., G)` give one adversary per batch element of the losses, and a tensor `step_size` sweeps step sizes in one module. |
+| Reading the weights | After $T$ steps on fixed group losses the weights are the exponential tilt $q_0 e^{T\eta\ell} / Z$, the worst case of a KL ball around $q_0$: the iterates follow the KL-DRO worst-case path toward the worst group. |
+
 ## Practical notes
 
 | Topic | Guidance |

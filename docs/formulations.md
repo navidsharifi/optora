@@ -420,6 +420,36 @@ in those directions.
   program bends and meets the maximum loss at saturation.</figcaption>
 </figure>
 
+### Group DRO: `group_losses` and `OnlineGroupDRO`
+
+Group DRO (Sagawa et al., 2020) puts the ambiguity on the mixture of $G$
+known groups rather than on individual samples. With
+$\hat R_g = \frac{1}{n_g} \sum_{i:\, g_i = g} \ell_i$ the group losses that
+`group_losses` computes and $p_g = n_g / n$ the group proportions,
+
+$$
+\max_{g} \hat R_g
+= \sup_{q \in \Delta_G} \sum_g q_g \hat R_g
+= \mathrm{CVaR}_0\big(\hat R;\, p\big),
+$$
+
+so it needs no new ambiguity set: `CVaRAmbiguitySet(p, alpha=0.0)` applied
+to the group losses is the worst group exactly, $\alpha = 1$ is ERM
+($\sum_g p_g \hat R_g$ is the sample mean), and a KL or $\chi^2$ ball
+around $p$ is a softer worst case that reaches the worst group at radius
+$\log(1/p_{g^\star})$, respectively $1/p_{g^\star} - 1$. Through
+`group_losses`, the gradient with respect to a sample's loss is
+$q^\star_{g_i} / n_{g_i}$: group DRO reweights samples uniformly within
+each group.
+
+On minibatches, `OnlineGroupDRO` keeps $q$ as state and moves it by
+exponentiated-gradient ascent, $q_g \propto q_g\, e^{\eta \hat\ell_g}$, one
+step per minibatch, against gradient descent on the model (Sagawa et al.'s
+Algorithm 1, a stochastic mirror descent-ascent). On fixed group losses its
+$T$-th iterate is the exponential tilt $q_0 e^{T \eta \ell} / Z$, which is
+the worst case of the KL ball around $q_0$ of matching radius, so the
+online weights follow the KL-DRO worst-case path toward the worst group.
+
 ### `MinimaxSolver`
 
 Wires any of the ambiguity sets above together with an outer solver

@@ -39,6 +39,7 @@ SCRIPT_FIGURES: dict[str, tuple[str, ...]] = {
     "06_calibrated_ambiguity_radius.py": ("06_calibrated_ambiguity_radius",),
     "07_subpopulation_shift_training.py": ("07_subpopulation_shift_training",),
     "08_minibatch_dro_training.py": ("08_minibatch_dro_training",),
+    "09_group_dro_training.py": ("09_group_dro_training",),
 }
 
 

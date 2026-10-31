@@ -16,6 +16,7 @@ DISPLAY_NAMES = {
     "dro": "DRO",
     "dro_base": "DRO Base",
     "f_divergence": "f-Divergence",
+    "group_dro": "Group DRO",
     "kl": "KL",
     "kl_dro": "KL-DRO",
     "mmd": "MMD",
