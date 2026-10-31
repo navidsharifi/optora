@@ -87,7 +87,7 @@ BUILDERS: tuple[tuple[str, Builder], ...] = (
     *((spec.name, spec.build) for spec in SPECS),
     ("sinkhorn", _sinkhorn),
 )
-TILTED = frozenset({"kl", "chi_square", "sinkhorn"})
+TILTED = frozenset({"kl", "chi_square", "phi", "sinkhorn"})
 
 
 def select_builders(names: frozenset[str] | None = None) -> pytest.MarkDecorator:
