@@ -29,11 +29,18 @@ jobs:
           python-version: "3.12"
           cache: pip
       - run: python -m pip install -U pip
-      - run: python -m pip install -e ".[docs]"
+      - run: python -m pip install torch --index-url https://download.pytorch.org/whl/cpu
+      # `dev` brings the reference solvers the benchmarks page compares
+      # against; `examples` runs the example scripts for their figures.
+      - run: python -m pip install -e ".[dev,docs,examples]"
       - name: Configure GitHub Pages
         uses: actions/configure-pages@v6
         with:
           enablement: true
+      # Nothing binary is committed: every chart, animation and benchmark
+      # on the site is rendered here, from this commit of the library.
+      - name: Render the figures and benchmarks
+        run: python -m tools.figures
       - name: Generate API pages and build the site
         run: python -m tools.docs build
       - name: Upload GitHub Pages artifact
