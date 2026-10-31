@@ -57,6 +57,16 @@ worst-case distribution is found under `detach`. That is Danskin's theorem
 that distribution, and only the final re-weighting needs to stay attached
 to the graph.
 
+## The figure
+
+Rendered from this script when the site is built, so it always shows the output of the current code:
+
+<figure class="figure" markdown="span">
+  ![Robust decision against the radius under four ambiguity-set geometries](../assets/figures/03_robust_decision_across_ambiguity_sets-light.png#only-light){ loading=lazy }
+  ![Robust decision against the radius under four ambiguity-set geometries](../assets/figures/03_robust_decision_across_ambiguity_sets-dark.png#only-dark){ loading=lazy }
+  <figcaption>Every geometry leaves the empirical-risk decision at radius zero; how far and how fast it moves toward the costly outcome is the divergence's doing.</figcaption>
+</figure>
+
 ## Source
 
 ```py title="examples/03_robust_decision_across_ambiguity_sets.py"

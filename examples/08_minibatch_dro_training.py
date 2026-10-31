@@ -438,7 +438,7 @@ def main() -> None:
             color=colors[name],
             label=name,
         )
-    ax_bias.axhline(0.0, color="black", linestyle="--")
+    ax_bias.axhline(0.0, color=plt.rcParams["text.color"], linestyle="--")
     ax_bias.axvline(
         BIAS_RADII[0], color="gray", linestyle=":", label="kl_radius(N, 0.95)"
     )

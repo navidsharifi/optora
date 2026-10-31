@@ -1,3 +1,9 @@
+<p align="center">
+  <a href="https://navidsharifi.github.io/optora/">
+    <img src="https://raw.githubusercontent.com/navidsharifi/optora/main/docs/assets/images/optora-logo.jpg" alt="Optora" width="560">
+  </a>
+</p>
+
 # Optora
 
 **A small, composable, PyTorch-native library for distributionally robust optimization (DRO).**
@@ -74,6 +80,10 @@ Convergence diagnostics and helper functions live in `optora.core`.
   `examples` extra (`pip install -e ".[examples]"`).
 - **API reference:** built with Zensical from source docstrings, see
   [`docs/`](docs/index.md).
+- **Benchmarks:** latency, scaling, batched throughput, host
+  synchronizations and agreement with independent reference solvers,
+  measured on every documentation build:
+  [navidsharifi.github.io/optora/benchmarks](https://navidsharifi.github.io/optora/benchmarks/).
 - **API stability:** what counts as public API and what may change during
   `0.x`: [`docs/stability.md`](docs/stability.md).
 - **Contributing:** development workflow, coding style, and the PR
@@ -117,11 +127,18 @@ Generate the hierarchical API reference, preview it, or build the complete
 documentation site without maintaining API pages or navigation by hand:
 
 ```powershell
+python -m tools.figures        # render the site's figures and benchmarks
 python -m tools.docs generate
 python -m tools.docs check
 python -m tools.docs serve
 python -m tools.docs build
 ```
+
+`tools.figures` renders every chart, animation and benchmark on the site
+from the library itself, in both colour schemes, into the git-ignored
+`docs/assets/figures/` (`--list` shows what exists, `--only NAME` renders
+one, `--quick` is a fast low-fidelity pass). The site builds without them,
+so the step is optional locally; the deploy workflow always runs it.
 
 `generate` writes one page per public module (with its classes and functions)
 plus a matching index for every subpackage, and rewrites the API navigation in

@@ -166,6 +166,16 @@ least-squares fit $0.415$.
     bisection is a fixed sequence of small kernels, and on 64-point
     minibatches the cost is launch overhead rather than arithmetic.
 
+## The figure
+
+Rendered from this script when the site is built, so it always shows the output of the current code:
+
+<figure class="figure" markdown="span">
+  ![Bias of the minibatch plug-in estimate and training curves of the three estimators](../assets/figures/08_minibatch_dro_training-light.png#only-light){ loading=lazy }
+  ![Bias of the minibatch plug-in estimate and training curves of the three estimators](../assets/figures/08_minibatch_dro_training-dark.png#only-dark){ loading=lazy }
+  <figcaption>Left: bias of each minibatch estimate as a fraction of the robust excess, against the radius. Right: suboptimality of the full-batch objective at the averaged iterate against samples drawn, for the plug-in, the multilevel estimator and the stochastic dual.</figcaption>
+</figure>
+
 ## Source
 
 ```py title="examples/08_minibatch_dro_training.py"

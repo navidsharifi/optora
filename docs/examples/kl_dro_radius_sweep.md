@@ -55,6 +55,16 @@ Three things to look at:
     flat part of the curve fail even though the answer is essentially
     right.
 
+## The figure
+
+Rendered from this script when the site is built, so it always shows the output of the current code:
+
+<figure class="figure" markdown="span">
+  ![Worst-case expectation of the KL ambiguity set against the radius](../assets/figures/01_kl_dro_radius_sweep-light.png#only-light){ loading=lazy }
+  ![Worst-case expectation of the KL ambiguity set against the radius](../assets/figures/01_kl_dro_radius_sweep-dark.png#only-dark){ loading=lazy }
+  <figcaption>The worst case starts at the nominal expectation, climbs on a log-scaled radius axis, and meets the maximum loss exactly once the radius passes $-\log P^\star$.</figcaption>
+</figure>
+
 ## Source
 
 ```py title="examples/01_kl_dro_radius_sweep.py"

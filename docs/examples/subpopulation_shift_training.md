@@ -251,6 +251,16 @@ seed.
     groups, Gaussian inputs: it shows the mechanism and where it loses, not
     a general guarantee.
 
+## The figure
+
+Rendered from this script when the site is built, so it always shows the output of the current code:
+
+<figure class="figure" markdown="span">
+  ![Test risk of ERM, KL-DRO and the controls as the minority mixing proportion changes](../assets/figures/07_subpopulation_shift_training-light.png#only-light){ loading=lazy }
+  ![Test risk of ERM, KL-DRO and the controls as the minority mixing proportion changes](../assets/figures/07_subpopulation_shift_training-dark.png#only-dark){ loading=lazy }
+  <figcaption>Left: exact test risk against the minority proportion $\pi$ for ERM, KL-DRO at three radii and the controls, with the crossings $\pi^\star$ marked. Right: majority against minority risk, where DRO moves along the optimal trade-off path and ridge moves off it.</figcaption>
+</figure>
+
 ## Source
 
 The script runs in about 30 seconds on a CPU.

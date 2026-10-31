@@ -1,0 +1,154 @@
+/* Optora documentation: site-specific styling on top of Zensical. */
+
+/* Navigation tab icons (rendered by overrides/partials/tabs-item.html). */
+.md-tabs__link svg {
+  width: 1.15em;
+  height: 1.15em;
+  margin-right: 0.35em;
+  vertical-align: -0.2em;
+  fill: currentcolor;
+}
+
+.md-tabs__link svg.lucide {
+  fill: transparent;
+  stroke: currentcolor;
+}
+
+/* Home page hero. The wordmark is the title; the h1 stays for the page
+   title, search and screen readers but is hidden visually. */
+.md-typeset h1.hero__title {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: 0;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+
+.md-typeset .hero {
+  text-align: center;
+  margin: 0.5rem 0 1.5rem;
+}
+
+.md-typeset .hero__logo {
+  display: block;
+  width: min(34rem, 92%);
+  margin: 0 auto 1.2rem;
+  border-radius: 0.8rem;
+  box-shadow: 0 0.6rem 1.8rem rgba(0, 0, 0, 0.25);
+}
+
+.md-typeset .hero__tagline {
+  max-width: 40rem;
+  margin: 0 auto 1.2rem;
+  font-size: 1.05rem;
+  line-height: 1.55;
+  color: var(--md-default-fg-color--light);
+}
+
+.md-typeset .hero__actions {
+  display: flex;
+  justify-content: center;
+  gap: 0.6rem;
+  flex-wrap: wrap;
+}
+
+.md-typeset .hero__actions .md-button {
+  margin: 0;
+}
+
+.md-typeset .hero__actions .md-button svg,
+.md-typeset .hero__actions .md-button .twemoji {
+  vertical-align: -0.15em;
+  margin-right: 0.3em;
+}
+
+.md-typeset .hero__star-count {
+  height: 1.1em;
+  vertical-align: -0.15em;
+  margin-left: 0.4em;
+  opacity: 0.8;
+}
+
+.md-typeset .badges {
+  text-align: center;
+  line-height: 2;
+  margin: 0.8rem 0 0;
+}
+
+.md-typeset .badges a {
+  text-decoration: none;
+}
+
+.md-typeset .badges img {
+  vertical-align: middle;
+  margin: 0 0.1rem;
+}
+
+/* Generated figures and animations. */
+.md-typeset figure.figure {
+  margin: 1.2rem auto;
+  text-align: center;
+}
+
+.md-typeset figure.figure img {
+  max-width: 100%;
+  border-radius: 0.5rem;
+}
+
+.md-typeset figure.figure figcaption {
+  max-width: 44rem;
+  margin: 0.5rem auto 0;
+  font-size: 0.78rem;
+  line-height: 1.5;
+  color: var(--md-default-fg-color--light);
+}
+
+.md-typeset .figure-row {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(18rem, 1fr));
+  gap: 1rem;
+  align-items: start;
+}
+
+/* Benchmark stat tiles. */
+.md-typeset .stat-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(11rem, 1fr));
+  gap: 0.8rem;
+  margin: 1rem 0 1.4rem;
+}
+
+.md-typeset .stat {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  padding: 0.9rem 1rem;
+  border: 0.05rem solid var(--md-default-fg-color--lightest);
+  border-radius: 0.6rem;
+  background: var(--md-code-bg-color);
+}
+
+.md-typeset .stat__label {
+  font-size: 0.68rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--md-default-fg-color--light);
+}
+
+.md-typeset .stat__value {
+  font-size: 1.6rem;
+  font-weight: 600;
+  line-height: 1.2;
+}
+
+.md-typeset .stat__note {
+  font-size: 0.7rem;
+  color: var(--md-default-fg-color--light);
+}
+
+/* Core component cards: keep the icon and the title on one line. */
+.md-typeset .grid.cards > ul > li > p:first-child .twemoji.lg {
+  vertical-align: -0.25em;
+}

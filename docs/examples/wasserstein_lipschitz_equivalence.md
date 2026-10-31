@@ -135,6 +135,16 @@ across every sample size. The figure says the same thing twice:
     *gradient* never is. It is also why an occasional measured gap comes
     out a hair negative when it should be exactly zero.
 
+## The figure
+
+Rendered from this script when the site is built, so it always shows the output of the current code:
+
+<figure class="figure" markdown="span">
+  ![Gap between the Lipschitz surrogate and the exact Wasserstein worst case, per unit radius, against the radius and the sample size](../assets/figures/05_wasserstein_lipschitz_equivalence-light.png#only-light){ loading=lazy }
+  ![Gap between the Lipschitz surrogate and the exact Wasserstein worst case, per unit radius, against the radius and the sample size](../assets/figures/05_wasserstein_lipschitz_equivalence-dark.png#only-dark){ loading=lazy }
+  <figcaption>Left: as the radius shrinks, the surrogate's excess over the exact value per unit radius flattens at the Lipschitz deficiency $\mathrm{Lip} - L_n$. Right: that deficiency vanishes as the sample refines.</figcaption>
+</figure>
+
 ## Source
 
 ```py title="examples/05_wasserstein_lipschitz_equivalence.py"

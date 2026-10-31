@@ -56,6 +56,16 @@ the worst-loss band swells to absorb them. That staircase is the LP's
 vertex-hopping made visible, and it is a much better intuition for "what
 does robustness actually assume about the world" than any scalar curve.
 
+## The figure
+
+Rendered from this script when the site is built, so it always shows the output of the current code:
+
+<figure class="figure" markdown="span">
+  ![Probability mass of every scenario inside the total-variation ball as the radius grows](../assets/figures/02_worst_case_distribution_shift-light.png#only-light){ loading=lazy }
+  ![Probability mass of every scenario inside the total-variation ball as the radius grows](../assets/figures/02_worst_case_distribution_shift-dark.png#only-dark){ loading=lazy }
+  <figcaption>Each band is one scenario's mass. The cheapest scenarios drain one at a time into the single worst one: the linear program hopping between vertices.</figcaption>
+</figure>
+
 ## Source
 
 ```py title="examples/02_worst_case_distribution_shift.py"
