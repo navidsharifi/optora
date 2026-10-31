@@ -44,20 +44,21 @@ class KLDivergence(Divergence):
         r"""Compute the KL divergence of `p` from `q`.
 
         Args:
-            p: Candidate distribution, a nonnegative tensor that sums to one
-                along its last dimension.
-            q: Reference distribution with the same shape as `p`.
+            p: Candidate distribution of shape `(..., n)`, nonnegative and
+                summing to one along its last dimension.
+            q: Reference distribution of shape `(..., n)`, broadcasting
+                against `p`.
 
         Returns:
-            A scalar tensor holding $D_{\mathrm{KL}}(p \,\|\, q)$, clamped to be
-            nonnegative to absorb floating-point error near zero, computed
-            in `optora.core.working_dtype(p, q)` and returned in the
-            promoted dtype of `p` and `q`.
+            $D_{\mathrm{KL}}(p \,\|\, q)$ over the broadcast batch, of shape
+            `(...)`, clamped to be nonnegative to absorb floating-point
+            error near zero, computed in `optora.core.working_dtype(p, q)`
+            and returned in the promoted dtype of `p` and `q`.
         """
         dtype = working_dtype(p, q)
         p_safe = torch.clamp(p.to(dtype), min=self.eps)
         q_safe = torch.clamp(q.to(dtype), min=self.eps)
-        divergence = torch.sum(p_safe * torch.log(p_safe / q_safe))
+        divergence = torch.sum(p_safe * torch.log(p_safe / q_safe), dim=-1)
         return torch.clamp(divergence, min=0.0).to(
             torch.promote_types(p.dtype, q.dtype)
         )

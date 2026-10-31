@@ -36,9 +36,12 @@ def _distribution(generator: torch.Generator, *shape: int) -> torch.Tensor:
 
 
 def test_closed_form_divergences(guarded_benchmark: Callable[..., Any]) -> None:
-    support = 4096
+    # A batch of pairs, the shape a training step produces; 16 x 256 keeps
+    # the 4096 entries of the earlier unbatched workload.
+    batch, support = 16, 256
     generator = torch.Generator().manual_seed(0)
-    p, q = _distribution(generator, support), _distribution(generator, support)
+    p = _distribution(generator, batch, support)
+    q = _distribution(generator, support)
     divergences = (
         KLDivergence(),
         ChiSquareDivergence(),
@@ -50,7 +53,7 @@ def test_closed_form_divergences(guarded_benchmark: Callable[..., Any]) -> None:
         lambda: [divergence(p, q) for divergence in divergences], host_syncs=0
     )
 
-    assert all(value.shape == () for value in values)
+    assert all(value.shape == (batch,) for value in values)
 
 
 def test_sinkhorn_divergence(guarded_benchmark: Callable[..., Any]) -> None:
