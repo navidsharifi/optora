@@ -109,6 +109,9 @@ jobs:
       - run: python -m build
       - run: twine check dist/*
       - run: python -m tools.docs check
+      # The figure renderer needs the docs extra, so its tests run here;
+      # the test matrix, installed with `dev` only, skips them.
+      - run: pytest tests/test_figures.py
       - run: python -m tools.docs build
 
   # Times tests/benchmarks/ on this commit and, on a pull request, on its base

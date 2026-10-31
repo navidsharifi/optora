@@ -9,9 +9,10 @@ a quick render really writes the files it declares.
 import re
 from pathlib import Path
 
-import matplotlib
 import pytest
 
+matplotlib = pytest.importorskip("matplotlib")
+pytest.importorskip("seaborn")
 matplotlib.use("Agg")
 
 from tools import figures  # noqa: E402
