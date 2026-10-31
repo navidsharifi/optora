@@ -318,55 +318,54 @@ def _solve(
         torch.where(
             done,
             point.z20,
-            _stationary_radius_dual(program, distribution, point.z1, point.z20),
+            _stationary_radius_dual(program, distribution, point.z20),
         ),
     )
 
 
 def _stationary_radius_dual(
-    program: _Program,
-    distribution: torch.Tensor,
-    orthant_dual: torch.Tensor,
-    radius_dual: torch.Tensor,
+    program: _Program, distribution: torch.Tensor, radius_dual: torch.Tensor
 ) -> torch.Tensor:
-    r"""Recover the radius multiplier from stationarity on the support.
+    r"""Recover the radius multiplier from complementary stationarity.
 
-    On the support $S$, $\ell_S = \nu \mathbf{1} + \tilde\lambda\, [K (q -
-    p)]_S$ with $\tilde\lambda = \lambda / \epsilon$, so $\tilde\lambda$ is
-    the slope of the least-squares line through the points $([K (q -
-    p)]_i, \ell_i)_{i \in S}$. It replaces the interior-point iterate of
+    With $d = K (q - p)$ and $\tilde\lambda = \lambda / \epsilon$,
+    complementarity gives $q_i (\ell_i - \nu - \tilde\lambda\, d_i) = 0$ for
+    every scenario, so $\tilde\lambda$ is the slope of the $q$-weighted
+    least-squares line of $\ell$ on $d$,
+
+    $$
+    \tilde\lambda = \frac{\mathrm{Cov}_q(d, \ell)}{\mathrm{Var}_q(d)},
+    $$
+
+    which needs no support identification: a scenario of ambiguous mass
+    weighs as little as its mass. It replaces the interior-point iterate of
     $\lambda$ on elements that did not converge: in float32 the normal
     matrix's Cholesky factorization can break down near the solution, which
     freezes the element at an iterate whose maximizer is accurate but whose
     multiplier can be off by orders of magnitude. The iterate is kept where
-    the line is undefined (fewer than two support points or a constant
-    deviation) or its slope is negative.
+    the slope is undefined ($d$ constant under $q$, as at a vertex) or
+    negative.
 
     Args:
         program: The solved cone program.
         distribution: The maximizer, of shape `batch_shape + (n,)`.
-        orthant_dual: Multipliers of $q \ge 0$, of the same shape.
         radius_dual: Interior-point iterate of $\lambda$, of shape
             `batch_shape`.
 
     Returns:
         The multiplier $\lambda$, of shape `batch_shape`.
     """
-    on_support = (distribution > orthant_dual).to(distribution.dtype)
-    count = torch.sum(on_support, dim=-1, keepdim=True)
     deviation = program.cone_adjoint(program.cone_part(distribution) - program.image)
-    centered = on_support * (
-        deviation - torch.sum(on_support * deviation, dim=-1, keepdim=True) / count
-    )
-    spread = torch.sum(centered * centered, dim=-1)
-    slope = torch.sum(centered * program.loss, dim=-1) / spread
-    recovered = slope * program.radius
+    centered = deviation - torch.sum(distribution * deviation, dim=-1, keepdim=True)
+    variance = torch.sum(distribution * centered * centered, dim=-1)
+    covariance = torch.sum(distribution * centered * program.loss, dim=-1)
+    recovered = covariance / variance * program.radius
     floor = (
         distribution.shape[-1]
         * torch.finfo(distribution.dtype).eps
-        * torch.sum(on_support * deviation * deviation, dim=-1)
+        * torch.sum(distribution * deviation * deviation, dim=-1)
     )
-    usable = (spread > floor) & torch.isfinite(recovered) & (recovered >= 0.0)
+    usable = (variance > floor) & torch.isfinite(recovered) & (recovered >= 0.0)
     return torch.where(usable, recovered, radius_dual)
 
 

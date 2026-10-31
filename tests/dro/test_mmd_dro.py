@@ -422,9 +422,13 @@ def condition_number(gram: torch.Tensor) -> float:
 def test_float32_radius_multiplier_agrees_with_float64(
     bandwidth: float, thread_count: int
 ) -> None:
-    # The interior-point iterate of the radius multiplier, a cone dual, was
-    # up to 1e1 off in float32 on these problems, depending on the thread
-    # count; the multiplier recovered from stationarity on the support is not.
+    # Where the float32 interior-point solve stalls (a failed Cholesky near
+    # the solution, on rows that depend on the platform and thread count) its
+    # radius multiplier was 2e-2 to 1e1 off; the one recovered from
+    # complementary stationarity is not. A converged float32 multiplier is
+    # limited by the dual-residual tolerance, ten times the 100-ulp gap
+    # floor in loss units, to about 1e-3 here, unrelated to the Gram
+    # conditioning that bounds the Hessian.
     gram, loss, _ = laplacian_problem(bandwidth, 0)
     batch, size = loss.shape
 
@@ -442,8 +446,7 @@ def test_float32_radius_multiplier_agrees_with_float64(
 
     assert bool(torch.all(expected > 0.0))
     errors = torch.abs(single - expected) / expected
-    bound = 4.0 * condition_number(gram) * torch.finfo(torch.float32).eps
-    assert float(errors.max()) < bound
+    assert float(errors.max()) < 1e-2
 
 
 def test_float32_second_derivatives_survive_a_thread_count_change(

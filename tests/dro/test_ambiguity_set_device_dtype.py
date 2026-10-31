@@ -338,10 +338,15 @@ def test_float32_matches_float64_on_random_problems_beyond_specs(
 
 def test_mmd_float32_error_tracks_the_gram_condition_number() -> None:
     # Random problem 13 has an ill-conditioned Gram matrix (points nearly
-    # coincide): its float32 error exceeds the 128-ulp bound of the other
-    # sets, and stays below its own condition-number bound.
+    # coincide, condition about 5e6): its float32 error is set by the Gram
+    # factorization and stays below its condition-number bound. How far it
+    # exceeds the 128-ulp bound of the other sets depends on the platform's
+    # BLAS and thread count (160 to 1700 ulps on one machine, 77 on another),
+    # so the bound's slack is asserted on the condition number, not on the
+    # measured error.
     nominal, loss, cost, radius = _random_problem(13)
     condition = _gram_condition(cost)
+    assert condition > FLOAT32_TOLERANCE_EPS
     value = float(_mmd_set(nominal, cost, radius).worst_case_expectation(loss))
     reference = _mmd_set(nominal.double(), cost.double(), radius)
     expected = float(reference.worst_case_expectation(loss.double()))
@@ -350,7 +355,6 @@ def test_mmd_float32_error_tracks_the_gram_condition_number() -> None:
         torch.finfo(torch.float32).eps * max(abs(expected), spread)
     )
 
-    assert ulps > FLOAT32_TOLERANCE_EPS
     assert ulps <= FLOAT32_TOLERANCE_EPS + condition
 
 
