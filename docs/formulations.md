@@ -10,8 +10,9 @@ This page holds the full mathematical background and design rationale for
 design principles the public API follows. The root `README.md` stays a
 short, code-first landing page on purpose — this page is where the depth
 lives. For runnable code that exercises this math end to end, with plots,
-see the `examples/` directory in the repository root (GitHub-only, not
-part of the published package — see `examples/README.md`).
+see the [Examples](examples/index.md) section, which walks through the
+scripts under `examples/` in the repository. Every figure on this page is
+rendered from the library when the site is built.
 
 ## Why distributionally robust optimization
 
@@ -42,6 +43,24 @@ Optora's whole architecture is basically this formula, typed out as code: a
 numerical work of finding the worst case (or, one level up, solving the
 full minimax problem over both the decision and the distribution).
 
+The neighbourhood's *shape* is the whole modelling decision. On a
+three-scenario simplex, every ambiguity set Optora ships is a different
+region around the same nominal distribution, and sends the adversary to a
+different worst case for the same loss:
+
+<figure class="figure" markdown="span">
+  ![Seven ambiguity sets drawn on the probability simplex at forty percent of their saturation radius](assets/figures/simplex-gallery-light.svg#only-light){ loading=lazy }
+  ![Seven ambiguity sets drawn on the probability simplex at forty percent of their saturation radius](assets/figures/simplex-gallery-dark.svg#only-dark){ loading=lazy }
+  <figcaption>Each panel is the set of distributions within one ball of the
+  nominal (grey dot), at forty percent of the radius at which the ball first
+  contains the point mass on the highest loss. The coloured dot is the
+  worst-case distribution, the line its path from the nominal. The
+  $\varphi$-divergence balls (KL, chi-square, total variation, CVaR) are
+  cut off where a scenario would need mass the nominal does not have;
+  the transport and kernel balls (Wasserstein, Sinkhorn, MMD) can reach any
+  corner.</figcaption>
+</figure>
+
 ## Core abstractions
 
 | Contract | Location | Responsibility |
@@ -50,12 +69,38 @@ full minimax problem over both the decision and the distribution).
 | `AmbiguitySet` | `optora.core.dro_base` | Holds a `nominal` distribution, a `Divergence`, and a `radius`; requires `worst_case_expectation(loss) -> Tensor` from subclasses. |
 | `Solver[ProblemT, ResultT]` | `optora.core.solver_base` | Generic numerical method with a single `solve(problem) -> result` method, so each algorithm defines its own problem/result dataclasses instead of a one-size-fits-all signature. |
 
+The pieces compose in one direction. A divergence gives an ambiguity set
+its geometry; the ambiguity set turns a per-scenario loss into a
+worst-case expectation; a solver, a `torch.optim` optimizer, or
+`MinimaxSolver` minimizes that expectation over the decision:
+
+```mermaid
+flowchart LR
+    D["Divergence<br/><small>KL, φ, χ², TV, max,<br/>Sinkhorn, MMD</small>"] --> A
+    N["nominal, radius"] --> A
+    A["AmbiguitySet<br/><small>worst_case_expectation(loss)</small>"] --> V["worst-case expected loss<br/><small>differentiable in loss,<br/>nominal and radius</small>"]
+    L["loss_fn(x)"] --> A
+    V --> M["MinimaxSolver<br/><small>outer Solver over x</small>"]
+    V --> T["nn.Module + torch.optim<br/><small>training loop</small>"]
+    C["calibration<br/><small>confidence, n → radius</small>"] -.-> N
+    B["minibatch estimators<br/><small>MLMC, stochastic dual</small>"] -.-> V
+```
+
 ## Formulations implemented today
 
 Every ambiguity set below reduces its inner `sup` over candidate
 distributions `q` to a tractable convex dual or an exact closed form, so
 none of them needs to search over the full space of candidate
-distributions directly.
+distributions directly. Growing every ball from the nominal to its
+saturation radius shows what each geometry does with the budget:
+
+<figure class="figure" markdown="span">
+  ![The seven ambiguity sets growing on the probability simplex, with each worst-case distribution tracked](assets/figures/simplex-geometry-light.gif#only-light){ loading=lazy }
+  ![The seven ambiguity sets growing on the probability simplex, with each worst-case distribution tracked](assets/figures/simplex-geometry-dark.gif#only-dark){ loading=lazy }
+  <figcaption>Every ball at the same fraction of its own saturation radius.
+  The worst-case distribution is read off autograd as the gradient of the
+  worst-case expectation; the last panel is the value every set reports.</figcaption>
+</figure>
 
 ### `KLAmbiguitySet`
 
@@ -78,6 +123,15 @@ $$
 
 so the whole problem reduces to choosing one scalar. `radius == 0` returns
 `E_nominal[loss]` exactly, skipping the solve entirely.
+
+<figure class="figure" markdown="span">
+  ![The KL worst case as an exponential tilt of the nominal, animated as the radius grows to saturation](assets/figures/kl-tilt-light.gif#only-light){ loading=lazy }
+  ![The KL worst case as an exponential tilt of the nominal, animated as the radius grows to saturation](assets/figures/kl-tilt-dark.gif#only-dark){ loading=lazy }
+  <figcaption>Left: the nominal (grey) and the tilted worst case $q_\beta$ on
+  twelve scenarios, ordered by position with their losses as labels. Right:
+  the worst-case expectation against the radius, between the nominal
+  expectation and the maximum loss, reached exactly at saturation.</figcaption>
+</figure>
 
 ### Tilt-solved sets: a bracketed scalar, not an unconstrained dual
 
@@ -161,6 +215,16 @@ generator optora does not recognize: it needs an injected `dual_solver`,
 and it inherits both failure modes the bracketed bisection avoids, so keep
 its radius well inside the saturation threshold.
 
+<figure class="figure" markdown="span">
+  ![The generators of the KL, chi-square, total-variation and CVaR balls and their convex conjugates](assets/figures/phi-generators-light.svg#only-light){ loading=lazy }
+  ![The generators of the KL, chi-square, total-variation and CVaR balls and their convex conjugates](assets/figures/phi-generators-dark.svg#only-dark){ loading=lazy }
+  <figcaption>Left: the generator $\varphi(t)$ prices reweighting a scenario
+  by the likelihood ratio $t$; CVaR's is free up to $1/\alpha$ and infinite
+  beyond. Right: the conjugates that enter the dual, computed by
+  <code>optora.dro.kl_conjugate</code>, <code>chi_square_conjugate</code>
+  and <code>cvar_conjugate</code>.</figcaption>
+</figure>
+
 !!! warning "`PhiAmbiguitySet` step sizes are relative to a unit-spread loss"
     The dual is minimized on the standardized loss, so a step size means
     the same thing at every loss scale: order one (up to about 2) for a
@@ -218,6 +282,16 @@ cumulative mass reaches $\alpha$, give the boundary scenario the remainder,
 and divide by $\alpha$. $\alpha = 1$ is the nominal expectation and
 $\alpha = 0$ the maximum loss on the nominal's support.
 
+<figure class="figure" markdown="span">
+  ![The upper tail the CVaR adversary fills as the level alpha decreases](assets/figures/cvar-tail-light.gif#only-light){ loading=lazy }
+  ![The upper tail the CVaR adversary fills as the level alpha decreases](assets/figures/cvar-tail-dark.gif#only-dark){ loading=lazy }
+  <figcaption>Left: scenarios sorted by loss, each as wide as its nominal
+  mass; the filled bars are the upper $\alpha$-tail the worst case
+  concentrates on, and the horizontal line is its mean, the CVaR. Right:
+  the value from $\alpha = 1$ (the nominal mean) toward $\alpha \to 0$ (the
+  maximum loss).</figcaption>
+</figure>
+
 ### `WassersteinAmbiguitySet`
 
 The Wasserstein-ball case, for candidates sharing the nominal
@@ -242,6 +316,16 @@ dtype-determined number of steps. It uses a `SinkhornDivergence`
 internally only as an approximate `contains(...)` membership check; the
 worst-case expectation itself is solved exactly, not through the entropic
 approximation.
+
+<figure class="figure" markdown="span">
+  ![Mass transport along a line and the piecewise-linear Wasserstein dual as the radius grows](assets/figures/wasserstein-dual-light.gif#only-light){ loading=lazy }
+  ![Mass transport along a line and the piecewise-linear Wasserstein dual as the radius grows](assets/figures/wasserstein-dual-dark.gif#only-dark){ loading=lazy }
+  <figcaption>Left: twelve scenarios on a line with the ground cost
+  $|x_i - x_j|$; the worst case moves mass toward the high-loss end, paying
+  distance for it. Right: the dual objective in $\gamma$ at the current
+  radius, with its minimizer $\gamma^\star$, the multiplier that
+  <code>radius.grad</code> returns.</figcaption>
+</figure>
 
 ### `SinkhornAmbiguitySet`
 
@@ -283,6 +367,15 @@ Malick (2023) also regularize the objective; that variant returns a
 penalized value rather than a worst-case expectation and is not
 implemented.
 
+<figure class="figure" markdown="span">
+  ![The Gibbs kernel, the smoothed nominal and the Sinkhorn worst case as the entropic strength vanishes](assets/figures/sinkhorn-kernel-light.gif#only-light){ loading=lazy }
+  ![The Gibbs kernel, the smoothed nominal and the Sinkhorn worst case as the entropic strength vanishes](assets/figures/sinkhorn-kernel-dark.gif#only-dark){ loading=lazy }
+  <figcaption>As $\epsilon$ falls, the kernel rows $Q_i$ sharpen toward the
+  identity, the smoothed nominal $P^0$ (black step) returns to the nominal,
+  and the Sinkhorn worst case at a fixed radius converges to the Wasserstein
+  worst case (outlined bars).</figcaption>
+</figure>
+
 ### `MMDAmbiguitySet`
 
 MMD DRO (Staib and Jegelka, 2019; Zhu et al., 2021) bounds the maximum mean
@@ -318,6 +411,14 @@ the multiplier of the radius constraint. Use a characteristic kernel such
 as the Laplacian $e^{-\lVert x - y \rVert}$: Gaussian Gram matrices on
 clustered points are numerically singular, which makes the ball degenerate
 in those directions.
+
+<figure class="figure" markdown="span">
+  ![The Laplacian Gram matrix and the exact MMD worst case against its closed-form bound](assets/figures/mmd-ball-light.svg#only-light){ loading=lazy }
+  ![The Laplacian Gram matrix and the exact MMD worst case against its closed-form bound](assets/figures/mmd-ball-dark.svg#only-dark){ loading=lazy }
+  <figcaption>Left: the kernel geometry on twelve support points. Right: the
+  closed form that drops $q \ge 0$ grows without bound, while the exact cone
+  program bends and meets the maximum loss at saturation.</figcaption>
+</figure>
 
 ### `MinimaxSolver`
 

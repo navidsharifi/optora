@@ -35,8 +35,10 @@ python examples/01_kl_dro_radius_sweep.py
 
     Every figure is written to `examples/outputs/`, which is git-ignored.
     Nothing binary — no `.png`, no `.gif` — is ever committed to this
-    repository; a plot that is worth publishing gets hosted externally and
-    linked by URL. The reasoning is in
+    repository. The figures on the pages below are produced when the site
+    is built: `python -m tools.figures` runs every script under the site's
+    own Matplotlib style, once per colour scheme, and copies the result
+    next to the page. The reasoning is in
     [`examples/README.md`](https://github.com/navidsharifi/optora/blob/main/examples/README.md).
 
 ## The experiments

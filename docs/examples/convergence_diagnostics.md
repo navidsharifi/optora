@@ -74,6 +74,22 @@ curve in $\log \eta$ with the grid-search minimizer marked. Seeing that
 curve be smooth and single-troughed is itself reassuring; a kinked or flat
 landscape would explain a lot of otherwise mysterious solver behaviour.
 
+## The figures
+
+Rendered from this script when the site is built, so it always shows the output of the current code:
+
+<figure class="figure" markdown="span">
+  ![Outer gradient-descent trajectory of the robust decision and of the worst-case objective](../assets/figures/04_outer_convergence-light.png#only-light){ loading=lazy }
+  ![Outer gradient-descent trajectory of the robust decision and of the worst-case objective](../assets/figures/04_outer_convergence-dark.png#only-dark){ loading=lazy }
+  <figcaption>The decision variable and the worst-case objective per outer iteration: both settle, and the script checks the solver's reported convergence against them.</figcaption>
+</figure>
+
+<figure class="figure" markdown="span">
+  ![KL-DRO dual objective over log eta at the robust solution](../assets/figures/04_inner_dual_landscape-light.png#only-light){ loading=lazy }
+  ![KL-DRO dual objective over log eta at the robust solution](../assets/figures/04_inner_dual_landscape-dark.png#only-dark){ loading=lazy }
+  <figcaption>The inner dual objective over a fine grid in $\log\eta$ at the robust solution: the library's worst-case value sits on the grid's minimum.</figcaption>
+</figure>
+
 ## Source
 
 ```py title="examples/04_convergence_diagnostics.py"

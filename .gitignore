@@ -244,3 +244,6 @@ progress/
 # Agent/AI instruction files (private, never public-facing)
 AGENTS.md
 .github/copilot-instructions.md
+# Figures the documentation renders at build time (python -m tools.figures);
+# never committed, see examples/README.md.
+docs/assets/figures/

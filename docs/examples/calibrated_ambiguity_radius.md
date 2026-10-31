@@ -239,6 +239,16 @@ told which one it is in.
     corner of the grid short of its optimum, which matters here because a
     few $10^{-4}$ of error is enough to move a coverage estimate.
 
+## The figure
+
+Rendered from this script when the site is built, so it always shows the output of the current code:
+
+<figure class="figure" markdown="span">
+  ![Empirical coverage of the calibrated chi-square interval against the nominal confidence](../assets/figures/06_calibrated_ambiguity_radius-light.png#only-light){ loading=lazy }
+  ![Empirical coverage of the calibrated chi-square interval against the nominal confidence](../assets/figures/06_calibrated_ambiguity_radius-dark.png#only-dark){ loading=lazy }
+  <figcaption>Left: empirical coverage of the true mean by the interval at the calibrated radius against the nominal confidence level. Right: the under-coverage shrinks as the sample size grows.</figcaption>
+</figure>
+
 ## Source
 
 ```py title="examples/06_calibrated_ambiguity_radius.py"

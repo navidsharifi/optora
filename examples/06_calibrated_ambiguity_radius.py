@@ -184,7 +184,7 @@ def main() -> None:
     ax_coverage.plot(
         CONFIDENCE_LEVELS,
         CONFIDENCE_LEVELS,
-        color="black",
+        color=plt.rcParams["text.color"],
         linestyle="--",
         label="exact calibration",
     )
@@ -197,7 +197,7 @@ def main() -> None:
     ax_coverage.set_title("calibrated radius: coverage vs. nominal level")
     ax_coverage.legend()
 
-    ax_error.axhline(0.0, color="black", linestyle="--")
+    ax_error.axhline(0.0, color=plt.rcParams["text.color"], linestyle="--")
     for index, confidence in enumerate(CONFIDENCE_LEVELS):
         ax_error.plot(
             SAMPLE_SIZES,

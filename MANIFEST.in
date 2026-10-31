@@ -16,6 +16,7 @@ prune progress
 prune site
 prune tests
 prune tools
+prune overrides
 prune .github
 
 # Belt-and-suspenders: no binary media, notebooks, or data-log artifacts,

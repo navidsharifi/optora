@@ -48,12 +48,22 @@ embeds the same source and explains what each experiment is checking.
 Rich visual content (plots, GIFs, animations) referenced from this file or
 any other markdown in the project **must be hosted externally** — a CDN,
 an image host, or a dedicated orphan branch/release asset outside the main
-Git history — and linked with a plain `![alt](https://.../asset.png)` URL.
-Do not commit `.png`/`.gif`/`.mp4` files into the repository tree: they
-bloat every clone and every `git fetch` for all contributors indefinitely,
-long after the figure itself is stale. `.gitignore` already blocks
-anything the scripts above generate under `examples/outputs/` from being
-tracked by accident.
+Git history — and linked with a plain `![alt](https://.../asset.png)` URL,
+or **generated when the documentation site is built**. Do not commit
+`.png`/`.gif`/`.mp4` files into the repository tree: they bloat every
+clone and every `git fetch` for all contributors indefinitely, long after
+the figure itself is stale. `.gitignore` already blocks anything the
+scripts above generate under `examples/outputs/` from being tracked by
+accident, and `docs/assets/figures/` with it. The one exception is the
+small, stable brand assets under `docs/assets/images/` (the logo and the
+favicon).
+
+The documentation site takes the second route: `python -m tools.figures`
+runs every script here under the site's Matplotlib style, once per colour
+scheme, and copies the figures into `docs/assets/figures/`, alongside the
+animations and benchmark charts the `tools/figures` package renders from
+the library itself. The deploy workflow does this on every push, so the
+site always shows the current code's output.
 
 To add a real visual to this README:
 

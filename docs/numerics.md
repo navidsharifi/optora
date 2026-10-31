@@ -52,6 +52,18 @@ Further guarantees, each tested:
   `.to(torch.bfloat16)` solves in float32 from those rounded buffers. A
   float32 set given a half-precision `loss` returns float32.
 
+The float32 row, measured when this site is built on a random support of
+256 scenarios, every set at seven fractions of its saturation radius:
+
+<figure class="figure" markdown="span">
+  ![Float32 error of every ambiguity set against a float64 solve of the same inputs, in units of the float32 machine epsilon](assets/figures/float32-errors-light.svg#only-light){ loading=lazy }
+  ![Float32 error of every ambiguity set against a float64 solve of the same inputs, in units of the float32 machine epsilon](assets/figures/float32-errors-dark.svg#only-dark){ loading=lazy }
+  <figcaption>Cells are $\lvert v_{32} - v_{64} \rvert / \max(\lvert v_{64}
+  \rvert, \max \ell - \min \ell)$ in float32 ulps, the quantity the table
+  bounds by 128. The MMD interior-point solve is the one set that is not
+  held to that bound (see below).</figcaption>
+</figure>
+
 !!! warning "Two documented exceptions"
 
     - **Mass far below $\varepsilon$.** When the worst case concentrates on
@@ -62,6 +74,12 @@ Further guarantees, each tested:
       $2048\,\varepsilon$ in `tests/dro/test_tilt_robustness.py`).
     - **`PhiAmbiguitySet`.** Its accuracy is set by the injected
       `dual_solver`, in every dtype. Only its dtype handling is guaranteed.
+    - **`MMDAmbiguitySet` in float32.** The $128\,\varepsilon$ bound is
+      tested for the tilt-solved and closed-form sets and for Wasserstein.
+      The interior-point solve stops at a duality gap floored at 100 ulps,
+      and in float32 the heatmap above measures errors of several hundred
+      ulps at radii below one percent of saturation. Solve MMD balls in
+      float64 when the radius is small.
 
 ### Supported loss range
 

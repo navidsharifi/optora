@@ -652,7 +652,8 @@ def plot_results(
             `(seeds, variants, 2)`, one per proportion of `ORACLE_GRID`.
     """
     fig, (ax_risk, ax_front) = plt.subplots(1, 2, figsize=(12, 4.5))
-    colors = ["black", "tab:gray", "tab:blue", "tab:orange", "tab:red"]
+    ink = plt.rcParams["text.color"]
+    colors = [ink, "tab:gray", "tab:blue", "tab:orange", "tab:red"]
     lines = test_risk(risks, MIXING_GRID)
     mean_line, std_line = lines.mean(0), lines.std(0)
     for index, name in enumerate(MODEL_NAMES):
@@ -667,7 +668,7 @@ def plot_results(
             color=colors[index],
             alpha=0.12,
         )
-    ax_risk.axvline(MINORITY_FRACTION, color="black", linestyle=":", linewidth=1)
+    ax_risk.axvline(MINORITY_FRACTION, color=ink, linestyle=":", linewidth=1)
     ax_risk.annotate(
         "training mix",
         (MINORITY_FRACTION, 0.0),
@@ -685,7 +686,7 @@ def plot_results(
             xerr=float(crossing[:, index].std()),
             fmt="o",
             color=colors[FIRST_DRO + index],
-            markeredgecolor="black",
+            markeredgecolor=ink,
             capsize=3,
             zorder=5,
         )

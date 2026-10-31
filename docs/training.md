@@ -97,6 +97,20 @@ ambiguity_set.worst_case_expectation(loss).backward()
 worst_case_distribution = loss.grad
 ```
 
+That by-product is also the clearest picture of what a robust training run
+does. Below, a linear model is fitted by Adam to the same two-group data as
+[Training under subpopulation shift](examples/subpopulation_shift_training.md),
+once by empirical risk minimization and once on the KL worst case:
+
+<figure class="figure" markdown="span">
+  ![Weight paths, exact group risks and the adversary's minority mass along ERM and KL-DRO training](assets/figures/training-dynamics-light.gif#only-light){ loading=lazy }
+  ![Weight paths, exact group risks and the adversary's minority mass along ERM and KL-DRO training](assets/figures/training-dynamics-dark.gif#only-dark){ loading=lazy }
+  <figcaption>Left: the weight path of each model between the majority and
+  minority slopes. Middle: the exact risk on each group per step. Right: the
+  total worst-case mass the KL adversary places on minority samples, read
+  from <code>loss.grad</code>, against their nominal share.</figcaption>
+</figure>
+
 ## Second derivatives
 
 Hessians and Hessian-vector products of the worst case with respect to
