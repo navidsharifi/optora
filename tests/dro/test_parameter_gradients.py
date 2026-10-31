@@ -38,7 +38,13 @@ from optora.dro import CVaRAmbiguitySet, SinkhornAmbiguitySet
 from optora.dro.phi_dro import PhiAmbiguitySet
 from optora.solvers import GradientDescent
 from tests.dro.instances import INSTANCES, Instance
-from tests.dro.specs import SPECS, Radius, SetSpec, spec_parameters
+from tests.dro.specs import (
+    SPECS,
+    Radius,
+    SetSpec,
+    solving_object,
+    spec_parameters,
+)
 
 GRADCHECK_TOLERANCES = {"eps": 1e-6, "atol": 1e-6, "rtol": 1e-3}
 
@@ -81,7 +87,7 @@ BUILDERS: tuple[tuple[str, Builder], ...] = (
     *((spec.name, spec.build) for spec in SPECS),
     ("sinkhorn", _sinkhorn),
 )
-TILTED = frozenset({"kl", "chi_square", "sinkhorn"})
+TILTED = frozenset({"kl", "chi_square", "phi", "sinkhorn"})
 
 
 def select_builders(names: frozenset[str] | None = None) -> pytest.MarkDecorator:
@@ -373,7 +379,9 @@ def test_parameter_sensitivities_are_computed_only_when_a_parameter_requires_gra
     def unexpected(*_: object) -> None:
         raise AssertionError("parameter sensitivities were computed")
 
-    monkeypatch.setattr(ambiguity_set, "_parameter_sensitivities", unexpected)
+    monkeypatch.setattr(
+        solving_object(ambiguity_set), "_parameter_sensitivities", unexpected
+    )
     loss.requires_grad_(True)
     ambiguity_set.worst_case_expectation(loss).backward()
     nominal.requires_grad_(True)

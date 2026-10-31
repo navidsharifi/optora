@@ -11,7 +11,7 @@ loss to a relative duality gap of `tol`.
 """
 
 import math
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 from typing import Any
 
@@ -388,6 +388,102 @@ def test_float32_agrees_with_float64_to_its_precision() -> None:
 
     assert value.dtype == torch.float32
     assert float(value) == pytest.approx(expected, abs=1e-4 * spread(SMOOTH.loss))
+
+
+@pytest.fixture(params=[1, 2, 3, 4], ids=lambda count: f"{count}-threads")
+def thread_count(request: pytest.FixtureRequest) -> Iterator[int]:
+    """Run under each intra-op thread count, restoring the previous one."""
+    previous = torch.get_num_threads()
+    torch.set_num_threads(request.param)
+    yield request.param
+    torch.set_num_threads(previous)
+
+
+def laplacian_problem(
+    bandwidth: float, seed: int
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    """Return a Laplacian-kernel Gram on 256 grid points, 16 losses, directions."""
+    size, batch = 256, 16
+    points = torch.linspace(0.0, 1.0, size, dtype=DTYPE)
+    gram = torch.exp(-torch.abs(points[:, None] - points[None, :]) / bandwidth)
+    generator = torch.Generator().manual_seed(seed)
+    loss = torch.randn(batch, size, generator=generator, dtype=DTYPE)
+    direction = torch.randn(batch, size, generator=generator, dtype=DTYPE)
+    return gram, loss, direction
+
+
+def condition_number(gram: torch.Tensor) -> float:
+    """Return the spectral condition number of a positive definite Gram."""
+    eigenvalues = torch.linalg.eigvalsh(gram)
+    return float(eigenvalues[-1] / eigenvalues[0])
+
+
+@pytest.mark.parametrize("bandwidth", [0.1, 0.2, 1.0])
+def test_float32_radius_multiplier_agrees_with_float64(
+    bandwidth: float, thread_count: int
+) -> None:
+    # Where the float32 interior-point solve stalls (a failed Cholesky near
+    # the solution, on rows that depend on the platform and thread count) its
+    # radius multiplier was 2e-2 to 1e1 off; the one recovered from
+    # complementary stationarity is not. A converged float32 multiplier is
+    # limited by the dual-residual tolerance, ten times the 100-ulp gap
+    # floor in loss units, to about 1e-3 here, unrelated to the Gram
+    # conditioning that bounds the Hessian.
+    gram, loss, _ = laplacian_problem(bandwidth, 0)
+    batch, size = loss.shape
+
+    def radius_gradient(dtype: torch.dtype) -> torch.Tensor:
+        radius = torch.full((batch,), 0.1, dtype=dtype, requires_grad=True)
+        ambiguity_set = MMDAmbiguitySet(
+            torch.full((size,), 1.0 / size, dtype=dtype), gram.to(dtype), radius
+        )
+        value = ambiguity_set.worst_case_expectation(loss.to(dtype)).sum()
+        (gradient,) = torch.autograd.grad(value, radius)
+        return gradient.double()
+
+    single = radius_gradient(torch.float32)
+    expected = radius_gradient(torch.float64)
+
+    assert bool(torch.all(expected > 0.0))
+    errors = torch.abs(single - expected) / expected
+    assert float(errors.max()) < 1e-2
+
+
+def test_float32_second_derivatives_survive_a_thread_count_change(
+    thread_count: int,
+) -> None:
+    # On Windows MKL, any torch.set_num_threads call left the batched float32
+    # LU of the Hessian system returning invalid pivots: the backward pass
+    # raised, or got nan and silently zeroed the Hessian. Later, the float32
+    # radius multiplier was off by up to 2.5e-1 on macOS. The Hessian jumps
+    # where the support changes, and float32 resolves masses and orthant
+    # multipliers only to about 2e-4 here; on this problem the smallest
+    # support mass and off-support multiplier both exceed 1e-3.
+    gram, loss, direction = laplacian_problem(1.0, 0)
+    size = loss.shape[-1]
+
+    def hessian_vector_product(dtype: torch.dtype) -> torch.Tensor:
+        ambiguity_set = MMDAmbiguitySet(
+            torch.full((size,), 1.0 / size, dtype=dtype), gram.to(dtype), 0.1
+        )
+        point = loss.to(dtype).requires_grad_()
+        value = ambiguity_set.worst_case_expectation(point).sum()
+        (gradient,) = torch.autograd.grad(value, point, create_graph=True)
+        (product,) = torch.autograd.grad(
+            torch.sum(gradient * direction.to(dtype)), point
+        )
+        return product.double()
+
+    single = hessian_vector_product(torch.float32)
+    expected = hessian_vector_product(torch.float64)
+
+    # Float32 accuracy is set by the Gram matrix's condition number, about
+    # 1e5 here (see docs/numerics.md).
+    norms = torch.linalg.vector_norm(expected, dim=-1)
+    assert bool(torch.all(norms > 0.0))
+    errors = torch.linalg.vector_norm(single - expected, dim=-1) / norms
+    bound = 4.0 * condition_number(gram) * torch.finfo(torch.float32).eps
+    assert float(errors.max()) < bound
 
 
 def test_reads_the_convergence_flag_only_at_checkpoints(

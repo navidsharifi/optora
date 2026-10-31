@@ -77,6 +77,7 @@ nav = [
     { "Calibrating the ambiguity radius" = "examples/calibrated_ambiguity_radius.md" },
     { "Training under subpopulation shift" = "examples/subpopulation_shift_training.md" },
     { "Minibatch DRO against the full batch" = "examples/minibatch_dro_training.md" },
+    { "Group DRO under a spurious correlation" = "examples/group_dro_training.md" },
   ] },
   # BEGIN GENERATED API NAVIGATION
   { "API reference" = [
@@ -101,6 +102,7 @@ nav = [
     { "DRO" = [
       { "Overview" = "api/dro/index.md" },
       { "Calibration" = "api/dro/calibration.md" },
+      { "Group DRO" = "api/dro/group_dro.md" },
       { "KL-DRO" = "api/dro/kl_dro.md" },
       { "Minibatch" = "api/dro/minibatch.md" },
       { "Minimax Solver" = "api/dro/minimax_solver.md" },

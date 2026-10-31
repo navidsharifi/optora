@@ -58,7 +58,10 @@ Ambiguity sets (`optora.dro`), the divergences underneath them
 are implemented end to end: `KLAmbiguitySet`, `PhiAmbiguitySet` (plus
 `ChiSquareAmbiguitySet`, `TotalVariationAmbiguitySet`, and
 `CVaRAmbiguitySet`), `SinkhornAmbiguitySet`, `MMDAmbiguitySet`, and
-`WassersteinAmbiguitySet`, wired together by `MinimaxSolver`. Every piece
+`WassersteinAmbiguitySet`, wired together by `MinimaxSolver`. Minibatch
+training is covered by `MultilevelMonteCarloEstimator`,
+`StochasticPhiDual`, and `OnlineGroupDRO` (group DRO, with
+`optora.dro.group_losses`). Every piece
 is covered by pytest tests checked against known closed-form results,
 independent grid-search cross-checks, convergence limits, and
 monotonicity properties, and the whole package is type-checked under

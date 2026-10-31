@@ -79,20 +79,21 @@ class PhiDivergence(Divergence):
         r"""Compute the phi-divergence of `p` from `q`.
 
         Args:
-            p: Candidate distribution, a nonnegative tensor that sums to one
-                along its last dimension.
-            q: Reference distribution with the same shape as `p`.
+            p: Candidate distribution of shape `(..., n)`, nonnegative and
+                summing to one along its last dimension.
+            q: Reference distribution of shape `(..., n)`, broadcasting
+                against `p`.
 
         Returns:
-            A scalar tensor holding $D_\phi(p \,\|\, q)$, clamped to be
-            nonnegative to absorb floating-point error near zero, computed
-            in `optora.core.working_dtype(p, q)` and returned in the
-            promoted dtype of `p` and `q`.
+            $D_\phi(p \,\|\, q)$ over the broadcast batch, of shape `(...)`,
+            clamped to be nonnegative to absorb floating-point error near
+            zero, computed in `optora.core.working_dtype(p, q)` and returned
+            in the promoted dtype of `p` and `q`.
         """
         dtype = working_dtype(p, q)
         q_safe = torch.clamp(q.to(dtype), min=self.eps)
         ratio = p.to(dtype) / q_safe
-        divergence = torch.sum(q_safe * self.phi(ratio))
+        divergence = torch.sum(q_safe * self.phi(ratio), dim=-1)
         return torch.clamp(divergence, min=0.0).to(
             torch.promote_types(p.dtype, q.dtype)
         )
@@ -135,19 +136,20 @@ class ChiSquareDivergence(PhiDivergence):
         before rescaling it back up.
 
         Args:
-            p: Candidate distribution, a nonnegative tensor that sums to one
-                along its last dimension.
-            q: Reference distribution with the same shape as `p`.
+            p: Candidate distribution of shape `(..., n)`, nonnegative and
+                summing to one along its last dimension.
+            q: Reference distribution of shape `(..., n)`, broadcasting
+                against `p`.
 
         Returns:
-            A scalar tensor holding $D_{\chi^2}(p \,\|\, q)$, clamped to be
-            nonnegative to absorb floating-point error near zero, computed
-            in `optora.core.working_dtype(p, q)` and returned in the
-            promoted dtype of `p` and `q`.
+            $D_{\chi^2}(p \,\|\, q)$ over the broadcast batch, of shape
+            `(...)`, clamped to be nonnegative to absorb floating-point
+            error near zero, computed in `optora.core.working_dtype(p, q)`
+            and returned in the promoted dtype of `p` and `q`.
         """
         dtype = working_dtype(p, q)
         q_safe = torch.clamp(q.to(dtype), min=self.eps)
-        divergence = torch.sum((p.to(dtype) - q_safe) ** 2 / q_safe)
+        divergence = torch.sum((p.to(dtype) - q_safe) ** 2 / q_safe, dim=-1)
         return torch.clamp(divergence, min=0.0).to(
             torch.promote_types(p.dtype, q.dtype)
         )
@@ -190,18 +192,19 @@ class TotalVariationDivergence(PhiDivergence):
         merely guarding it.
 
         Args:
-            p: Candidate distribution, a nonnegative tensor that sums to one
-                along its last dimension.
-            q: Reference distribution with the same shape as `p`.
+            p: Candidate distribution of shape `(..., n)`, nonnegative and
+                summing to one along its last dimension.
+            q: Reference distribution of shape `(..., n)`, broadcasting
+                against `p`.
 
         Returns:
-            A scalar tensor holding $D_{\mathrm{TV}}(p \,\|\, q)$, clamped to
-            be nonnegative to absorb floating-point error near zero,
-            computed in `optora.core.working_dtype(p, q)` and returned in
-            the promoted dtype of `p` and `q`.
+            $D_{\mathrm{TV}}(p \,\|\, q)$ over the broadcast batch, of shape
+            `(...)`, clamped to be nonnegative to absorb floating-point
+            error near zero, computed in `optora.core.working_dtype(p, q)`
+            and returned in the promoted dtype of `p` and `q`.
         """
         dtype = working_dtype(p, q)
-        divergence = 0.5 * torch.sum(torch.abs(p.to(dtype) - q.to(dtype)))
+        divergence = 0.5 * torch.sum(torch.abs(p.to(dtype) - q.to(dtype)), dim=-1)
         return torch.clamp(divergence, min=0.0).to(
             torch.promote_types(p.dtype, q.dtype)
         )

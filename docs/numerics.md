@@ -22,7 +22,7 @@ PyTorch operation on them would return. For an ambiguity set the inputs are
 | Input dtype | Computed in | Returned as | Accuracy | Tested by |
 | --- | --- | --- | --- | --- |
 | `float64` | `float64` | `float64` | Reference. Agrees with independent LP and closed-form references to about $10^{-12}$. | `tests/dro/test_oracles.py` |
-| `float32` | `float32` | `float32` | Within $128\,\varepsilon \cdot \max(\lvert v \rvert,\ \max \ell - \min \ell)$ of a float64 solve of the same inputs, where $v$ is the worst case. Typically a few $\varepsilon$. | `tests/dro/test_ambiguity_set_device_dtype.py` |
+| `float32` | `float32` | `float32` | Within $128\,\varepsilon \cdot \max(\lvert v \rvert,\ \max \ell - \min \ell)$ of a float64 solve of the same inputs, where $v$ is the worst case. Typically a few $\varepsilon$. `MMDAmbiguitySet` adds the condition number of its Gram matrix to the 128 (see the exceptions below). | `tests/dro/test_ambiguity_set_device_dtype.py` |
 | `bfloat16` | `float32` | `bfloat16` | Exactly the float32 result rounded once. | `tests/dro/test_ambiguity_set_device_dtype.py`, `tests/divergences/test_divergence_device_dtype.py` |
 | `float16` | `float32` | `float16` | Exactly the float32 result rounded once. | as `bfloat16` |
 | mixed | the promotion, at least `float32` | the promotion | As its working dtype. | as `bfloat16` |
@@ -60,11 +60,11 @@ The float32 row, measured when this site is built on a random support of
   ![Float32 error of every ambiguity set against a float64 solve of the same inputs, in units of the float32 machine epsilon](assets/figures/float32-errors-dark.svg#only-dark){ loading=lazy }
   <figcaption>Cells are $\lvert v_{32} - v_{64} \rvert / \max(\lvert v_{64}
   \rvert, \max \ell - \min \ell)$ in float32 ulps, the quantity the table
-  bounds by 128. The MMD interior-point solve is the one set that is not
-  held to that bound (see below).</figcaption>
+  bounds by 128. MMD is held to a bound set by its Gram matrix instead
+  (see below).</figcaption>
 </figure>
 
-!!! warning "Two documented exceptions"
+!!! warning "Three documented exceptions"
 
     - **Mass far below $\varepsilon$.** When the worst case concentrates on
       scenarios with tiny nominal mass, for example $10^{-20}$ in float32,
@@ -72,14 +72,29 @@ The float32 row, measured when this site is built on a random support of
       then resolved only to a relative $\varepsilon / (1 - t)$. KL and
       $\chi^2$ errors grow to about $10^{-4}$ relative (tested at
       $2048\,\varepsilon$ in `tests/dro/test_tilt_robustness.py`).
-    - **`PhiAmbiguitySet`.** Its accuracy is set by the injected
-      `dual_solver`, in every dtype. Only its dtype handling is guaranteed.
-    - **`MMDAmbiguitySet` in float32.** The $128\,\varepsilon$ bound is
-      tested for the tilt-solved and closed-form sets and for Wasserstein.
-      The interior-point solve stops at a duality gap floored at 100 ulps,
-      and in float32 the heatmap above measures errors of several hundred
-      ulps at radii below one percent of saturation. Solve MMD balls in
-      float64 when the radius is small.
+    - **`PhiAmbiguitySet` with a `dual_solver`.** Its accuracy is set by
+      that solver, in every dtype. Without one, the default, it is solved
+      exactly and held to the same bounds as the other tilted sets.
+    - **`MMDAmbiguitySet` in float32.** Its float32 error is that of
+      factoring the Gram matrix $K$ in float32, so the bound is
+      $(128 + \kappa(K))\,\varepsilon \cdot \max(\lvert v \rvert,\
+      \max \ell - \min \ell)$, with $\kappa(K)$ the ratio of its largest to
+      its smallest eigenvalue. A tighter duality gap does not help: the
+      error is the same from a gap of $10^{-3}$ to $10^{-10}$. Over 428
+      test problems the error stayed below half of that bound, with a
+      median of 12 ulps, but support points that nearly coincide make
+      $\kappa(K)$ large, and at a small radius the error can then exceed
+      the robust excess $v - \mathbb{E}_{\mathrm{nominal}}[\ell]$ itself.
+      Solve such balls in float64:
+
+      ```python
+      ambiguity_set = MMDAmbiguitySet(nominal.double(), gram.double(), radius)
+      robust_loss = ambiguity_set.worst_case_expectation(loss.double())
+      ```
+
+      The gradient reaches a float32 `loss` through the cast. Forcing
+      float64 inside the set would break the precision policy above and
+      fail on accelerators without float64 support.
 
 ### Supported loss range
 

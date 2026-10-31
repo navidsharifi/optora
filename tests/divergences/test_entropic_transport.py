@@ -113,6 +113,30 @@ def test_matches_the_exact_dual_at_a_sharp_kernel(
     assert float(value) == pytest.approx(expected, rel=1e-9)
 
 
+@pytest.mark.parametrize("vanishing", [1e-18, 1e-16, 1e-12, 1e-8])
+def test_matches_the_exact_dual_with_vanishing_mass_on_coincident_points(
+    vanishing: float,
+) -> None:
+    # Issue #85: two points at one position give equal kernel columns. With a
+    # vanishing share of the plan their curvature fell below the rounding of
+    # the unscaled Newton system, which turned singular and stalled 2.5e-3 low.
+    points = torch.tensor([1.0, 3.0, 0.0, 1.0], dtype=torch.float64)
+    cost = torch.abs(points.unsqueeze(-1) - points.unsqueeze(-2))
+    nominal = torch.tensor([0.0, 0.5, 0.0, 0.5], dtype=torch.float64)
+    candidate = torch.tensor(
+        [vanishing, 0.4978, 0.5022 - 2.0 * vanishing, vanishing], dtype=torch.float64
+    )
+    divergence = EntropicTransportDivergence(cost, epsilon=0.05)
+    kernel = torch.exp(divergence.log_kernel(torch.float64))
+
+    value = divergence(candidate, nominal)
+
+    expected = entropic_transport_divergence(
+        candidate.numpy(), nominal.numpy(), kernel.numpy(), 0.05
+    )
+    assert float(value) == pytest.approx(expected, rel=1e-9)
+
+
 def test_a_candidate_with_mass_off_the_reference_support_is_infinite() -> None:
     # No coupling is absolutely continuous with diag(q) Q when the candidate
     # puts mass on a column the reference measure gives no weight.

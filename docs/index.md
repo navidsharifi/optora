@@ -150,6 +150,15 @@ and no image is committed to the repository.
 
     [:octicons-arrow-right-24: `optora.dro.minibatch`](api/dro/minibatch.md)
 
+-   :material-account-group-outline:{ .lg .middle } __Group DRO__
+
+    ---
+
+    Train on the worst of several known groups: exactly through an existing
+    ambiguity set, or online on minibatches with `OnlineGroupDRO`.
+
+    [:octicons-arrow-right-24: `optora.dro.group_dro`](api/dro/group_dro.md)
+
 -   :material-school-outline:{ .lg .middle } __Training__
 
     ---

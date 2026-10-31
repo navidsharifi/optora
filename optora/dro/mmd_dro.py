@@ -271,7 +271,8 @@ def _solve(
     Returns:
         The maximizer, projected onto the simplex to absorb the solve's
         residual, and the multipliers of the orthant and of the radius
-        constraint.
+        constraint, the latter recovered from stationarity on elements that
+        did not converge.
     """
     point = program.initial_point()
     degree = program.loss.shape[-1] + 1
@@ -310,11 +311,62 @@ def _solve(
         alpha = torch.where(done | ~finite, 0.0, torch.clamp(alpha, max=1.0))
         point = point.step(_Point(*(torch.nan_to_num(d) for d in direction)), alpha)
     distribution = torch.clamp(point.x, min=0.0)
+    distribution = distribution / torch.sum(distribution, dim=-1, keepdim=True)
     return _Solution(
-        distribution / torch.sum(distribution, dim=-1, keepdim=True),
+        distribution,
         point.z1,
-        point.z20,
+        torch.where(
+            done,
+            point.z20,
+            _stationary_radius_dual(program, distribution, point.z20),
+        ),
     )
+
+
+def _stationary_radius_dual(
+    program: _Program, distribution: torch.Tensor, radius_dual: torch.Tensor
+) -> torch.Tensor:
+    r"""Recover the radius multiplier from complementary stationarity.
+
+    With $d = K (q - p)$ and $\tilde\lambda = \lambda / \epsilon$,
+    complementarity gives $q_i (\ell_i - \nu - \tilde\lambda\, d_i) = 0$ for
+    every scenario, so $\tilde\lambda$ is the slope of the $q$-weighted
+    least-squares line of $\ell$ on $d$,
+
+    $$
+    \tilde\lambda = \frac{\mathrm{Cov}_q(d, \ell)}{\mathrm{Var}_q(d)},
+    $$
+
+    which needs no support identification: a scenario of ambiguous mass
+    weighs as little as its mass. It replaces the interior-point iterate of
+    $\lambda$ on elements that did not converge: in float32 the normal
+    matrix's Cholesky factorization can break down near the solution, which
+    freezes the element at an iterate whose maximizer is accurate but whose
+    multiplier can be off by orders of magnitude. The iterate is kept where
+    the slope is undefined ($d$ constant under $q$, as at a vertex) or
+    negative.
+
+    Args:
+        program: The solved cone program.
+        distribution: The maximizer, of shape `batch_shape + (n,)`.
+        radius_dual: Interior-point iterate of $\lambda$, of shape
+            `batch_shape`.
+
+    Returns:
+        The multiplier $\lambda$, of shape `batch_shape`.
+    """
+    deviation = program.cone_adjoint(program.cone_part(distribution) - program.image)
+    centered = deviation - torch.sum(distribution * deviation, dim=-1, keepdim=True)
+    variance = torch.sum(distribution * centered * centered, dim=-1)
+    covariance = torch.sum(distribution * centered * program.loss, dim=-1)
+    recovered = covariance / variance * program.radius
+    floor = (
+        distribution.shape[-1]
+        * torch.finfo(distribution.dtype).eps
+        * torch.sum(distribution * deviation * deviation, dim=-1)
+    )
+    usable = (variance > floor) & torch.isfinite(recovered) & (recovered >= 0.0)
+    return torch.where(usable, recovered, radius_dual)
 
 
 def _max_step(point: _Point, direction: _Point) -> torch.Tensor:
@@ -458,9 +510,17 @@ def _loss_hessian(
     $$
 
     with $\tilde\lambda = \lambda / \epsilon$ and $q_i = 0$ off $S$. The
-    implicit function theorem on this system gives the Jacobian of $q^\star$
-    in $\ell$. Where the radius constraint is inactive (a saturated radius)
-    the maximizer is locally constant and the Jacobian is zero.
+    implicit function theorem on this system gives, with $M = K_{SS}^{-1}$
+    and the constraint gradients $A = [\mathbf{1}_S,\; [K (q - p)]_S]$,
+
+    $$
+    \frac{\partial q_S}{\partial \ell_S} = \frac{1}{\tilde\lambda}
+    \Big( M - M A \big( A^\top M A \big)^{-1} A^\top M \Big),
+    $$
+
+    and zero rows and columns off $S$. Where the radius constraint is
+    inactive (a saturated radius) the maximizer is locally constant and the
+    Jacobian is zero; so is it where $A^\top M A$ is singular, at a vertex.
 
     Args:
         gram: Gram matrix of shape `(n, n)`.
@@ -473,43 +533,40 @@ def _loss_hessian(
         `batch_shape + (n, n)`.
     """
     distribution = solution.distribution
-    size = distribution.shape[-1]
-    support = distribution > solution.orthant_dual
+    on_support = (distribution > solution.orthant_dual).to(gram.dtype)
     rate = solution.radius_dual / radius
     deviation = (distribution - nominal) @ gram
-    eye = torch.eye(size, dtype=gram.dtype, device=gram.device)
-    rows = torch.where(support.unsqueeze(-1), -rate[..., None, None] * gram, eye)
-    on_support = support.to(gram.dtype)
-    column_nu = (-on_support).unsqueeze(-1)
-    column_rate = (-on_support * deviation).unsqueeze(-1)
-    top = torch.cat([rows, column_nu, column_rate], dim=-1)
-    batch = distribution.shape[:-1]
-    mass_row = torch.cat(
-        [
-            torch.ones(batch + (1, size), dtype=gram.dtype, device=gram.device),
-            torch.zeros(batch + (1, 2), dtype=gram.dtype, device=gram.device),
-        ],
-        dim=-1,
+    pairs = on_support.unsqueeze(-1) * on_support.unsqueeze(-2)
+    # K on the support padded with the identity off it is positive definite,
+    # and its inverse is K_SS^{-1} on the support. Only a Cholesky factor is
+    # needed: batched float32 LU of the full nonsymmetric system returned
+    # invalid pivots on Windows MKL after `torch.set_num_threads`.
+    cholesky, info = torch.linalg.cholesky_ex(
+        gram * pairs + torch.diag_embed(1.0 - on_support)
     )
-    norm_row = torch.cat(
-        [
-            2.0 * deviation.unsqueeze(-2),
-            torch.zeros(batch + (1, 2), dtype=gram.dtype, device=gram.device),
-        ],
-        dim=-1,
+    inverse = torch.cholesky_inverse(cholesky)
+    constraints = torch.stack([on_support, on_support * deviation], dim=-1)
+    projected = inverse @ constraints
+    reduced = constraints.mT @ projected
+    first, cross, second = reduced[..., 0, 0], reduced[..., 0, 1], reduced[..., 1, 1]
+    reduced_inverse = (
+        torch.stack(
+            [
+                torch.stack([second, -cross], dim=-1),
+                torch.stack([-cross, first], dim=-1),
+            ],
+            dim=-2,
+        )
+        / (first * second - cross * cross)[..., None, None]
     )
-    jacobian = torch.cat([top, mass_row, norm_row], dim=-2)
-    right = torch.cat(
-        [
-            -torch.diag_embed(on_support),
-            torch.zeros(batch + (2, size), dtype=gram.dtype, device=gram.device),
-        ],
-        dim=-2,
+    hessian = (inverse - projected @ reduced_inverse @ projected.mT) * pairs
+    hessian = hessian / rate[..., None, None]
+    usable = (
+        (rate > 0.0)
+        & (info == 0)
+        & (torch.sum(on_support, dim=-1) > 1.0)
+        & torch.isfinite(hessian).all(-1).all(-1)
     )
-    solved, info = torch.linalg.solve_ex(jacobian, right)
-    hessian = solved[..., :size, :]
-    hessian = 0.5 * (hessian + hessian.mT)
-    usable = (info == 0) & (rate > 0.0) & torch.isfinite(hessian).all(-1).all(-1)
     return torch.where(usable[..., None, None], hessian, torch.zeros_like(hessian))
 
 
@@ -535,7 +592,14 @@ class MMDAmbiguitySet(AmbiguitySet):
     interior-point method with Nesterov-Todd scaling (see the module
     docstring), to a relative duality gap of `tol` on the loss standardized
     to unit spread: in float64 the value is within about `tol` times the
-    loss spread of the true worst case. Each iteration factors one
+    loss spread of the true worst case. In float32 the accuracy is set by
+    the Gram matrix instead: factoring it in float32 costs up to about its
+    condition number $\kappa(K)$ in units of float32 epsilon, relative to
+    the loss spread, which for nearly coincident support points or a smooth
+    kernel can exceed the robust excess itself. Pass `nominal`, `gram`, and
+    `loss` in float64 when $\kappa(K)$ is large or the radius small; the
+    gradient still reaches a float32 `loss` through the cast (see
+    `docs/numerics.md`). Each iteration factors one
     `(n, n)` matrix per batch element, and a few tens of iterations
     suffice for supports into the thousands. The closed-form bound
     $\ell^\top p + \epsilon \lVert \ell \rVert_{K^{-1}}$ of Staib and

@@ -210,10 +210,19 @@ $$
     + \eta \, \mathbb{E}_{\mathrm{nominal}}\!\left[\phi^*\!\left(\frac{\mathrm{loss} - \lambda}{\eta}\right)\right]
 $$
 
-where `phi*` is `phi`'s convex conjugate. This is the fallback for a
-generator optora does not recognize: it needs an injected `dual_solver`,
-and it inherits both failure modes the bracketed bisection avoids, so keep
-its radius well inside the saturation threshold.
+where `phi*` is `phi`'s convex conjugate. By the KKT conditions its
+maximizer is $q_i = \mathrm{nominal}_i \, (\phi^*)'(\mu - a\,\mathrm{gap}_i)$
+for a rate $a = 1/\eta$ and a level $\mu$ that normalizes it, and the
+derivative condition of the dual in $\eta$ reads, by Fenchel's equality,
+$\mathbb{E}_{\mathrm{nominal}}[\phi(q / \mathrm{nominal})] =
+\mathrm{radius}$. So, without a `dual_solver`, `PhiAmbiguitySet` solves any
+generator exactly with the same bracketed bisection as the KL and
+chi-square sets, the rate outside and the level inside, using only `phi`
+and `phi_conjugate` through autograd: the Cressie-Read family, for example,
+is checked against an independent dual minimization. The nested search
+costs tens of milliseconds on a small support, against about one for the
+dedicated sets, so prefer those for their own generators. Passing a
+`dual_solver` minimizes the dual above instead, with that solver's accuracy.
 
 <figure class="figure" markdown="span">
   ![The generators of the KL, chi-square, total-variation and CVaR balls and their convex conjugates](assets/figures/phi-generators-light.svg#only-light){ loading=lazy }
@@ -225,7 +234,7 @@ its radius well inside the saturation threshold.
   and <code>cvar_conjugate</code>.</figcaption>
 </figure>
 
-!!! warning "`PhiAmbiguitySet` step sizes are relative to a unit-spread loss"
+!!! warning "With a `dual_solver`, step sizes are relative to a unit-spread loss"
     The dual is minimized on the standardized loss, so a step size means
     the same thing at every loss scale: order one (up to about 2) for a
     KL-like generator, and far less for a stiffer one. A step tuned on a
@@ -419,6 +428,36 @@ in those directions.
   closed form that drops $q \ge 0$ grows without bound, while the exact cone
   program bends and meets the maximum loss at saturation.</figcaption>
 </figure>
+
+### Group DRO: `group_losses` and `OnlineGroupDRO`
+
+Group DRO (Sagawa et al., 2020) puts the ambiguity on the mixture of $G$
+known groups rather than on individual samples. With
+$\hat R_g = \frac{1}{n_g} \sum_{i:\, g_i = g} \ell_i$ the group losses that
+`group_losses` computes and $p_g = n_g / n$ the group proportions,
+
+$$
+\max_{g} \hat R_g
+= \sup_{q \in \Delta_G} \sum_g q_g \hat R_g
+= \mathrm{CVaR}_0\big(\hat R;\, p\big),
+$$
+
+so it needs no new ambiguity set: `CVaRAmbiguitySet(p, alpha=0.0)` applied
+to the group losses is the worst group exactly, $\alpha = 1$ is ERM
+($\sum_g p_g \hat R_g$ is the sample mean), and a KL or $\chi^2$ ball
+around $p$ is a softer worst case that reaches the worst group at radius
+$\log(1/p_{g^\star})$, respectively $1/p_{g^\star} - 1$. Through
+`group_losses`, the gradient with respect to a sample's loss is
+$q^\star_{g_i} / n_{g_i}$: group DRO reweights samples uniformly within
+each group.
+
+On minibatches, `OnlineGroupDRO` keeps $q$ as state and moves it by
+exponentiated-gradient ascent, $q_g \propto q_g\, e^{\eta \hat\ell_g}$, one
+step per minibatch, against gradient descent on the model (Sagawa et al.'s
+Algorithm 1, a stochastic mirror descent-ascent). On fixed group losses its
+$T$-th iterate is the exponential tilt $q_0 e^{T \eta \ell} / Z$, which is
+the worst case of the KL ball around $q_0$ of matching radius, so the
+online weights follow the KL-DRO worst-case path toward the worst group.
 
 ### `MinimaxSolver`
 

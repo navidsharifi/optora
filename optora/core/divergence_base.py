@@ -28,12 +28,15 @@ class Divergence(nn.Module, ABC):
         """Compute the divergence of `p` from `q`.
 
         Args:
-            p: Candidate distribution, a nonnegative tensor that sums to one
-                along its last dimension.
-            q: Reference distribution with the same shape as `p`.
+            p: Candidate distribution of shape `(..., n)`, nonnegative and
+                summing to one along its last dimension.
+            q: Reference distribution of shape `(..., n)`, broadcasting
+                against `p`.
 
         Returns:
-            A scalar tensor holding the divergence value. Implementations
+            The divergence over the broadcast batch, of shape `(...)`: one
+            value per pair of distributions, reducing the last dimension
+            only, so an unbatched `(n,)` pair gives a scalar. Implementations
             must return a nonnegative value that vanishes at the
             divergence's centre. For every divergence except an entropic
             transport cost the centre is `p == q`; for

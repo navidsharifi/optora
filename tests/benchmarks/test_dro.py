@@ -3,8 +3,9 @@
 Workloads are batched float32 losses, the shape a training step produces.
 Every exact set runs a trip count fixed by the dtype, so its forward and
 backward passes must issue zero host synchronizations, and so must the
-minibatch estimators built on them; the general `PhiAmbiguitySet` dual and the
-nested minimax solve pay one per convergence checkpoint.
+minibatch estimators built on them and the online group-DRO step; the
+general `PhiAmbiguitySet` dual and the nested minimax solve pay one per
+convergence checkpoint.
 """
 
 import functools
@@ -14,6 +15,7 @@ from typing import Any
 import torch
 
 from optora.divergences.f_divergence import PhiDivergence
+from optora.dro.group_dro import OnlineGroupDRO, group_losses
 from optora.dro.kl_dro import KLAmbiguitySet
 from optora.dro.minibatch import MultilevelMonteCarloEstimator, StochasticPhiDual
 from optora.dro.minimax_solver import MinimaxProblem, MinimaxSolver
@@ -90,6 +92,29 @@ def test_sinkhorn_worst_case_expectation_and_gradient(
         return grad
 
     grad = guarded_benchmark(gradient, host_syncs=0)
+
+    assert grad.shape == loss.shape
+
+
+def test_online_group_dro_step(guarded_benchmark: Callable[..., Any]) -> None:
+    # One training step of online group DRO: the group means, the
+    # exponentiated-gradient ascent on the weights, the weighted loss and its
+    # gradient, one adversary per batch element. Nothing reads the host.
+    num_groups = 8
+    generator = torch.Generator().manual_seed(0)
+    groups = torch.randint(num_groups, (SUPPORT,), generator=generator)
+    adversary = OnlineGroupDRO(
+        torch.full((BATCH, num_groups), 1.0 / num_groups), step_size=0.01
+    )
+    loss = _batched_loss(generator).requires_grad_()
+
+    def step() -> torch.Tensor:
+        group_loss = group_losses(loss, groups, num_groups)
+        adversary.step(group_loss)
+        (grad,) = torch.autograd.grad(adversary(group_loss).sum(), loss)
+        return grad
+
+    grad = guarded_benchmark(step, host_syncs=0)
 
     assert grad.shape == loss.shape
 
