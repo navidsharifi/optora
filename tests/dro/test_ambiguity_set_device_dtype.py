@@ -15,6 +15,7 @@ import torch
 from optora.core.dro_base import AmbiguitySet
 from optora.divergences.f_divergence import PhiDivergence
 from optora.dro.kl_dro import KLAmbiguitySet
+from optora.dro.mmd_dro import MMDAmbiguitySet
 from optora.dro.phi_dro import (
     ChiSquareAmbiguitySet,
     CVaRAmbiguitySet,
@@ -239,20 +240,52 @@ def _random_problem(
     return nominal.float(), loss.float(), cost.float(), radius
 
 
+Builder = Callable[[torch.Tensor, torch.Tensor, float], AmbiguitySet]
+
+
+def _sinkhorn_set(
+    nominal: torch.Tensor, cost: torch.Tensor, radius: float
+) -> AmbiguitySet:
+    return SinkhornAmbiguitySet(nominal, cost, epsilon=0.5, radius=radius)
+
+
+def _mmd_set(nominal: torch.Tensor, cost: torch.Tensor, radius: float) -> AmbiguitySet:
+    return MMDAmbiguitySet(nominal, torch.exp(-cost), radius)
+
+
+def _gram_condition(cost: torch.Tensor) -> float:
+    """Return the condition number of `_mmd_set`'s Laplacian Gram matrix."""
+    eigenvalues = torch.linalg.eigvalsh(torch.exp(-cost.double()))
+    return float(eigenvalues[-1] / torch.clamp(eigenvalues[0], min=1e-300))
+
+
+# Sets outside `SPECS` (Sinkhorn is centred off the nominal; MMD needs a
+# kernel), each with its float32 bound in units of epsilon as a function of
+# the cost. MMD's float32 error is that of factoring its Gram matrix in
+# float32, up to about its condition number in ulps: measured within half of
+# `128 + condition` over 428 problems with conditions from 1 to 3e15.
+EXTRA_FLOAT32_SETS: dict[str, tuple[Builder, Callable[[torch.Tensor], float]]] = {
+    "sinkhorn": (_sinkhorn_set, lambda cost: FLOAT32_TOLERANCE_EPS),
+    "mmd": (_mmd_set, lambda cost: FLOAT32_TOLERANCE_EPS + _gram_condition(cost)),
+}
+
+
 def _assert_float32_accuracy(
-    spec: SetSpec,
+    spec: SetSpec | Builder,
     nominal: torch.Tensor,
     loss: torch.Tensor,
     cost: torch.Tensor,
     radius: float,
+    tolerance_eps: float = FLOAT32_TOLERANCE_EPS,
 ) -> None:
     """Check a float32 solve against float64 on the same float32 inputs."""
-    value = spec.build(nominal, cost, radius).worst_case_expectation(loss)
-    reference = spec.build(nominal.double(), cost.double(), radius)
+    build = spec.build if isinstance(spec, SetSpec) else spec
+    value = build(nominal, cost, radius).worst_case_expectation(loss)
+    reference = build(nominal.double(), cost.double(), radius)
     expected = float(reference.worst_case_expectation(loss.double()))
     spread = float(torch.amax(loss) - torch.amin(loss))
     tolerance = (
-        FLOAT32_TOLERANCE_EPS
+        tolerance_eps
         * torch.finfo(torch.float32).eps
         * max(abs(expected), spread, math.ulp(0.0))
     )
@@ -278,6 +311,47 @@ def test_float32_matches_float64_on_random_problems(spec: SetSpec, seed: int) ->
     nominal, loss, cost, radius = _random_problem(seed)
 
     _assert_float32_accuracy(spec, nominal, loss, cost, radius)
+
+
+@pytest.mark.parametrize("name", sorted(EXTRA_FLOAT32_SETS))
+@pytest.mark.parametrize("instance", INSTANCES, ids=lambda instance: instance.name)
+@pytest.mark.parametrize("radius", RADII)
+def test_float32_matches_float64_on_the_same_inputs_beyond_specs(
+    name: str, instance: Instance, radius: float
+) -> None:
+    build, tolerance_eps = EXTRA_FLOAT32_SETS[name]
+    nominal, loss, cost = _rounded(instance, torch.float32)
+
+    _assert_float32_accuracy(build, nominal, loss, cost, radius, tolerance_eps(cost))
+
+
+@pytest.mark.parametrize("name", sorted(EXTRA_FLOAT32_SETS))
+@pytest.mark.parametrize("seed", range(16))
+def test_float32_matches_float64_on_random_problems_beyond_specs(
+    name: str, seed: int
+) -> None:
+    build, tolerance_eps = EXTRA_FLOAT32_SETS[name]
+    nominal, loss, cost, radius = _random_problem(seed)
+
+    _assert_float32_accuracy(build, nominal, loss, cost, radius, tolerance_eps(cost))
+
+
+def test_mmd_float32_error_tracks_the_gram_condition_number() -> None:
+    # Random problem 13 has an ill-conditioned Gram matrix (points nearly
+    # coincide): its float32 error exceeds the 128-ulp bound of the other
+    # sets, and stays below its own condition-number bound.
+    nominal, loss, cost, radius = _random_problem(13)
+    condition = _gram_condition(cost)
+    value = float(_mmd_set(nominal, cost, radius).worst_case_expectation(loss))
+    reference = _mmd_set(nominal.double(), cost.double(), radius)
+    expected = float(reference.worst_case_expectation(loss.double()))
+    spread = float(torch.amax(loss) - torch.amin(loss))
+    ulps = abs(value - expected) / (
+        torch.finfo(torch.float32).eps * max(abs(expected), spread)
+    )
+
+    assert ulps > FLOAT32_TOLERANCE_EPS
+    assert ulps <= FLOAT32_TOLERANCE_EPS + condition
 
 
 @spec_parameters

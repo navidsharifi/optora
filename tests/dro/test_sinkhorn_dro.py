@@ -25,7 +25,7 @@ from typing import Any
 import numpy as np
 import pytest
 import torch
-from hypothesis import given
+from hypothesis import example, given
 from hypothesis import strategies as st
 from torch.autograd import gradcheck, gradgradcheck
 
@@ -271,6 +271,18 @@ def test_a_reference_restricts_where_the_worst_case_can_move_mass() -> None:
 
 
 @given(instance=instances(), epsilon=epsilons, radius=positive_radii)
+@example(
+    # Issue #85: coincident support points left with a vanishing share of
+    # the worst case made the Newton polish of the divergence singular.
+    instance=Instance(
+        name="coincident_vanishing",
+        nominal=(0.0, 0.5, 0.0, 0.5),
+        loss=(-1.0, -1.0, 0.0, -1.0),
+        position=(1.0, 3.0, 0.0, 1.0),
+    ),
+    epsilon=0.05,
+    radius=10**-0.28125,
+)
 def test_gradient_is_a_distribution_inside_the_ball_attaining_the_worst_case(
     instance: Instance, epsilon: float, radius: float
 ) -> None:

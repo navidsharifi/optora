@@ -28,6 +28,11 @@ from optora.dro.phi_dro import (
     kl_conjugate,
 )
 from optora.solvers.gradient_descent import GradientDescent
+from tests.dro.duality import (
+    cressie_read_dual_minimum,
+    cressie_read_generator,
+)
+from tests.dro.instances import INSTANCES, Instance
 from tests.dro.tolerances import feasibility_bound
 
 
@@ -151,16 +156,96 @@ def test_worst_case_expectation_uses_custom_dual_solver() -> None:
     assert torch.allclose(result, expected, atol=1e-6)
 
 
-def test_positive_radius_requires_an_explicit_dual_solver() -> None:
-    ambiguity_set = PhiAmbiguitySet(
-        torch.tensor([0.5, 0.5]),
+def _cressie_read_set(
+    nominal: torch.Tensor, radius: float, power: float
+) -> PhiAmbiguitySet:
+    """Build the Cressie-Read ball of order `power` through the exact path."""
+
+    def generator(ratio: torch.Tensor) -> torch.Tensor:
+        return (ratio**power - power * ratio + power - 1.0) / (power * (power - 1.0))
+
+    def conjugate(shift: torch.Tensor) -> torch.Tensor:
+        base = torch.clamp((power - 1.0) * shift + 1.0, min=0.0)
+        return (base ** (power / (power - 1.0)) - 1.0) / power
+
+    return PhiAmbiguitySet(
+        nominal,
+        divergence=PhiDivergence(phi=generator),
+        radius=radius,
+        phi_conjugate=conjugate,
+    )
+
+
+@pytest.mark.parametrize("power", [1.5, 3.0])
+@pytest.mark.parametrize("radius", [1e-4, 0.05, 0.3, 1e3])
+@pytest.mark.parametrize("instance", INSTANCES, ids=lambda instance: instance.name)
+def test_cressie_read_matches_the_independent_dual_minimum(
+    instance: Instance, radius: float, power: float
+) -> None:
+    # No closed form exists for this family: the reference minimizes the
+    # dual by nested bounded searches in NumPy and SciPy.
+    nominal, loss, _ = instance.tensors()
+
+    value = _cressie_read_set(nominal, radius, power).worst_case_expectation(loss)
+
+    expected = cressie_read_dual_minimum(
+        instance.nominal_array, instance.loss_array, radius, power
+    )
+    spread = float(loss.max() - loss.min())
+    assert float(value) == pytest.approx(expected, abs=1e-9 * (1.0 + spread))
+
+
+@pytest.mark.parametrize("power", [1.5, 3.0])
+@pytest.mark.parametrize("radius", [1e-4, 0.05, 0.3])
+def test_cressie_read_maximizer_is_feasible_and_attains_the_value(
+    radius: float, power: float
+) -> None:
+    generator = torch.Generator().manual_seed(7)
+    nominal = torch.softmax(torch.randn(9, generator=generator, dtype=torch.float64), 0)
+    loss = torch.randn(9, generator=generator, dtype=torch.float64).requires_grad_()
+
+    value = _cressie_read_set(nominal, radius, power).worst_case_expectation(loss)
+    (candidate,) = torch.autograd.grad(value, loss)
+
+    ratio = (candidate / nominal).numpy()
+    divergence = float(nominal.numpy() @ cressie_read_generator(ratio, power))
+    assert float(candidate.min()) >= 0.0
+    assert float(candidate.sum()) == pytest.approx(1.0, abs=1e-12)
+    assert divergence <= radius * (1.0 + 1e-9) + 1e-15
+    assert divergence == pytest.approx(radius, rel=1e-6)
+    assert float(candidate @ loss.detach()) == pytest.approx(float(value), abs=1e-12)
+
+
+def test_cressie_read_saturates_to_the_maximum_loss_exactly() -> None:
+    nominal = torch.tensor([0.1, 0.3, 0.4, 0.2], dtype=torch.float64)
+    loss = torch.tensor(
+        [[1.0, -2.0, 0.5, 3.0], [4.0, 4.0, 0.0, -1.0]], dtype=torch.float64
+    )
+
+    value = _cressie_read_set(nominal, 1e6, 1.5).worst_case_expectation(loss)
+
+    assert torch.equal(value, loss.amax(-1))
+
+
+@pytest.mark.parametrize("radius", [1e-8, 1e-3, 0.1, 0.5, 1e3])
+def test_without_a_dual_solver_the_kl_generator_is_solved_exactly(
+    radius: float,
+) -> None:
+    nominal = torch.tensor([0.1, 0.25, 0.4, 0.25], dtype=torch.float64)
+    loss = torch.tensor(
+        [[2.0, -1.0, 0.5, 1.5], [0.0, 3.0, 3.0, -2.0]], dtype=torch.float64
+    )
+    general = PhiAmbiguitySet(
+        nominal,
         divergence=PhiDivergence(phi=_kl_generator),
-        radius=0.1,
+        radius=radius,
         phi_conjugate=_kl_conjugate,
     )
 
-    with pytest.raises(RuntimeError, match="dual_solver is required"):
-        ambiguity_set.worst_case_expectation(torch.tensor([0.0, 1.0]))
+    result = general.worst_case_expectation(loss)
+
+    expected = KLAmbiguitySet(nominal, radius=radius).worst_case_expectation(loss)
+    torch.testing.assert_close(result, expected, rtol=0.0, atol=1e-12)
 
 
 def test_matches_kl_ambiguity_set_when_using_kl_generator_and_conjugate() -> None:
@@ -688,6 +773,22 @@ def test_cvar_at_level_zero_is_the_maximum_loss_on_the_nominal_support() -> None
 
     assert ambiguity_set.radius == math.inf
     assert float(result) == 5.0
+
+
+@pytest.mark.parametrize("scale", [1.0, 1e-3, 1e-12, 1e-30])
+def test_cvar_at_level_zero_is_bitwise_the_maximum_at_any_loss_scale(
+    dtype: torch.dtype, scale: float
+) -> None:
+    # The floored level is finfo.tiny: weighting a loss below one by it
+    # before normalizing went subnormal, ~1e-5 relative off in float32 at a
+    # loss of 2e-3 (found by the group-DRO example).
+    nominal = torch.tensor([0.0, 0.3, 0.3, 0.4], dtype=dtype)
+    loss = torch.tensor([9.0, 0.3, 0.9, 0.2], dtype=dtype) * scale
+    ambiguity_set = CVaRAmbiguitySet(nominal, alpha=0.0)
+
+    result = ambiguity_set.worst_case_expectation(loss)
+
+    assert torch.equal(result, loss[2])
 
 
 def test_cvar_gradient_is_the_tail_maximizer() -> None:

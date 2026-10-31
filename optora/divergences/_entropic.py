@@ -213,10 +213,20 @@ def _newton(
     $H = \mathrm{diag}(m) - \gamma^\top \mathrm{diag}(r)^{-1} \gamma$, with
     $\gamma$ the plan and $m$ its column marginal (Brauer et al. 2017). It
     is positive semidefinite with the constant vector in its kernel, since
-    a common shift of $g$ leaves the semi-dual unchanged; the step solves
-    $(H + \mathbf{1}\mathbf{1}^\top / n + \mu\,\mathrm{diag}(m))\,d =
-    \nabla$ for a per-element Levenberg-Marquardt damping $\mu$, then drops
-    the step's mean. A step is accepted unless it lowers the semi-dual by
+    a common shift of $g$ leaves the semi-dual unchanged. Its entries scale
+    with the column marginal, which can span the whole floating-point
+    range, so the step is solved in the metric $D = \mathrm{diag}(m)$: with
+    $\tilde H = D^{-1/2} H D^{-1/2}$, whose eigenvalues lie in $[0, 1]$, and
+    $v = D^{1/2}\mathbf{1} / \lVert D^{1/2}\mathbf{1} \rVert$ its unit
+    kernel vector, it solves
+    $(\tilde H + v v^\top + \mu I)\,u = D^{-1/2}\nabla$ for a per-element
+    Levenberg-Marquardt damping $\mu$ and steps by $d = D^{-1/2} u$, then
+    drops the step's mean. Unscaled, a column carrying a vanishing share of
+    the plan has curvature below the rounding error of the other entries,
+    and two such columns with equal kernel columns, as coincident support
+    points give, make the system exactly singular. A column of an
+    underflowed marginal keeps unit scale and is moved by the damping
+    alone. A step is accepted unless it lowers the semi-dual by
     more than the rounding error of its evaluation: the final steps of a
     converging Newton method improve it by less than that, so a strict
     increase test would reject them. The damping falls on success, so the
@@ -242,11 +252,9 @@ def _newton(
     Returns:
         The refined column potentials.
     """
-    size = g.shape[-1]
-    rounding = size * torch.finfo(g.dtype).eps
+    rounding = g.shape[-1] * torch.finfo(g.dtype).eps
     log_rows = log_on_support(row_mass)
     safe_rows = torch.where(row_mass > 0.0, row_mass, 1.0)
-    inactive = torch.diag_embed((~active).to(g.dtype))
     damping = torch.ones(g.shape[:-1], dtype=g.dtype, device=g.device)
     value = semi_dual(g, row_mass, column_mass, log_kernel)
     tracker = ConvergenceTracker(tol, 1, g)
@@ -259,16 +267,20 @@ def _newton(
         if tracker.should_stop(iteration):
             break
         gradient = torch.where(active, column_mass - marginal, 0.0)
-        hessian = torch.diag_embed(marginal) - plan.mT @ (
-            plan / safe_rows.unsqueeze(-1)
-        )
+        curvature = torch.where(active & (marginal > 0.0), marginal, 1.0)
+        scale = torch.sqrt(curvature)
+        scaled_plan = plan / scale.unsqueeze(-2)
+        gauge = torch.where(active, scale, 0.0)
+        gauge = gauge / torch.linalg.vector_norm(gauge, dim=-1, keepdim=True)
         system = (
-            hessian
-            + 1.0 / size
-            + damping[..., None, None] * torch.diag_embed(marginal)
-            + inactive
+            torch.diag_embed(
+                marginal / curvature + torch.where(active, damping.unsqueeze(-1), 1.0)
+            )
+            - scaled_plan.mT @ (scaled_plan / safe_rows.unsqueeze(-1))
+            + gauge.unsqueeze(-1) * gauge.unsqueeze(-2)
         )
-        step = torch.linalg.solve_ex(system, gradient.unsqueeze(-1))[0].squeeze(-1)
+        scaled_step = torch.linalg.solve_ex(system, (gradient / scale).unsqueeze(-1))[0]
+        step = scaled_step.squeeze(-1) / scale
         trial = torch.where(
             active, g + step - step.mean(dim=-1, keepdim=True), -torch.inf
         )

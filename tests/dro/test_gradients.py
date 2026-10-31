@@ -22,11 +22,11 @@ its maximizer $q^\star$ is unique, with $\nabla V = q^\star$ there
 with ties forced, that the gradient is always a feasible distribution
 attaining the worst case, which is what makes it a subgradient at a kink.
 
-`PhiAmbiguitySet` is not in `tests.dro.specs.SPECS` and is checked
-separately at the end of the module: its first and second derivatives are
-exact once the inner dual solve has converged, the second through the
-implicit-function term built from the dual Hessian, and they agree under
-`torch.func` transforms.
+`PhiAmbiguitySet`'s exact path is in `tests.dro.specs.SPECS` as `phi`. Its
+`dual_solver` path is checked separately at the end of the module: its
+first and second derivatives are exact once the inner dual solve has
+converged, the second through the implicit-function term built from the
+dual Hessian, and they agree under `torch.func` transforms.
 """
 
 from collections.abc import Callable
@@ -41,7 +41,13 @@ from optora.dro.kl_dro import KLAmbiguitySet
 from optora.dro.phi_dro import PhiAmbiguitySet
 from optora.solvers import GradientDescent
 from tests.dro.instances import INSTANCES, Instance
-from tests.dro.specs import SPECS, Radius, SetSpec, spec_parameters
+from tests.dro.specs import (
+    SPECS,
+    Radius,
+    SetSpec,
+    solving_object,
+    spec_parameters,
+)
 
 GRADCHECK_TOLERANCES = {"eps": 1e-6, "atol": 1e-6, "rtol": 1e-3}
 
@@ -84,8 +90,8 @@ instance_parameters = pytest.mark.parametrize(
 radius_parameters = pytest.mark.parametrize("radius", SMOOTH_RADII)
 tilted_spec_parameters = pytest.mark.parametrize(
     "spec",
-    [spec for spec in SPECS if spec.name in {"kl", "chi_square"}],
-    ids=["kl", "chi_square"],
+    [spec for spec in SPECS if spec.name in {"kl", "chi_square", "phi"}],
+    ids=["kl", "chi_square", "phi"],
 )
 
 
@@ -112,7 +118,7 @@ KINKS = (
     Kink(
         name="saturated_tied_maximum",
         spec_names=frozenset(
-            {"kl", "chi_square", "total_variation", "cvar", "wasserstein"}
+            {"kl", "chi_square", "phi", "total_variation", "cvar", "wasserstein"}
         ),
         instance=_INSTANCES["tied_maximum"],
         radius=1e3,
@@ -339,7 +345,7 @@ def test_first_order_backward_does_not_rebuild_the_maximizer(
     def unexpected(*_: object) -> torch.Tensor:
         raise AssertionError("a first-order backward rebuilt the maximizer")
 
-    monkeypatch.setattr(ambiguity_set, "_implicit_solution", unexpected)
+    monkeypatch.setattr(solving_object(ambiguity_set), "_implicit_solution", unexpected)
     loss = leaf_loss(GENERIC)
     ambiguity_set.worst_case_expectation(loss).backward()
 
