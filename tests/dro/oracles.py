@@ -7,13 +7,21 @@ $$
 $$
 
 of `optora.dro`'s ambiguity sets without importing, reusing, or restating
-any optora code: the arrays are NumPy, the solvers are SciPy's, and the
-derivations are taken from the primal problem rather than from the duals
-optora evaluates. A test that compares optora against one of these
-functions therefore fails on a bug in either side independently, which a
-cross-check written against the same dual formula cannot do.
+any optora code: the arrays are NumPy and the solvers are SciPy's and
+Clarabel's. A test that compares optora against one of these functions
+therefore fails on an implementation bug in either side independently.
 
-Two families of reference are used:
+Independence of code is not always independence of derivation. The linear
+and cone programs solve the primal directly, sharing nothing with optora
+but the problem statement. The KL and chi-square closed forms, however,
+come from the same KKT conditions as the exponential and truncated linear
+tilts that `optora.core.TiltedAmbiguitySet` bisects: they catch errors in
+bracketing, rounding, and the saturated branch, but not an error in the
+tilt derivation itself. That derivation is checked separately, by strong
+duality against the independently minimized duals of
+`tests/dro/duality.py` in `tests/dro/test_properties.py`.
+
+Three families of reference are used:
 
 - Exact linear programs (`total_variation_worst_case`, `cvar_worst_case`,
   `wasserstein_worst_case`) solved by `scipy.optimize.linprog`'s HiGHS
