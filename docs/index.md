@@ -32,7 +32,7 @@ minimax solve that connects them, all differentiable and GPU-ready.
 </div>
 
 <!-- optora-version-start -->
-Latest release: `v0.1.0`
+Latest release: `v0.2.0`
 <!-- optora-version-end -->
 
 ## Overview
