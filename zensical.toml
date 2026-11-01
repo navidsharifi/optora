@@ -67,6 +67,7 @@ nav = [
   { "Numerical behaviour" = "numerics.md" },
   { "API stability" = "stability.md" },
   { "Benchmarks" = "benchmarks.md" },
+  { "Positioning" = "positioning.md" },
   { "Examples" = [
     { "Overview" = "examples/index.md" },
     { "KL-DRO radius sweep" = "examples/kl_dro_radius_sweep.md" },

@@ -1,10 +1,12 @@
 """The benchmarks page: latency, scaling, batching, host synchronizations, references.
 
 `benchmarks-data` measures everything once and writes `benchmarks-results.json`
-plus a Markdown fragment the page includes; `benchmarks-charts` draws that
-data once per colour scheme. The timings are those of the machine building
-the documentation (the CPU of the GitHub-hosted runner in CI); the page
-says so and shows how to reproduce them on any device.
+plus two Markdown fragments, the headline statistics (included by the
+benchmarks and positioning pages) and the detailed tables (benchmarks page
+only); `benchmarks-charts` draws that data once per colour scheme. The
+timings are those of the machine building the documentation (the CPU of the
+GitHub-hosted runner in CI); the page says so and shows how to reproduce
+them on any device.
 """
 
 from __future__ import annotations
@@ -46,6 +48,7 @@ if str(ROOT) not in sys.path:
 from tests.dro import oracles  # noqa: E402
 
 RESULTS_FILE = "benchmarks-results.json"
+HIGHLIGHTS_FILE = "benchmarks-highlights.md"
 SUMMARY_FILE = "benchmarks-summary.md"
 BATCH = 16
 SUPPORT = 256
@@ -367,14 +370,12 @@ def _stat(label: str, value: str, note: str) -> str:
     )
 
 
-def write_summary(results: dict[str, Any], path: Path) -> None:
-    """Write the Markdown fragment the benchmarks page includes."""
-    latency = results["latency"]
-    exact = [row for row in latency if row["set"] != "phi"]
+def write_highlights(results: dict[str, Any], path: Path) -> None:
+    """Write the headline statistics the benchmarks and positioning pages include."""
+    exact = [row for row in results["latency"] if row["set"] != "phi"]
     fastest = min(exact, key=lambda row: row["forward_ms"])
     throughput = max(results["throughput"], key=lambda row: row["elements_per_second"])
     agreement = max(row["agreement"] for row in results["reference"])
-    largest = max(row["n"] for row in results["scaling"])
     syncs = max(
         row["host_syncs_backward"] for row in exact if row["set"] in ZERO_SYNC_SETS
     )
@@ -404,7 +405,15 @@ def write_summary(results: dict[str, Any], path: Path) -> None:
             "largest |difference| / loss spread, float64",
         ),
         "</div>",
-        "",
+    ]
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def write_summary(results: dict[str, Any], path: Path) -> None:
+    """Write the detailed-tables fragment the benchmarks page includes."""
+    latency = results["latency"]
+    largest = max(row["n"] for row in results["scaling"])
+    lines = [
         "| Environment | |",
         "| --- | --- |",
     ]
@@ -441,13 +450,14 @@ def write_summary(results: dict[str, Any], path: Path) -> None:
 
 
 def render_data(context: Context) -> None:
-    """Measure the benchmarks and write the results and the summary fragment."""
+    """Measure the benchmarks and write the results and both page fragments."""
     started = time.perf_counter()
     results = measure(context)
     results["elapsed_seconds"] = time.perf_counter() - started
     context.path(RESULTS_FILE).write_text(
         json.dumps(results, indent=2), encoding="utf-8"
     )
+    write_highlights(results, context.path(HIGHLIGHTS_FILE))
     write_summary(results, context.path(SUMMARY_FILE))
 
 
@@ -619,7 +629,7 @@ FIGURES = (
     FigureSpec(
         name="benchmarks-data",
         page="benchmarks.md",
-        outputs=(RESULTS_FILE, SUMMARY_FILE),
+        outputs=(RESULTS_FILE, HIGHLIGHTS_FILE, SUMMARY_FILE),
         render=render_data,
     ),
     FigureSpec(

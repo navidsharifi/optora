@@ -18,6 +18,8 @@ hand, and the environment table says exactly what produced the figures.
     host synchronizations occur) rather than peak throughput. To measure
     your own machine, including a GPU, see [Reproducing](#reproducing).
 
+--8<-- "docs/assets/figures/benchmarks-highlights.md"
+
 --8<-- "docs/assets/figures/benchmarks-summary.md"
 
 ## Latency by ambiguity set
