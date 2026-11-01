@@ -29,6 +29,7 @@ minimax solve that connects them, all differentiable and GPU-ready.
 [![License](https://img.shields.io/github/license/navidsharifi/optora?style=flat-square)](https://github.com/navidsharifi/optora/blob/main/LICENSE)
 [![CI](https://img.shields.io/github/actions/workflow/status/navidsharifi/optora/ci.yml?branch=main&style=flat-square&label=ci)](https://github.com/navidsharifi/optora/actions/workflows/ci.yml)
 [![Docs](https://img.shields.io/github/actions/workflow/status/navidsharifi/optora/docs.yml?branch=main&style=flat-square&label=docs)](https://github.com/navidsharifi/optora/actions/workflows/docs.yml)
+[![DOI](https://img.shields.io/badge/DOI-10.5281%2Fzenodo.23850922-4051b5?style=flat-square)](https://doi.org/10.5281/zenodo.23850922)
 </div>
 
 <!-- optora-version-start -->
@@ -298,7 +299,10 @@ release may change the public API and a patch release does not. See
 
 ## Citing
 
-If you use Optora in your research, please cite it with the metadata in
+If you use Optora in your research, please cite it. Every release is archived
+on Zenodo under the concept DOI
+[10.5281/zenodo.23850922](https://doi.org/10.5281/zenodo.23850922), which
+always resolves to the latest version. The metadata lives in
 [`CITATION.cff`](https://github.com/navidsharifi/optora/blob/main/CITATION.cff),
 which GitHub's "Cite this repository" button turns into APA or BibTeX.
 

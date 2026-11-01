@@ -12,8 +12,12 @@ from typing import Any
 import pytest
 import yaml
 
-CITATION = Path(__file__).resolve().parents[1] / "CITATION.cff"
+ROOT = Path(__file__).resolve().parents[1]
+CITATION = ROOT / "CITATION.cff"
 ORCID = re.compile(r"https://orcid\.org/(?P<digits>\d{4}-\d{4}-\d{4}-\d{3}[\dX])")
+ZENODO_DOI = re.compile(r"10\.5281/zenodo\.(?P<record>\d+)")
+ZENODO_RECORD = re.compile(r"zenodo\.(?P<record>\d+)")
+DOI_PAGES = [ROOT / "README.md", ROOT / "docs" / "index.md"]
 
 
 @pytest.fixture(scope="module")
@@ -91,6 +95,23 @@ def test_urls_match_the_package(
 
     assert citation["repository-code"] == urls["Repository"]
     assert citation["url"] == urls["Documentation"]
+
+
+def test_doi_is_a_zenodo_doi(citation: dict[str, Any]) -> None:
+    assert ZENODO_DOI.fullmatch(str(citation["doi"])), citation["doi"]
+
+
+@pytest.mark.parametrize("page", DOI_PAGES, ids=lambda page: page.name)
+def test_pages_cite_the_citation_doi(citation: dict[str, Any], page: Path) -> None:
+    # Badges URL-encode the slash, so compare Zenodo record numbers.
+    match = ZENODO_DOI.fullmatch(str(citation["doi"]))
+    assert match
+    text = page.read_text(encoding="utf-8")
+
+    assert f"https://doi.org/{citation['doi']}" in text
+    assert {m.group("record") for m in ZENODO_RECORD.finditer(text)} == {
+        match.group("record")
+    }
 
 
 def test_version_is_left_to_the_release_tag(citation: dict[str, Any]) -> None:
