@@ -10,6 +10,8 @@
 
 Status: alpha &middot; Python 3.10+ &middot; PyTorch &ge;2.2 &middot; MIT License
 
+[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.23850922.svg)](https://doi.org/10.5281/zenodo.23850922)
+
 I started building Optora because most of the DRO code I ran into while
 reading papers lived inside one-off experiment scripts, hard-wired to
 whatever setup that particular paper used. Optora is a small, composable
@@ -97,7 +99,10 @@ Convergence diagnostics and helper functions live in `optora.core`.
 
 ## Citing Optora
 
-If you use Optora in your research, please cite it. The metadata lives in
+If you use Optora in your research, please cite it. Every release is archived
+on Zenodo under the concept DOI
+[10.5281/zenodo.23850922](https://doi.org/10.5281/zenodo.23850922), which
+always resolves to the latest version. The metadata lives in
 [`CITATION.cff`](CITATION.cff); GitHub's "Cite this repository" button turns
 it into APA or BibTeX.
 

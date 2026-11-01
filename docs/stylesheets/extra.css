@@ -33,10 +33,9 @@
 
 .md-typeset .hero__logo {
   display: block;
-  width: min(34rem, 92%);
+  width: min(26rem, 80%);
   margin: 0 auto 1.2rem;
-  border-radius: 0.8rem;
-  box-shadow: 0 0.6rem 1.8rem rgba(0, 0, 0, 0.25);
+  filter: drop-shadow(0 0.3rem 0.6rem rgba(0, 0, 0, 0.25));
 }
 
 .md-typeset .hero__tagline {

@@ -2,11 +2,14 @@
 # GitHub renders it as "Cite this repository", and Zenodo reads it when it
 # archives a release. `version` and `date-released` are deliberately absent:
 # Zenodo takes both from the release tag, so nothing here can drift.
+# `doi` is the Zenodo concept DOI, which always resolves to the latest
+# version; the README and documentation badges repeat it.
 cff-version: 1.2.0
 message: "If you use Optora in your research, please cite it as below."
 type: software
 title: Optora
 abstract: "A small, composable, PyTorch-native library for distributionally robust optimization."
+doi: 10.5281/zenodo.23850922
 authors:
   - family-names: Sharifi
     given-names: Navid

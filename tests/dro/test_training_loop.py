@@ -128,8 +128,12 @@ class _LinearModel(nn.Module):
 
 
 def _per_scenario_loss(model: nn.Module) -> torch.Tensor:
-    """Return the squared error at each support point as an `(n,)` tensor."""
-    return (model(FEATURES) - TARGETS) ** 2
+    """Return the squared error at each support point as an `(n,)` tensor.
+
+    The data follow the model's device, so the same loop runs on any device.
+    """
+    device = next(model.parameters()).device
+    return (model(FEATURES.to(device)) - TARGETS.to(device)) ** 2
 
 
 def _flat(tensors: list[torch.Tensor]) -> torch.Tensor:
@@ -503,4 +507,22 @@ def test_training_loop_preserves_dtype_and_keeps_parameters_leaves() -> None:
     assert all(
         parameter.dtype is DTYPE and parameter.is_leaf
         for parameter in model.parameters()
+    )
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="requires CUDA")
+def test_cuda_training_matches_cpu(factory: AmbiguitySetFactory) -> None:
+    # The whole loop (forward, worst-case solve, backward, Adam step) must
+    # stay on the device and follow the CPU trajectory step for step.
+    cpu_model = _LinearModel()
+    cuda_model = _LinearModel().cuda()
+
+    cpu_values = torch.stack(_train(factory(), cpu_model, steps=20))
+    cuda_values = torch.stack(_train(factory().cuda(), cuda_model, steps=20))
+
+    assert cuda_values.device.type == "cuda"
+    assert all(parameter.is_cuda for parameter in cuda_model.parameters())
+    torch.testing.assert_close(cuda_values.cpu(), cpu_values)
+    torch.testing.assert_close(
+        _flat_parameters(cuda_model).cpu(), _flat_parameters(cpu_model)
     )

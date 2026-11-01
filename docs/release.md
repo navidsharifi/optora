@@ -72,9 +72,10 @@ repository owner.
     [zenodo.org](https://zenodo.org/) with GitHub and switch the repository
     on under *Account > GitHub*. Every GitHub release published afterwards
     is archived with a version DOI, using the metadata in `CITATION.cff`.
-    After the first archive, add its concept DOI, which always resolves to
-    the latest version, to `CITATION.cff` as `doi:` and as a badge in
-    `README.md`.
+    The concept DOI, which always resolves to the latest version, is
+    `CITATION.cff`'s `doi:`; the badges and citation text in `README.md`
+    and `docs/index.md` repeat it, and `tests/test_citation.py` fails if
+    they drift.
 
 Publishing runs from the `vX.Y.Z` tag created by release preparation. If PyPI
 configuration is wrong on the first attempt, fix the trusted-publisher settings
