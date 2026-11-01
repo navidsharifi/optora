@@ -6,7 +6,7 @@ icon: lucide/house
 
 <div class="hero" markdown>
 
-![Optora](assets/images/optora-logo.jpg){ .hero__logo }
+![Optora](assets/images/optora-logo.png){ .hero__logo }
 
 <p class="hero__tagline" markdown>
 A small, composable, PyTorch-native library for <b>distributionally robust
