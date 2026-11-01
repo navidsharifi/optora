@@ -10,6 +10,7 @@ abstract: "A small, composable, PyTorch-native library for distributionally robu
 authors:
   - family-names: Sharifi
     given-names: Navid
+    orcid: "https://orcid.org/0009-0006-1315-3403"
   - name: Optora contributors
 repository-code: "https://github.com/navidsharifi/optora"
 url: "https://navidsharifi.github.io/optora/"

@@ -4,6 +4,7 @@ The installed distribution metadata is what PyPI shows, so it is the
 reference; the citation file must never contradict it.
 """
 
+import re
 from importlib.metadata import PackageMetadata, metadata
 from pathlib import Path
 from typing import Any
@@ -12,6 +13,7 @@ import pytest
 import yaml
 
 CITATION = Path(__file__).resolve().parents[1] / "CITATION.cff"
+ORCID = re.compile(r"https://orcid\.org/(?P<digits>\d{4}-\d{4}-\d{4}-\d{3}[\dX])")
 
 
 @pytest.fixture(scope="module")
@@ -37,6 +39,36 @@ def test_declares_the_required_keys(citation: dict[str, Any]) -> None:
 def test_every_author_is_a_person_or_an_entity(citation: dict[str, Any]) -> None:
     for author in citation["authors"]:
         assert {"family-names", "given-names"} <= author.keys() or "name" in author
+
+
+def orcid_check_digit(digits: str) -> str:
+    """Return the ISO 7064 MOD 11-2 check character of 15 ORCID digits."""
+    total = 0
+    for digit in digits:
+        total = (total + int(digit)) * 2
+    remainder = (12 - total % 11) % 11
+    return "X" if remainder == 10 else str(remainder)
+
+
+@pytest.mark.parametrize(
+    ("identifier", "check"),
+    [("0000-0002-1825-0097", "7"), ("0000-0002-1694-233X", "X")],
+)
+def test_orcid_check_digit_matches_published_examples(
+    identifier: str, check: str
+) -> None:
+    assert orcid_check_digit(identifier.replace("-", "")[:15]) == check
+
+
+def test_every_orcid_is_a_valid_identifier(citation: dict[str, Any]) -> None:
+    orcids = [author["orcid"] for author in citation["authors"] if "orcid" in author]
+
+    assert orcids, "at least one author must carry an ORCID iD"
+    for orcid in orcids:
+        match = ORCID.fullmatch(orcid)
+        assert match, f"{orcid} is not an https://orcid.org/ iD"
+        digits = match.group("digits").replace("-", "")
+        assert orcid_check_digit(digits[:15]) == digits[15], f"{orcid} checksum"
 
 
 def test_title_and_abstract_match_the_package(
