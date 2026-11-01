@@ -87,6 +87,9 @@ Convergence diagnostics and helper functions live in `optora.core`.
   synchronizations and agreement with independent reference solvers,
   measured on every documentation build:
   [navidsharifi.github.io/optora/benchmarks](https://navidsharifi.github.io/optora/benchmarks/).
+- **Positioning:** how Optora compares with `skwdro` and `dro`, and when
+  another library fits better:
+  [`docs/positioning.md`](docs/positioning.md).
 - **API stability:** what counts as public API and what may change during
   `0.x`: [`docs/stability.md`](docs/stability.md).
 - **Contributing:** development workflow, coding style, and the PR
