@@ -54,6 +54,7 @@ python examples/01_kl_dro_radius_sweep.py
 | [Training under subpopulation shift](subpopulation_shift_training.md) | Does a DRO-trained model really degrade more gracefully than an ERM one when the test mixture of subpopulations changes, and where does it lose? |
 | [Minibatch DRO against the full batch](minibatch_dro_training.md) | How biased is the worst case of a minibatch, and do the multilevel and stochastic-dual estimators train to the full-batch optimum instead? |
 | [Group DRO under a spurious correlation](group_dro_training.md) | Does training on the worst group fix a model that leans on a spurious feature, and why does it stop working without regularization? |
+| [Recovering CVaR from a phi-divergence ball](cvar_from_phi_divergence.md) | Which phi-divergence ball has CVaR as its worst case, and why does a total-variation ball of radius $(1-\alpha)/\alpha$ not? |
 
 They are ordered roughly by how much machinery they involve: the first one
 touches a single [`AmbiguitySet`](../api/core/dro_base.md), the fourth
@@ -63,7 +64,9 @@ radius as a free parameter at all, and the last one trains a model with
 `torch.optim` and holds the result against an ERM baseline and two controls.
 The eighth trains on minibatches and holds every estimator against the
 full-batch objective it is meant to estimate, and the ninth trains on the
-worst of several groups instead of their average.
+worst of several groups instead of their average. The tenth steps back from
+training and links DRO to a classical risk measure: it rebuilds CVaR from
+the general phi-divergence dual and checks it against the definition.
 
 !!! warning "These scripts are tuned down on purpose"
 
@@ -81,6 +84,8 @@ worst of several groups instead of their average.
     (20 to 30 seconds): its training loops run thousands of small inner
     solves, where kernel-launch overhead dominates. Example 9 takes about
     ten seconds: it trains twenty over-parameterized models jointly.
+    Example 10 takes about ten seconds as well, almost all of it in the
+    staged subgradient solve of a nonsmooth dual.
 
 ## The shared plotting helper
 

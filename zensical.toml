@@ -79,6 +79,7 @@ nav = [
     { "Training under subpopulation shift" = "examples/subpopulation_shift_training.md" },
     { "Minibatch DRO against the full batch" = "examples/minibatch_dro_training.md" },
     { "Group DRO under a spurious correlation" = "examples/group_dro_training.md" },
+    { "Recovering CVaR from a phi-divergence ball" = "examples/cvar_from_phi_divergence.md" },
   ] },
   # BEGIN GENERATED API NAVIGATION
   { "API reference" = [
