@@ -55,6 +55,7 @@ python examples/01_kl_dro_radius_sweep.py
 | [Minibatch DRO against the full batch](minibatch_dro_training.md) | How biased is the worst case of a minibatch, and do the multilevel and stochastic-dual estimators train to the full-batch optimum instead? |
 | [Group DRO under a spurious correlation](group_dro_training.md) | Does training on the worst group fix a model that leans on a spurious feature, and why does it stop working without regularization? |
 | [Recovering CVaR from a phi-divergence ball](cvar_from_phi_divergence.md) | Which phi-divergence ball has CVaR as its worst case, and why does a total-variation ball of radius $(1-\alpha)/\alpha$ not? |
+| [Robust regret against robust loss](distributionally_robust_regret.md) | If the adversary is charged only for avoidable loss, how much less conservative is the robust decision, and does it really stay with ERM to first order? |
 
 They are ordered roughly by how much machinery they involve: the first one
 touches a single [`AmbiguitySet`](../api/core/dro_base.md), the fourth
@@ -66,7 +67,9 @@ The eighth trains on minibatches and holds every estimator against the
 full-batch objective it is meant to estimate, and the ninth trains on the
 worst of several groups instead of their average. The tenth steps back from
 training and links DRO to a classical risk measure: it rebuilds CVaR from
-the general phi-divergence dual and checks it against the definition.
+the general phi-divergence dual and checks it against the definition. The
+eleventh changes what the adversary is paid for, from loss to regret, and
+measures how far that moves the robust decision.
 
 !!! warning "These scripts are tuned down on purpose"
 
@@ -85,7 +88,10 @@ the general phi-divergence dual and checks it against the definition.
     solves, where kernel-launch overhead dominates. Example 9 takes about
     ten seconds: it trains twenty over-parameterized models jointly.
     Example 10 takes about ten seconds as well, almost all of it in the
-    staged subgradient solve of a nonsmooth dual.
+    staged subgradient solve of a nonsmooth dual. Example 11 takes about
+    twenty-five seconds: every outer bisection step of the regret policy
+    costs several inner Wasserstein solves, and a single such solve has a
+    fixed overhead of a few milliseconds whatever its batch size.
 
 ## The shared plotting helper
 

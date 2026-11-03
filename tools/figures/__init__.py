@@ -33,6 +33,7 @@ from tools.figures import (
     home,
     mmd,
     numerics,
+    regret,
     sinkhorn,
     tilt,
     training,
@@ -54,6 +55,7 @@ MODULES = (
     mmd,
     training,
     numerics,
+    regret,
     examples,
     benchmarks,
 )

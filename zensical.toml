@@ -80,6 +80,7 @@ nav = [
     { "Minibatch DRO against the full batch" = "examples/minibatch_dro_training.md" },
     { "Group DRO under a spurious correlation" = "examples/group_dro_training.md" },
     { "Recovering CVaR from a phi-divergence ball" = "examples/cvar_from_phi_divergence.md" },
+    { "Robust regret against robust loss" = "examples/distributionally_robust_regret.md" },
   ] },
   # BEGIN GENERATED API NAVIGATION
   { "API reference" = [
