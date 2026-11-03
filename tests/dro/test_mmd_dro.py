@@ -424,11 +424,12 @@ def test_float32_radius_multiplier_agrees_with_float64(
 ) -> None:
     # Where the float32 interior-point solve stalls (a failed Cholesky near
     # the solution, on rows that depend on the platform and thread count) its
-    # radius multiplier was 2e-2 to 1e1 off; the one recovered from
-    # complementary stationarity is not. A converged float32 multiplier is
-    # limited by the dual-residual tolerance, ten times the 100-ulp gap
-    # floor in loss units, to about 1e-3 here, unrelated to the Gram
-    # conditioning that bounds the Hessian.
+    # radius multiplier was 2e-2 to 1e1 off. Even on rows it marks converged
+    # the iterate is held only by the dual-residual tolerance, and drifted
+    # to 1.4e-2 on a Windows runner with PyTorch 2.2. The multiplier
+    # recovered from complementary stationarity is accurate to about 1e-3
+    # here on every row, unrelated to the Gram conditioning that bounds the
+    # Hessian.
     gram, loss, _ = laplacian_problem(bandwidth, 0)
     batch, size = loss.shape
 
@@ -447,6 +448,33 @@ def test_float32_radius_multiplier_agrees_with_float64(
     assert bool(torch.all(expected > 0.0))
     errors = torch.abs(single - expected) / expected
     assert float(errors.max()) < 1e-2
+
+
+@pytest.mark.parametrize("dtype", [torch.float32, torch.float64])
+def test_radius_gradient_vanishes_where_the_ball_holds_the_worst_vertex(
+    dtype: torch.dtype,
+) -> None:
+    # Below the radius cap but past the MMD from the nominal to the vertex
+    # of the largest loss, the worst case is that vertex and the radius
+    # constraint is slack. The slope recovered from stationarity is then set
+    # by rounding-level masses, up to 3.4 here in float32, so it may replace
+    # the interior-point multiplier only where the constraint is active.
+    gram, loss, _ = laplacian_problem(1.0, 0)
+    batch, size = loss.shape
+    nominal = torch.full((size,), 1.0 / size, dtype=DTYPE)
+    vertex = torch.nn.functional.one_hot(torch.argmax(loss, dim=-1), size).to(DTYPE)
+    offset = vertex - nominal
+    vertex_distance = torch.sqrt(torch.sum((offset @ gram) * offset, dim=-1))
+    radius = torch.full((batch,), 0.8, dtype=dtype, requires_grad=True)
+    ambiguity_set = MMDAmbiguitySet(nominal.to(dtype), gram.to(dtype), radius)
+    assert bool(torch.all(vertex_distance < 0.8))
+    assert bool(torch.all(radius < ambiguity_set.radius_ceiling))
+
+    value = ambiguity_set.worst_case_expectation(loss.to(dtype))
+    (gradient,) = torch.autograd.grad(value.sum(), radius)
+
+    assert torch.allclose(value.double(), torch.amax(loss, dim=-1), atol=1e-3)
+    assert float(torch.amax(torch.abs(gradient))) < 1e-3 * spread(loss)
 
 
 def test_float32_second_derivatives_survive_a_thread_count_change(
