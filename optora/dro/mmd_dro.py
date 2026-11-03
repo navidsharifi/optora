@@ -271,8 +271,8 @@ def _solve(
     Returns:
         The maximizer, projected onto the simplex to absorb the solve's
         residual, and the multipliers of the orthant and of the radius
-        constraint, the latter recovered from stationarity on elements that
-        did not converge.
+        constraint, the latter recovered from stationarity wherever the
+        radius constraint is active.
     """
     point = program.initial_point()
     degree = program.loss.shape[-1] + 1
@@ -315,16 +315,15 @@ def _solve(
     return _Solution(
         distribution,
         point.z1,
-        torch.where(
-            done,
-            point.z20,
-            _stationary_radius_dual(program, distribution, point.z20),
-        ),
+        _stationary_radius_dual(program, distribution, point.z20, tol),
     )
 
 
 def _stationary_radius_dual(
-    program: _Program, distribution: torch.Tensor, radius_dual: torch.Tensor
+    program: _Program,
+    distribution: torch.Tensor,
+    radius_dual: torch.Tensor,
+    tol: float,
 ) -> torch.Tensor:
     r"""Recover the radius multiplier from complementary stationarity.
 
@@ -339,23 +338,39 @@ def _stationary_radius_dual(
 
     which needs no support identification: a scenario of ambiguous mass
     weighs as little as its mass. It replaces the interior-point iterate of
-    $\lambda$ on elements that did not converge: in float32 the normal
-    matrix's Cholesky factorization can break down near the solution, which
-    freezes the element at an iterate whose maximizer is accurate but whose
-    multiplier can be off by orders of magnitude. The iterate is kept where
-    the slope is undefined ($d$ constant under $q$, as at a vertex) or
-    negative.
+    $\lambda$, which in float32 is less accurate than the maximizer: the
+    iterate of a converged element is held only by the dual-residual
+    tolerance, and where the normal matrix's Cholesky factorization breaks
+    down near the solution the element freezes at an iterate whose
+    multiplier can be off by orders of magnitude. In float64 the two agree
+    to about the tolerance.
+
+    The slope means something only where the radius constraint is active.
+    Inside the ball the multiplier is zero, while the slope is set by the
+    scenarios that carry rounding-level mass and is arbitrary. The iterate
+    is therefore kept wherever $\sqrt{(q - p)^\top K (q - p)}$ falls short
+    of $\epsilon$ by more than a fraction $\sqrt{\mathrm{tol}}$, well above
+    the boundary residual of an active solution, which is about `tol`. It
+    is also kept where the slope is undefined ($d$ constant under $q$, as
+    at a vertex) or negative.
 
     Args:
         program: The solved cone program.
         distribution: The maximizer, of shape `batch_shape + (n,)`.
         radius_dual: Interior-point iterate of $\lambda$, of shape
             `batch_shape`.
+        tol: Tolerance on the relative duality gap the program was solved
+            to.
 
     Returns:
         The multiplier $\lambda$, of shape `batch_shape`.
     """
-    deviation = program.cone_adjoint(program.cone_part(distribution) - program.image)
+    residual = program.cone_part(distribution) - program.image
+    active = (
+        torch.linalg.vector_norm(residual, dim=-1)
+        >= (1.0 - math.sqrt(tol)) * program.radius
+    )
+    deviation = program.cone_adjoint(residual)
     centered = deviation - torch.sum(distribution * deviation, dim=-1, keepdim=True)
     variance = torch.sum(distribution * centered * centered, dim=-1)
     covariance = torch.sum(distribution * centered * program.loss, dim=-1)
@@ -365,7 +380,9 @@ def _stationary_radius_dual(
         * torch.finfo(distribution.dtype).eps
         * torch.sum(distribution * deviation * deviation, dim=-1)
     )
-    usable = (variance > floor) & torch.isfinite(recovered) & (recovered >= 0.0)
+    usable = (
+        active & (variance > floor) & torch.isfinite(recovered) & (recovered >= 0.0)
+    )
     return torch.where(usable, recovered, radius_dual)
 
 
