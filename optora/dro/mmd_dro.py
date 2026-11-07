@@ -34,10 +34,14 @@ from optora.divergences.mmd import MMDDivergence
 _STEP_FRACTION = 0.99
 
 # Iterative-refinement passes on the full linearized KKT system. The reduced
-# normal equations lose accuracy as the iterates approach the boundary, and
-# without refinement the equality residuals grow back once the duality gap
-# is near the rounding floor.
-_REFINEMENT_STEPS = 2
+# normal equations lose accuracy as the iterates approach the boundary.
+# Without refinement the equality residuals grow back once the duality gap
+# is near the rounding floor, and with two passes a float32 direction can
+# still be inaccurate enough to carry the iterate to a point whose normal
+# matrix no longer factors, where the element stalls short of the
+# tolerance. Three passes left no stall over 72 float32 problems of support
+# 256 across thread counts and kernel bandwidths.
+_REFINEMENT_STEPS = 3
 
 # Ratio of the residual tolerance to the duality-gap tolerance.
 _RESIDUAL_SLACK = 10.0
@@ -272,7 +276,10 @@ def _solve(
         The maximizer, projected onto the simplex to absorb the solve's
         residual, and the multipliers of the orthant and of the radius
         constraint, the latter recovered from stationarity wherever the
-        radius constraint is active.
+        radius constraint is active. An element whose normal matrix fails
+        to factor, or whose direction is not finite, is frozen at its
+        current iterate and no longer holds the loop open for the others:
+        it would recompute the same direction from the same point forever.
     """
     point = program.initial_point()
     degree = program.loss.shape[-1] + 1
@@ -280,6 +287,7 @@ def _solve(
         program.radius**2 + torch.sum(program.image**2, dim=-1)
     )
     done = torch.zeros(program.radius.shape, dtype=torch.bool, device=point.x.device)
+    stalled = torch.zeros_like(done)
     tracker = ConvergenceTracker(tol, check_interval, point.x)
     for iteration in range(max_iter):
         rx, ry, rz1, rz20, rz21 = program.residuals(point)
@@ -299,16 +307,17 @@ def _solve(
             / _RESIDUAL_SLACK,
         )
         done = done | (measure <= tol)
-        tracker.update(torch.amax(torch.where(done, 0.0, measure)))
+        tracker.update(torch.amax(torch.where(done | stalled, 0.0, measure)))
         if tracker.should_stop(iteration):
             break
-        direction = _search_direction(program, point, gap / degree)
+        direction, failed = _search_direction(program, point, gap / degree)
         alpha = _STEP_FRACTION * _max_step(point, direction)
         finite = torch.isfinite(alpha)
         for delta in direction:
             entries = torch.isfinite(delta)
             finite = finite & (entries.all(-1) if delta.ndim > alpha.ndim else entries)
-        alpha = torch.where(done | ~finite, 0.0, torch.clamp(alpha, max=1.0))
+        stalled = stalled | failed | ~finite
+        alpha = torch.where(done | stalled, 0.0, torch.clamp(alpha, max=1.0))
         point = point.step(_Point(*(torch.nan_to_num(d) for d in direction)), alpha)
     distribution = torch.clamp(point.x, min=0.0)
     distribution = distribution / torch.sum(distribution, dim=-1, keepdim=True)
@@ -400,7 +409,9 @@ def _max_step(point: _Point, direction: _Point) -> torch.Tensor:
     )
 
 
-def _search_direction(program: _Program, point: _Point, mu: torch.Tensor) -> _Point:
+def _search_direction(
+    program: _Program, point: _Point, mu: torch.Tensor
+) -> tuple[_Point, torch.Tensor]:
     r"""Return Mehrotra's combined predictor-corrector direction.
 
     The affine-scaling predictor solves the Newton system for the
@@ -414,6 +425,11 @@ def _search_direction(program: _Program, point: _Point, mu: torch.Tensor) -> _Po
     s) + \beta^{-2} (K + 8 (1 + \lVert v_1 \rVert^2) (L v_1)(L v_1)^\top)$,
     one Cholesky factorization per iteration, and each solve is refined
     against the full system.
+
+    Returns:
+        The direction, and a boolean tensor of the batch shape flagging the
+        elements whose normal matrix failed to factor, whose direction is
+        not usable.
     """
     scaling = _Scaling.at(point)
     rx, ry, rz1, rz20, rz21 = program.residuals(point)
@@ -425,7 +441,7 @@ def _search_direction(program: _Program, point: _Point, mu: torch.Tensor) -> _Po
         ..., None, None
     ] * (cone_vector.unsqueeze(-1) * cone_vector.unsqueeze(-2))
     normal = normal + torch.diag_embed(point.z1 / point.s1)
-    cholesky, _ = torch.linalg.cholesky_ex(normal)
+    cholesky, info = torch.linalg.cholesky_ex(normal)
     ones = torch.ones_like(point.x)
     unit = torch.cholesky_solve(ones.unsqueeze(-1), cholesky).squeeze(-1)
 
@@ -506,7 +522,7 @@ def _search_direction(program: _Program, point: _Point, mu: torch.Tensor) -> _Po
     combined, _, _ = direction(
         sigma * mu, scaled_ds[0] * scaled_dz[0], second0, second1
     )
-    return combined
+    return combined, info != 0
 
 
 def _loss_hessian(

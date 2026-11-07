@@ -44,10 +44,7 @@ Issues = "https://github.com/navidsharifi/optora/issues"
 [project.optional-dependencies]
 dev = [
   "build>=1.2",
-  # pytest 9.2 removed the private `Node._nodeid` that pytest-benchmark
-  # 5.3.0 still reads (ionelmc/pytest-benchmark#321); lift the cap once a
-  # fixed pytest-benchmark is released.
-  "pytest>=8,<9.2",
+  "pytest>=8",
   "pytest-cov>=6",
   "ruff>=0.5",
   "mypy>=1.10",
@@ -66,8 +63,9 @@ dev = [
   # runtime dependency of optora.
   "pyyaml>=6",
   # Test-only: the performance guard in tests/benchmarks/. Never a runtime
-  # dependency of optora.
-  "pytest-benchmark>=5.1"
+  # dependency of optora. 5.3.1 is the first release that works with pytest
+  # 9.2 (ionelmc/pytest-benchmark#321).
+  "pytest-benchmark>=5.3.1"
 ]
 docs = [
   "zensical>=0.0.11",

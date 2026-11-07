@@ -120,9 +120,13 @@ def cvar_conjugate(
     $$
 
     minimized at the upper $\alpha$-quantile of $\ell$ (Rockafellar and
-    Uryasev 2000). Bind the level and pass it, with `radius=0.0`, to
-    `optora.dro.minibatch.StochasticPhiDual` for minibatch CVaR training:
-    `functools.partial(cvar_conjugate, alpha=0.1)`.
+    Uryasev 2000). Bind the level, `functools.partial(cvar_conjugate,
+    alpha=0.1)`, and pass it with `radius=0.0` to
+    `optora.dro.minibatch.StochasticPhiDual` for minibatch CVaR training,
+    or to `PhiAmbiguitySet` with a `dual_solver`, which solves the dual at
+    a zero radius rather than returning the nominal expectation: the
+    indicator vanishes on the whole interval $[0, 1/\alpha]$, so its ball
+    of radius zero is the full CVaR set.
 
     Args:
         scaled_shift: Elementwise dual argument
@@ -415,6 +419,15 @@ class PhiAmbiguitySet(DualAmbiguitySet):
     variation, is solved by its dedicated closed form,
     `TotalVariationAmbiguitySet`.
 
+    The two paths treat a float radius of zero differently. The exact tilt
+    returns `sum(nominal * loss)` without solving, which is right for any
+    generator it accepts: a differentiable conjugate means a strictly
+    convex generator, whose divergence vanishes at the nominal alone. The
+    dual path solves at every radius, a float zero included, because its
+    weaker requirement admits a generator that vanishes on an interval,
+    such as the CVaR indicator behind `cvar_conjugate`, whose ball of
+    radius zero is the whole CVaR set rather than `{nominal}`.
+
     Attributes:
         nominal: Reference distribution the ambiguity set is centered on.
         divergence: `PhiDivergence` instance measuring distance from
@@ -514,11 +527,12 @@ class PhiAmbiguitySet(DualAmbiguitySet):
                 are a batch of independent loss vectors, solved together.
 
         Returns:
-            A tensor of shape `(...)` holding the worst-case expected loss:
-            the exact `sum(nominal * loss)` when `radius` is a zero float,
-            otherwise the expectation under the maximizer found by the
-            bracketed tilt, or, with a `dual_solver`, the dual objective at
-            the optimum that solver found.
+            A tensor of shape `(...)` holding the worst-case expected loss.
+            Without a `dual_solver` it is the expectation under the
+            maximizer found by the bracketed tilt, which is the exact
+            `sum(nominal * loss)` when `radius` is a zero float. With one
+            it is the dual objective at the optimum that solver found, at
+            every radius (see the class docstring).
 
         Raises:
             ValueError: If `loss`'s trailing dimension does not match

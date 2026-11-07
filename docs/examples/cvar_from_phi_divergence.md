@@ -78,7 +78,7 @@ def cvar_generator(ratio, alpha):
 ambiguity_set = PhiAmbiguitySet(
     nominal,
     divergence=PhiDivergence(functools.partial(cvar_generator, alpha=alpha)),
-    radius=torch.zeros_like(alphas),
+    radius=0.0,
     phi_conjugate=functools.partial(cvar_conjugate, alpha=alpha),
 )
 for step_size in (1e-2, 1e-3, 1e-4, 1e-5, 1e-6):
@@ -90,16 +90,17 @@ Here `alphas` holds 25 levels between $1$ and $0.01$ and
 `alpha = alphas.unsqueeze(-1)`, so every level is solved in one batched
 call. The loop over step sizes is explained in the next section.
 
-!!! warning "The radius must be a tensor zero, not `0.0`"
+!!! note "A zero radius is solved, not short-circuited"
 
-    When the radius is the float `0.0`, every ambiguity set in Optora
-    returns the nominal expectation without solving anything. That
-    shortcut is correct for any generator that vanishes only at $t = 1$,
-    because the ball of radius zero then contains only the nominal. The
-    indicator generator vanishes on the whole interval $[0, 1/\alpha]$,
-    so its ball of radius zero is the full CVaR set. A tensor radius
-    always goes through the solver, which is why the script passes
-    `torch.zeros_like(alphas)`.
+    Most ambiguity sets in Optora return the nominal expectation at the
+    float radius `0.0` without solving anything. That shortcut is correct
+    for a generator that vanishes only at $t = 1$, because the ball of
+    radius zero then contains only the nominal. The indicator generator
+    vanishes on the whole interval $[0, 1/\alpha]$, so its ball of radius
+    zero is the full CVaR set. `PhiAmbiguitySet` with a `dual_solver`
+    therefore solves its dual at every radius, zero included; only its
+    exact tilt path, which needs a differentiable conjugate, keeps the
+    shortcut.
 
 ## Solving a dual that is not smooth
 

@@ -24,11 +24,12 @@ so a fixed step size only reaches the optimum to within a multiple of that
 step. The script therefore shrinks the step in stages and lets each stage
 warm-start from the last, which is a plain diminishing-step subgradient
 method. Every stage returns an upper bound on CVaR (weak duality), and the
-bound closes from above. Second, the radius is a tensor zero rather than the
-float 0.0. A float zero radius tells the set to return the nominal mean
-without solving, which is right for every generator that vanishes only at
-t = 1 and wrong for this one, since phi_alpha vanishes on all of
-[0, 1/alpha].
+bound closes from above. Second, the radius is zero, and the set still
+solves. Most ambiguity sets return the nominal mean at radius 0.0 without
+solving, which is right for a generator that vanishes only at t = 1. This
+one vanishes on all of [0, 1/alpha], so its ball of radius zero is the full
+CVaR set, and `PhiAmbiguitySet` with a dual solver solves at every radius
+for exactly that reason.
 
 The script also tests a tempting shortcut: a total-variation ball with
 budget (1 - alpha)/alpha. It does not give CVaR. That number bounds how far
@@ -135,7 +136,7 @@ def phi_divergence_cvar(
     ambiguity_set = PhiAmbiguitySet(
         nominal,
         divergence=PhiDivergence(functools.partial(cvar_generator, alpha=alpha)),
-        radius=torch.zeros_like(alphas),
+        radius=0.0,
         phi_conjugate=functools.partial(cvar_conjugate, alpha=alpha),
     )
     batched = loss.expand(alphas.shape[0], -1)

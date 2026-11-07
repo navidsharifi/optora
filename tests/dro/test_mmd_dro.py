@@ -22,6 +22,7 @@ from torch.autograd import gradcheck, gradgradcheck
 
 from optora.core.dro_base import AmbiguitySet
 from optora.divergences.mmd import MMDDivergence
+from optora.dro import mmd_dro
 from optora.dro.mmd_dro import MMDAmbiguitySet
 from tests.dro.oracles import mmd_worst_case
 
@@ -422,14 +423,14 @@ def condition_number(gram: torch.Tensor) -> float:
 def test_float32_radius_multiplier_agrees_with_float64(
     bandwidth: float, thread_count: int
 ) -> None:
-    # Where the float32 interior-point solve stalls (a failed Cholesky near
-    # the solution, on rows that depend on the platform and thread count) its
-    # radius multiplier was 2e-2 to 1e1 off. Even on rows it marks converged
-    # the iterate is held only by the dual-residual tolerance, and drifted
-    # to 1.4e-2 on a Windows runner with PyTorch 2.2. The multiplier
-    # recovered from complementary stationarity is accurate to about 1e-3
-    # here on every row, unrelated to the Gram conditioning that bounds the
-    # Hessian.
+    # With two refinement passes the float32 interior-point solve stalled on
+    # rows that depended on the platform and thread count (a failed Cholesky
+    # near the solution, #88) and their radius multiplier was 2e-2 to 1e1
+    # off. Even on rows it marks converged the iterate is held only by the
+    # dual-residual tolerance, and drifted to 1.4e-2 on a Windows runner
+    # with PyTorch 2.2. The multiplier recovered from complementary
+    # stationarity is accurate to about 1e-3 here on every row, unrelated
+    # to the Gram conditioning that bounds the Hessian.
     gram, loss, _ = laplacian_problem(bandwidth, 0)
     batch, size = loss.shape
 
@@ -482,11 +483,15 @@ def test_float32_second_derivatives_survive_a_thread_count_change(
 ) -> None:
     # On Windows MKL, any torch.set_num_threads call left the batched float32
     # LU of the Hessian system returning invalid pivots: the backward pass
-    # raised, or got nan and silently zeroed the Hessian. Later, the float32
-    # radius multiplier was off by up to 2.5e-1 on macOS. The Hessian jumps
-    # where the support changes, and float32 resolves masses and orthant
-    # multipliers only to about 2e-4 here; on this problem the smallest
-    # support mass and off-support multiplier both exceed 1e-3.
+    # raised, or got nan and silently zeroed the Hessian. Later, one row was
+    # 0.69 off on macOS (#87): a row whose float32 solve had stalled on a
+    # failed Cholesky kept stale orthant multipliers, and the support test
+    # `mass > multiplier` behind the Hessian picked a different support. The
+    # Hessian jumps where the support changes, and a converged float32 solve
+    # tells a mass from its multiplier only down to about 2e-4, the square
+    # root of its gap floor; on this problem the smallest support mass and
+    # off-support multiplier both exceed 1e-3, and the two are at least a
+    # factor 100 apart on every row.
     gram, loss, direction = laplacian_problem(1.0, 0)
     size = loss.shape[-1]
 
@@ -537,6 +542,38 @@ def test_an_unconverged_budget_still_returns_a_distribution() -> None:
     assert math.isfinite(float(value))
     assert float(loss.grad.sum()) == pytest.approx(1.0, abs=1e-12)
     assert float(loss.grad.min()) >= 0.0
+
+
+def test_a_failed_factorization_freezes_its_element_and_ends_the_loop(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # An element whose normal matrix fails to factor cannot move: the same
+    # point gives the same matrix at the next iteration. It used to be
+    # retried until max_iter while the converged elements waited (#88); now
+    # it is frozen where it stands and the loop ends once the others
+    # converge.
+    generator = torch.Generator().manual_seed(0)
+    loss = torch.randn(3, 7, generator=generator, dtype=DTYPE)
+    radius = 0.2 * SMOOTH.diameter
+    search_direction = mmd_dro._search_direction
+    calls = 0
+
+    def failing_search_direction(*args: Any) -> tuple[Any, torch.Tensor]:
+        nonlocal calls
+        calls += 1
+        direction, failed = search_direction(*args)
+        if calls > 3:
+            failed = failed | torch.tensor([True, False, False])
+        return direction, failed
+
+    clean = build(SMOOTH, radius).worst_case_expectation(loss)
+    monkeypatch.setattr(mmd_dro, "_search_direction", failing_search_direction)
+    frozen = build(SMOOTH, radius, max_iter=200).worst_case_expectation(loss)
+
+    assert calls < 200
+    torch.testing.assert_close(frozen[1:], clean[1:], rtol=0.0, atol=1e-9)
+    assert math.isfinite(float(frozen[0]))
+    assert float(loss[0].min()) <= float(frozen[0]) <= float(loss[0].max())
 
 
 def test_contains_uses_the_maximum_mean_discrepancy() -> None:
