@@ -1439,7 +1439,7 @@ class DualAmbiguitySet(AmbiguitySet):
         radius: Nonnegative bound on the divergence of any distribution
             inside the ambiguity set from `nominal`.
         dual_solver: Solver minimizing the dual objective. Required to
-            evaluate a positive-radius set.
+            evaluate the set at any radius.
         initial_dual_point: Dual point of a *single* batch element that the
             first solve starts from, registered as a buffer so it is built
             once and follows `.to(device)` with the rest of the module. It
@@ -1472,7 +1472,7 @@ class DualAmbiguitySet(AmbiguitySet):
             radius: Nonnegative bound on the divergence of any distribution
                 inside the ambiguity set from `nominal`.
             dual_solver: Solver minimizing the dual objective. Required to
-                evaluate a positive-radius set.
+                evaluate the set at any radius.
             initial_dual_point: Dual point of a single batch element that
                 the first solve starts from.
             initial_in_raw_units: Whether `initial_dual_point` is in the
@@ -1576,28 +1576,28 @@ class DualAmbiguitySet(AmbiguitySet):
                 its own dual variables in a single joint solve.
 
         Returns:
-            A tensor of shape `(...)` holding the worst-case expected loss:
-            the exact `sum(nominal * loss)` when `radius` is a zero float
-            (the set then contains only `nominal`), and otherwise the dual
-            objective evaluated at the optimum found by `dual_solver`. The
-            dual value bounds the worst case from above for any dual point,
-            so an unconverged solve reports a conservative number rather
-            than a wrong direction.
+            A tensor of shape `(...)` holding the worst-case expected loss,
+            the dual objective evaluated at the optimum found by
+            `dual_solver`. The dual value bounds the worst case from above
+            for any dual point, so an unconverged solve reports a
+            conservative number rather than a wrong direction.
+
+            A float radius of zero is solved like any other rather than
+            short-circuited to `sum(nominal * loss)`. The dual constrains
+            only the conjugate of the generator, so it admits a generator
+            that vanishes on an interval rather than at one alone (the
+            CVaR indicator, see `optora.dro.cvar_conjugate`), and the
+            ball of radius zero of such a generator is larger than
+            `{nominal}`.
 
         Raises:
             ValueError: If `loss`'s trailing dimension does not match
                 `nominal`'s support size, its batch shape does not
                 broadcast against `nominal` and `radius`, or `validate` is
                 set and `loss` is not finite.
-            RuntimeError: If `radius` is positive and `dual_solver` is
-                `None`.
+            RuntimeError: If `dual_solver` is `None`.
         """
         batch_shape, working = self._prepare_loss(loss)
-        if self._radius_is_zero:
-            return self._as_result(
-                self._nominal_expectation(working, batch_shape), loss
-            )
-
         shift = torch.amin(working, dim=-1).detach()
         spread = torch.amax(working, dim=-1).detach() - shift
         scale = torch.where(spread > 0, spread, torch.ones_like(spread))
@@ -1651,8 +1651,7 @@ class DualAmbiguitySet(AmbiguitySet):
         """
         if self.dual_solver is None:
             raise RuntimeError(
-                "dual_solver is required to evaluate a positive-radius "
-                f"{type(self).__name__}."
+                f"dual_solver is required to evaluate a {type(self).__name__}."
             )
         initial = self.initial_dual_point.to(scale.dtype)
         start_shape = batch_shape + initial.shape

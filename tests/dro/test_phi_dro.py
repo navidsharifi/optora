@@ -4,6 +4,7 @@ Covers `PhiAmbiguitySet`, `ChiSquareAmbiguitySet`,
 `TotalVariationAmbiguitySet`, and `CVaRAmbiguitySet`.
 """
 
+import functools
 import math
 
 import pytest
@@ -25,6 +26,7 @@ from optora.dro.phi_dro import (
     PhiAmbiguitySet,
     TotalVariationAmbiguitySet,
     chi_square_conjugate,
+    cvar_conjugate,
     kl_conjugate,
 )
 from optora.solvers.gradient_descent import GradientDescent
@@ -62,6 +64,13 @@ def _kl_generator(ratio: torch.Tensor) -> torch.Tensor:
 def _kl_conjugate(scaled_shift: torch.Tensor) -> torch.Tensor:
     """Convex conjugate `phi*(s) = exp(s) - 1` of `_kl_generator`."""
     return torch.exp(scaled_shift) - 1.0
+
+
+def _cvar_generator(ratio: torch.Tensor, alpha: float) -> torch.Tensor:
+    """Indicator generator of the CVaR ball: zero on `[0, 1 / alpha]`, else infinite."""
+    return torch.where(
+        ratio <= 1.0 / alpha, torch.zeros_like(ratio), torch.full_like(ratio, math.inf)
+    )
 
 
 def _grid_search_chi_square_dual_minimum(
@@ -154,6 +163,56 @@ def test_worst_case_expectation_uses_custom_dual_solver() -> None:
         + eta * torch.sum(nominal * _kl_conjugate((standardized - lam) / eta))
     )
     assert torch.allclose(result, expected, atol=1e-6)
+
+
+def test_a_float_zero_radius_with_a_dual_solver_recovers_cvar() -> None:
+    # The CVaR indicator generator vanishes on the whole interval
+    # [0, 1 / alpha], so its ball of radius zero is the full CVaR set and the
+    # nominal-expectation shortcut would be wrong (#94). The dual at radius
+    # zero is the Rockafellar-Uryasev objective, piecewise linear in lam, so
+    # the fixed-step solver is run in diminishing-step stages.
+    nominal = torch.tensor([0.1, 0.2, 0.3, 0.25, 0.15], dtype=torch.float64)
+    loss = torch.tensor([0.5, 2.0, -1.0, 3.0, 1.0], dtype=torch.float64)
+    alpha = 0.4
+    ambiguity_set = PhiAmbiguitySet(
+        nominal,
+        divergence=PhiDivergence(functools.partial(_cvar_generator, alpha=alpha)),
+        radius=0.0,
+        phi_conjugate=functools.partial(cvar_conjugate, alpha=alpha),
+    )
+    for step_size in (1e-2, 1e-3, 1e-4):
+        ambiguity_set.dual_solver = GradientDescent(
+            step_size=step_size, max_iter=2000, tol=1e-12
+        )
+        value = ambiguity_set.worst_case_expectation(loss)
+
+    expected = CVaRAmbiguitySet(nominal, alpha).worst_case_expectation(loss)
+    assert float(expected) > float(torch.sum(nominal * loss))
+    assert torch.allclose(value, expected, atol=1e-6)
+
+
+def test_a_float_zero_radius_with_a_dual_solver_is_continuous_in_the_radius() -> None:
+    # For a generator that vanishes at t = 1 alone the dual at radius zero
+    # has no minimizer (eta runs to zero), so a first-order solver returns an
+    # upper bound on the nominal expectation, as it does at any vanishing
+    # radius: a float zero behaves like a small radius rather than taking a
+    # shortcut the generator may not justify.
+    nominal = torch.tensor([0.1, 0.2, 0.3, 0.25, 0.15], dtype=torch.float64)
+    loss = torch.tensor([0.5, 2.0, -1.0, 3.0, 1.0], dtype=torch.float64)
+
+    def solve(radius: float) -> torch.Tensor:
+        return PhiAmbiguitySet(
+            nominal,
+            divergence=PhiDivergence(phi=_kl_generator),
+            radius=radius,
+            phi_conjugate=kl_conjugate,
+            dual_solver=GradientDescent(step_size=0.1, max_iter=5000, tol=1e-12),
+        ).worst_case_expectation(loss)
+
+    at_zero = solve(0.0)
+
+    assert float(at_zero) >= float(torch.sum(nominal * loss))
+    assert torch.allclose(at_zero, solve(1e-6), atol=1e-3)
 
 
 def _cressie_read_set(
