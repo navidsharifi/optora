@@ -38,12 +38,17 @@ RADIUS_FRACTIONS = (1e-6, 1e-3, 0.05, 0.3, 0.9, 1.5)
 
 @dataclass(frozen=True)
 class Problem:
-    """A nominal, a Laplacian Gram on random points, and a loss."""
+    """A nominal, a Laplacian Gram on random points, and a loss.
+
+    `duplicate` marks a Gram made singular by repeating the first support
+    point as the second.
+    """
 
     name: str
     nominal: torch.Tensor
     gram: torch.Tensor
     loss: torch.Tensor
+    duplicate: bool = False
 
     @property
     def diameter(self) -> float:
@@ -53,7 +58,9 @@ class Problem:
 
     def reference(self, radius: float, loss: torch.Tensor | None = None) -> float:
         loss = self.loss if loss is None else loss
-        if radius == 0.0:
+        # A singular Gram's ball of radius zero is a face of the simplex,
+        # which Clarabel solves exactly as the degenerate cone program.
+        if radius == 0.0 and not self.duplicate:
             return float(self.nominal @ loss)
         return mmd_worst_case(
             self.nominal.numpy(), self.gram.numpy(), loss.numpy(), radius
@@ -83,6 +90,7 @@ def make_problem(
         torch.tensor(nominal, dtype=DTYPE),
         torch.tensor(gram, dtype=DTYPE),
         torch.tensor(loss, dtype=DTYPE),
+        duplicate=duplicate,
     )
 
 
@@ -96,8 +104,20 @@ PROBLEMS = (
 )
 PROBLEM_IDS = [problem.name for problem in PROBLEMS]
 SMOOTH = make_problem("smooth", 7, 6)
+DEFINITE = tuple(problem for problem in PROBLEMS if not problem.duplicate)
+SINGULAR = (
+    PROBLEMS[3],
+    make_problem("duplicate_large", 12, 7, duplicate=True),
+    make_problem("duplicate_zero_mass", 40, 8, zero_mass=True, duplicate=True),
+)
 
 problem_parameters = pytest.mark.parametrize("problem", PROBLEMS, ids=PROBLEM_IDS)
+definite_parameters = pytest.mark.parametrize(
+    "problem", DEFINITE, ids=[problem.name for problem in DEFINITE]
+)
+singular_parameters = pytest.mark.parametrize(
+    "problem", SINGULAR, ids=[problem.name for problem in SINGULAR]
+)
 
 
 def build(
@@ -139,11 +159,65 @@ def test_matches_the_oracle_on_a_large_support(fraction: float) -> None:
     assert error <= ORACLE_TOLERANCE * spread(problem.loss)
 
 
-@problem_parameters
+@definite_parameters
 def test_a_zero_radius_is_the_nominal_expectation(problem: Problem) -> None:
     value = build(problem, 0.0).worst_case_expectation(problem.loss)
 
     assert float(value) == float(torch.sum(problem.nominal * problem.loss))
+
+
+def merged_duplicates(problem: Problem) -> float:
+    """Return the zero-radius worst case of a duplicated pair by hand.
+
+    Mass moves between the two copies of a support point at no discrepancy,
+    so the pair's whole mass sits on the larger of its two losses.
+    """
+    nominal, loss = problem.nominal, problem.loss
+    pair_mass = float(nominal[:2].sum())
+    return float(nominal @ loss - nominal[:2] @ loss[:2]) + pair_mass * float(
+        loss[:2].max()
+    )
+
+
+@singular_parameters
+@pytest.mark.parametrize("as_tensor", [False, True], ids=["float", "tensor"])
+def test_a_zero_radius_of_a_singular_gram_is_the_worst_case_over_its_face(
+    problem: Problem, as_tensor: bool
+) -> None:
+    # A duplicated support point makes the Gram singular: moving mass between
+    # the copies costs no discrepancy, so the ball of radius zero is a face
+    # of the simplex rather than {nominal} and the shortcut to the nominal
+    # expectation understated the worst case (#98). The oracle solves the
+    # degenerate cone program exactly.
+    radius = torch.tensor(0.0, dtype=DTYPE) if as_tensor else 0.0
+    expected = problem.reference(0.0)
+
+    value = build(problem, radius).worst_case_expectation(problem.loss)
+
+    assert expected == pytest.approx(
+        merged_duplicates(problem), abs=1e-9 * spread(problem.loss)
+    )
+    assert expected >= float(problem.nominal @ problem.loss) - 1e-12
+    assert float(value) == pytest.approx(
+        expected, abs=ORACLE_TOLERANCE * spread(problem.loss)
+    )
+
+
+def test_a_singular_gram_with_a_mixed_tensor_radius_extrapolates_its_zero_entries() -> (
+    None
+):
+    problem = SINGULAR[0]
+    radii = torch.tensor([0.0, 0.3 * problem.diameter], dtype=DTYPE)
+    expected = torch.tensor(
+        [problem.reference(float(radius)) for radius in radii], dtype=DTYPE
+    )
+
+    values = build(problem, radii).worst_case_expectation(problem.loss)
+
+    assert float(expected[0]) > float(problem.nominal @ problem.loss)
+    torch.testing.assert_close(
+        values, expected, rtol=0.0, atol=ORACLE_TOLERANCE * spread(problem.loss)
+    )
 
 
 @problem_parameters
@@ -352,6 +426,46 @@ def test_zero_radius_gradients_are_those_of_the_nominal_expectation() -> None:
     coarse = (SMOOTH.reference(step) - base) / step
     fine = (SMOOTH.reference(0.5 * step) - base) / (0.5 * step)
     assert float(radius.grad) == pytest.approx(2.0 * fine - coarse, rel=1e-4)
+
+
+@pytest.mark.parametrize(
+    "problem", SINGULAR[:2], ids=[problem.name for problem in SINGULAR[:2]]
+)
+def test_zero_radius_gradients_of_a_singular_gram_are_those_of_its_face(
+    problem: Problem,
+) -> None:
+    # By Danskin's theorem the loss gradient is the face's maximizer, the
+    # duplicated pair's mass on its larger loss. The nominal and radius
+    # derivatives come from the probe solve, so they are first order: the
+    # nominal gradient lands within about ten probe radii (sqrt(tol) times
+    # the radius cap, 4e-5 here) of the face's exact gradient, and the
+    # radius derivative within 3e-4 of a Richardson extrapolation of the
+    # oracle.
+    nominal = problem.nominal.clone().requires_grad_(True)
+    radius = torch.tensor(0.0, dtype=DTYPE, requires_grad=True)
+    loss = problem.loss.clone().requires_grad_(True)
+
+    MMDAmbiguitySet(nominal, problem.gram, radius).worst_case_expectation(
+        loss
+    ).backward()
+
+    assert loss.grad is not None and nominal.grad is not None
+    assert radius.grad is not None
+    maximizer = problem.nominal.clone()
+    larger = int(torch.argmax(problem.loss[:2]))
+    maximizer[:2] = 0.0
+    maximizer[larger] = problem.nominal[:2].sum()
+    torch.testing.assert_close(loss.grad, maximizer, rtol=0.0, atol=1e-4)
+    face_gradient = problem.loss.clone()
+    face_gradient[:2] = problem.loss[:2].max()
+    torch.testing.assert_close(
+        nominal.grad, face_gradient, rtol=0.0, atol=1e-3 * spread(problem.loss)
+    )
+    step = 1e-5 * problem.diameter
+    base = problem.reference(0.0)
+    coarse = (problem.reference(step) - base) / step
+    fine = (problem.reference(0.5 * step) - base) / (0.5 * step)
+    assert float(radius.grad) == pytest.approx(2.0 * fine - coarse, rel=3e-4)
 
 
 # --- torch.func --------------------------------------------------------------
