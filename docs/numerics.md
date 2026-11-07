@@ -96,6 +96,15 @@ The float32 row, measured when this site is built on a random support of
       float64 inside the set would break the precision policy above and
       fail on accelerators without float64 support.
 
+      Second derivatives in float32 carry one more caveat. The Hessian is
+      piecewise constant and jumps where the maximizer's support changes,
+      and a converged float32 solve tells a scenario's mass from its
+      multiplier only down to the square root of its duality-gap floor
+      over the support size, about $10^{-3}$ to $10^{-4}$. A scenario
+      whose mass sits near that level can land on either side of the
+      jump, and the Hessian then differs from float64 by order one in
+      that direction.
+
 ### Supported loss range
 
 A loss must be finite, and its spread $\max \ell - \min \ell$ must be finite
