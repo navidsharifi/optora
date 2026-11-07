@@ -56,6 +56,7 @@ python examples/01_kl_dro_radius_sweep.py
 | [Group DRO under a spurious correlation](group_dro_training.md) | Does training on the worst group fix a model that leans on a spurious feature, and why does it stop working without regularization? |
 | [Recovering CVaR from a phi-divergence ball](cvar_from_phi_divergence.md) | Which phi-divergence ball has CVaR as its worst case, and why does a total-variation ball of radius $(1-\alpha)/\alpha$ not? |
 | [Robust regret against robust loss](distributionally_robust_regret.md) | If the adversary is charged only for avoidable loss, how much less conservative is the robust decision, and does it really stay with ERM to first order? |
+| [Sinkhorn relaxation of Wasserstein DRO](sinkhorn_relaxation_of_wasserstein_dro.md) | How close does the entropic (Sinkhorn) ball get to the exact Wasserstein worst case as $\epsilon \to 0$, and what does being differentiable everywhere buy a gradient-based outer solve? |
 
 They are ordered roughly by how much machinery they involve: the first one
 touches a single [`AmbiguitySet`](../api/core/dro_base.md), the fourth
@@ -69,7 +70,9 @@ worst of several groups instead of their average. The tenth steps back from
 training and links DRO to a classical risk measure: it rebuilds CVaR from
 the general phi-divergence dual and checks it against the definition. The
 eleventh changes what the adversary is paid for, from loss to regret, and
-measures how far that moves the robust decision.
+measures how far that moves the robust decision. The twelfth swaps the
+Wasserstein ball for its entropic relaxation and measures what the
+smoothing costs in accuracy and what it buys an outer gradient method.
 
 !!! warning "These scripts are tuned down on purpose"
 
@@ -91,7 +94,10 @@ measures how far that moves the robust decision.
     staged subgradient solve of a nonsmooth dual. Example 11 takes about
     twenty-five seconds: every outer bisection step of the regret policy
     costs several inner Wasserstein solves, and a single such solve has a
-    fixed overhead of a few milliseconds whatever its batch size.
+    fixed overhead of a few milliseconds whatever its batch size. Example
+    12 takes about twenty seconds, most of it in the bisections that
+    locate thirteen Sinkhorn minimizers and in the four hundred outer
+    steps the Wasserstein objective is given to not converge in.
 
 ## The shared plotting helper
 
