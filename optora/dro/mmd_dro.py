@@ -252,11 +252,19 @@ def _shift_into_cone(
 
 
 class _Solution(NamedTuple):
-    """Maximizer and the multipliers of a solved worst case."""
+    """Maximizer and the multipliers of a solved worst case.
+
+    `radius_dual` is the multiplier of the radius constraint as reported,
+    recovered from stationarity wherever that constraint is active;
+    `cone_dual` is the interior-point iterate of the same multiplier, the
+    scalar part of the cone dual, accurate to the duality gap wherever the
+    solve converged.
+    """
 
     distribution: torch.Tensor
     orthant_dual: torch.Tensor
     radius_dual: torch.Tensor
+    cone_dual: torch.Tensor
 
 
 def _solve(
@@ -325,6 +333,7 @@ def _solve(
         distribution,
         point.z1,
         _stationary_radius_dual(program, distribution, point.z20, tol),
+        point.z20,
     )
 
 
@@ -657,6 +666,21 @@ class MMDAmbiguitySet(AmbiguitySet):
     that diameter plus one, which leaves the value unchanged and keeps the
     program well scaled.
 
+    A radius of zero admits only the nominal when $K$ is positive definite,
+    and the worst case is then the exact `sum(nominal * loss)`. A singular
+    $K$ (duplicate support points, or any kernel that does not separate
+    the support) does not: a distribution that differs from the nominal
+    along the null space of $K$ has zero discrepancy, so the ball of radius
+    zero is a face of the simplex and the worst case can exceed the
+    nominal expectation. Which case applies is read off the eigenvalues at
+    construction ($\lambda_{\min} > n \varepsilon \lambda_{\max}$). For a
+    singular $K$ a zero radius is solved at the probe radius $\epsilon$
+    used for the radius derivative and extrapolated along the cone-dual
+    multiplier, $V(0) = V(\epsilon) - \epsilon\,\lambda(\epsilon)$, which
+    is exact up to the solve tolerance whenever $V$ is linear on
+    $[0, \epsilon]$, as it is below the first change of the maximizer's
+    support.
+
     Attributes:
         nominal: Reference distribution the ambiguity set is centered on.
         divergence: `MMDDivergence` holding the Gram matrix; `contains` uses
@@ -691,8 +715,9 @@ class MMDAmbiguitySet(AmbiguitySet):
     ) -> None:
         r"""Initialize the MMD ambiguity set.
 
-        Construction factors `gram` once by an eigenvalue decomposition,
-        which may synchronize with the device.
+        Construction factors `gram` once by an eigenvalue decomposition and
+        reads off whether it is positive definite, which synchronizes with
+        the device.
 
         Args:
             nominal: Nominal distribution, a nonnegative tensor that sums to
@@ -738,6 +763,8 @@ class MMDAmbiguitySet(AmbiguitySet):
         self.register_buffer(
             "kernel_factor", vectors * torch.sqrt(torch.clamp(eigenvalues, min=0.0))
         )
+        rank_floor = eigenvalues.shape[0] * torch.finfo(working.dtype).eps
+        self._separates_points = bool(eigenvalues[0] > rank_floor * eigenvalues[-1])
         diagonal = torch.diagonal(working)
         squared = diagonal.unsqueeze(-1) + diagonal.unsqueeze(-2) - 2.0 * working
         diameter = torch.sqrt(torch.clamp(torch.amax(squared), min=0.0))
@@ -758,9 +785,11 @@ class MMDAmbiguitySet(AmbiguitySet):
 
         Returns:
             A tensor of shape `(...)` holding the worst-case expected loss:
-            the exact `sum(nominal * loss)` where the radius is zero, and
-            otherwise the expectation of `loss` under the interior-point
-            maximizer.
+            the exact `sum(nominal * loss)` where the radius is zero and the
+            Gram matrix is positive definite, and otherwise the expectation
+            of `loss` under the interior-point maximizer, extrapolated to a
+            zero radius of a singular Gram matrix as the class docstring
+            describes.
 
         Raises:
             ValueError: If `loss`'s trailing dimension does not match
@@ -769,7 +798,7 @@ class MMDAmbiguitySet(AmbiguitySet):
                 `loss` is not finite.
         """
         batch_shape, working = self._prepare_loss(loss)
-        if self._radius_is_zero:
+        if self._radius_is_zero and self._separates_points:
             return self._as_result(
                 self._nominal_expectation(working, batch_shape), loss
             )
@@ -805,6 +834,16 @@ class MMDAmbiguitySet(AmbiguitySet):
             )
             solution = _solve(program, tol, self.max_iter, self.check_interval)
         value = torch.sum(solution.distribution * standardized, dim=-1)
+        zero_radius = radius == 0.0
+        if not self._separates_points:
+            # Below the first support change V is linear in the radius, so
+            # the tangent at the probe reaches the zero-radius value of the
+            # null-space face exactly. The cone-dual iterate carries the
+            # slope to the duality gap; the stationarity recovery does not
+            # at a radius this small.
+            value = value - torch.where(
+                zero_radius, solved_radius * solution.cone_dual, 0.0
+            )
         if working.requires_grad or transforms_active():
             with torch.no_grad():
                 hessian = _loss_hessian(gram, nominal, solved_radius, solution)
@@ -813,8 +852,10 @@ class MMDAmbiguitySet(AmbiguitySet):
                 shift * (hessian @ shift.unsqueeze(-1)).squeeze(-1), dim=-1
             )
         value = low.squeeze(-1) + scale.squeeze(-1) * value
-        zero_radius = radius == 0.0
-        value = torch.where(zero_radius, torch.sum(nominal * working, dim=-1), value)
+        if self._separates_points:
+            value = torch.where(
+                zero_radius, torch.sum(nominal * working, dim=-1), value
+            )
         result = self._attach_parameter_gradients(
             value,
             lambda: self._parameter_sensitivities(
@@ -849,10 +890,12 @@ class MMDAmbiguitySet(AmbiguitySet):
         $p$ is $-K (q^\star - p) / \epsilon$, so the derivative is
         $\lambda^\star K (q^\star - p) / \epsilon$, shifted along the
         all-ones direction, where it is not defined, so that $\sum_i p_i\,
-        \partial V / \partial p_i = V$. At a zero radius it is the loss
-        itself, the derivative of $\langle p, \ell \rangle$, and the radius
-        derivative is the right derivative, read off a solve at a small
-        probe radius.
+        \partial V / \partial p_i = V$. At a zero radius of a positive
+        definite Gram it is the loss itself, the derivative of
+        $\langle p, \ell \rangle$; of a singular Gram it is the envelope
+        derivative of the probe solve, accurate to about the probe radius.
+        The radius derivative at a zero radius is the right derivative,
+        read off the probe solve.
 
         Args:
             loss: Detached working-precision loss of shape `(..., n)`.
@@ -874,8 +917,9 @@ class MMDAmbiguitySet(AmbiguitySet):
         gradient = gradient + (value - torch.sum(nominal * gradient, dim=-1)).unsqueeze(
             -1
         )
-        zero_radius = (radius == 0.0).unsqueeze(-1)
-        gradient = torch.where(zero_radius, loss.expand_as(gradient), gradient)
+        if self._separates_points:
+            zero_radius = (radius == 0.0).unsqueeze(-1)
+            gradient = torch.where(zero_radius, loss.expand_as(gradient), gradient)
         capped = radius >= self.radius_ceiling.to(radius.dtype)
         radius_gradient = torch.where(
             capped, torch.zeros_like(rate), scale * solution.radius_dual

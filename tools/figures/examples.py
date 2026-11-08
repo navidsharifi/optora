@@ -42,6 +42,9 @@ SCRIPT_FIGURES: dict[str, tuple[str, ...]] = {
     "09_group_dro_training.py": ("09_group_dro_training",),
     "10_cvar_from_phi_divergence.py": ("10_cvar_from_phi_divergence",),
     "11_distributionally_robust_regret.py": ("11_distributionally_robust_regret",),
+    "12_sinkhorn_relaxation_of_wasserstein_dro.py": (
+        "12_sinkhorn_relaxation_of_wasserstein_dro",
+    ),
 }
 
 

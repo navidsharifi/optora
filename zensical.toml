@@ -81,6 +81,7 @@ nav = [
     { "Group DRO under a spurious correlation" = "examples/group_dro_training.md" },
     { "Recovering CVaR from a phi-divergence ball" = "examples/cvar_from_phi_divergence.md" },
     { "Robust regret against robust loss" = "examples/distributionally_robust_regret.md" },
+    { "Sinkhorn relaxation of Wasserstein DRO" = "examples/sinkhorn_relaxation_of_wasserstein_dro.md" },
   ] },
   # BEGIN GENERATED API NAVIGATION
   { "API reference" = [
