@@ -482,7 +482,8 @@ def chi_square_worst_case(nominal: Array, loss: Array, radius: float) -> float:
 def mmd_worst_case(nominal: Array, gram: Array, loss: Array, radius: float) -> float:
     r"""Solve the MMD worst case as a second-order cone program with Clarabel.
 
-    With $K = F F^\top$ factored by an eigenvalue decomposition, the primal
+    With $K = F F^\top$ factored by an eigenvalue decomposition truncated at
+    its numerical rank, the primal
 
     $$
     \max_q \; \mathrm{loss}^\top q
@@ -522,7 +523,15 @@ def mmd_worst_case(nominal: Array, gram: Array, loss: Array, radius: float) -> f
         return low
     standardized = (loss - low) / spread
     eigenvalues, vectors = np.linalg.eigh(0.5 * (gram + gram.T))
-    factor = vectors * np.sqrt(np.clip(eigenvalues, 0.0, None))
+    # A null eigenvalue of a singular Gram comes back from LAPACK as a tiny
+    # number of either sign, depending on the BLAS build. Clipping alone keeps
+    # a near-null column whenever that number is positive, and at a radius of
+    # zero the cone then pins the mass that the null space should set free.
+    # Truncating at the relative rank floor `MMDAmbiguitySet` uses drops it.
+    rank_floor = support_size * np.finfo(np.float64).eps * eigenvalues[-1]
+    kept = eigenvalues > rank_floor
+    factor = vectors[:, kept] * np.sqrt(eigenvalues[kept])
+    rank = int(kept.sum())
 
     constraints = sparse.vstack(
         [
@@ -538,7 +547,7 @@ def mmd_worst_case(nominal: Array, gram: Array, loss: Array, radius: float) -> f
     cones = [
         clarabel.ZeroConeT(1),
         clarabel.NonnegativeConeT(support_size),
-        clarabel.SecondOrderConeT(support_size + 1),
+        clarabel.SecondOrderConeT(rank + 1),
     ]
     settings = clarabel.DefaultSettings()
     settings.verbose = False
