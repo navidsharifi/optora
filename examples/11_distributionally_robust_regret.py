@@ -1,8 +1,8 @@
 r"""Distributionally robust regret against distributionally robust loss.
 
 Wasserstein DRO guards against the worst distribution in a ball around the
-sample, and the price is conservatism: the adversary is credited for every
-unit of loss it can create, including loss that no decision could have
+sample, and this makes it conservative. The worst case counts every unit of
+loss the adversary can create, including loss that no decision could have
 avoided. Fiechtner and Blanchet (2025) replace the worst-case loss by the
 worst-case regret. The regret of a decision theta under a distribution P is
 its expected loss in excess of the best decision for that distribution,
@@ -12,59 +12,64 @@ its expected loss in excess of the best decision for that distribution,
 and distributionally robust regret optimization (DRRO) minimizes
 sup_P R(theta, P) over the Wasserstein ball. The benchmark beta is chosen
 knowing P but before xi is drawn, which the paper calls ex-ante regret.
-Because the inner minimum is itself a supremum of linear functionals,
+The negative of the inner minimum is a supremum of linear functionals of
+P, so
 
     sup_P R(theta, P) = sup_beta sup_P E_P[l(theta, xi) - l(beta, xi)],
 
 and the inner supremum is a worst-case expectation of an ordinary
-per-scenario loss, the difference l(theta, .) - l(beta, .). That is what
+per-scenario loss, the difference l(theta, .) - l(beta, .). This is what
 `WassersteinAmbiguitySet.worst_case_expectation` computes, so the only new
 ingredient is the outer maximization over the benchmark.
 
-The paper's two main results are what this script measures. With a smooth
-loss and a unique empirical-risk minimizer theta_0, the DRRO decision is
+This script measures the paper's two main results. With a smooth loss and
+a unique empirical-risk minimizer theta_0, the DRRO decision is
 theta_0 + o(delta) and the robust regret is kappa delta^2 + o(delta^2),
-whereas the Wasserstein DRO decision moves by O(delta) (Theorem 3). For a
-strictly convex quadratic loss the empirical-risk decision is DRRO-optimal
-at every radius (Theorem 4). Both are checked on a sample of forty
-log-normal demands, with three losses:
+whereas the Wasserstein DRO decision typically moves by O(delta)
+(Theorem 3). For a strictly convex quadratic loss and a type-p ball with
+p >= 2, the empirical-risk decision is DRRO-optimal at every radius
+(Theorem 4). Both are checked on a sample of forty log-normal demands, with
+three losses.
 
-* a quadratic loss (theta - xi)^2, the Theorem 4 case, where the regret
-  under P is (theta - E_P[xi])^2 and the robust regret has a closed form;
-* the LINEX loss exp(a(theta - xi)) - a(theta - xi) - 1 (Varian 1975), a
-  smooth, asymmetric loss outside the quadratic family, for Theorem 3;
-* the newsvendor loss b theta - s min(theta, xi) of the paper's own
-  example, piecewise linear, where the smoothness assumption fails and the
-  decisions move in steps between scenarios.
+* The quadratic loss (theta - xi)^2 is the Theorem 4 case. The regret under
+  P is (theta - E_P[xi])^2, and the robust regret has a closed form.
+* The LINEX loss exp(a(theta - xi)) - a(theta - xi) - 1 (Varian 1975) is a
+  smooth, asymmetric loss outside the quadratic family, for Theorem 3.
+* The newsvendor loss b theta - s min(theta, xi) of the paper's own example
+  is piecewise linear, so the smoothness assumption fails and the decisions
+  do not move smoothly with the radius.
 
 The script also tests the simpler per-scenario (ex-post) regret,
-l(theta, xi) - min_beta l(beta, xi), because it is a plain wrapper around
-the loss and plugs into `MinimaxSolver` unchanged. For the first two
-losses every scenario can be fit exactly, the hindsight term is zero, and
-ex-post DRRO is Wasserstein DRO under another name. For the newsvendor the
-hindsight is -(s - b) xi, and subtracting it turns the profit form of the
-loss into the classical cost form b (theta - xi)_+ + (s - b)(xi - theta)_+.
+l(theta, xi) - min_beta l(beta, xi), because it is a wrapper around the
+loss and goes into `MinimaxSolver` unchanged. For the first two losses
+every scenario can be fit exactly, the hindsight term is zero, and ex-post
+DRRO coincides with Wasserstein DRO. For the newsvendor the hindsight term
+is -(s - b) xi, and subtracting it turns the profit form of the loss into
+the classical cost form b (theta - xi)_+ + (s - b)(xi - theta)_+.
 
-Ground costs. The estimation losses use |xi - xi'|, under which the
+The estimation losses use the ground cost |xi - xi'|, under which the
 reachable means of the ball form the interval [mean - delta, mean + delta]
-and the quadratic result is exact. The newsvendor uses (xi - xi')^2, which
-makes many short moves cheaper than one long one; with the absolute cost
-the adversary's best moves shuffle mass among low-demand scenarios without
-crossing the order quantity, and no decision changes until the radius is
-large.
+and the quadratic result is exact. Optora's ball reweights the fixed
+sample, unlike the balls of the paper, and on this support the symmetric
+interval gives the Theorem 4 conclusion directly. The newsvendor uses the
+ground cost (xi - xi')^2, which penalizes long moves more than
+proportionally. With the absolute cost the adversary's best moves shift
+mass among low-demand scenarios without crossing the order quantity, and no
+decision changes until the radius is large.
 
-Solvers. Every decision is scalar and every objective is convex in it, so
-each outer problem is solved by bisection on the sign of its derivative,
-which is exact to floating-point precision even at a kink. The derivative
-of a worst-case expectation is the expected derivative of the loss under
-the worst-case distribution, which autograd returns. The benchmark
-maximization starts from the best grid point on either side of theta and
-alternates best responses: the adversary answers beta with its worst-case
-distribution, beta answers with the empirical-risk minimizer under it.
-For the newsvendor the candidates are the scenarios themselves, which is
-exact for a piecewise-linear loss. Each inner solution is verified against
-a dense benchmark grid, and the Wasserstein DRO and ex-post decisions are
-cross-checked against `MinimaxSolver`.
+Every decision is scalar and every objective is convex in it, so each
+outer problem is solved by bisection on the sign of its derivative. This
+stays accurate to the final bracket width, about 1e-10 here, even at a
+kink. The derivative of a worst-case expectation is the expected
+derivative of the loss under the worst-case distribution, which autograd
+returns. The benchmark maximization starts from the best grid point on
+either side of theta and then alternates best responses. The adversary
+answers beta with its worst-case distribution, and beta answers with the
+empirical-risk minimizer under it. For the newsvendor the candidates are
+the scenarios themselves, which is exact for a piecewise-linear loss. Each
+inner solution is compared with a dense benchmark grid, and the
+Wasserstein DRO and ex-post decisions are cross-checked against
+`MinimaxSolver`.
 
 References:
     Lukas-Benedikt Fiechtner and Jose Blanchet, "Wasserstein
@@ -125,13 +130,13 @@ def linex(theta: torch.Tensor, demand: torch.Tensor) -> torch.Tensor:
 
 
 def newsvendor(theta: torch.Tensor, demand: torch.Tensor) -> torch.Tensor:
-    """Newsvendor loss in profit form: order cost minus sales revenue."""
+    """Newsvendor loss in profit form, the order cost minus the revenue."""
     return ORDER_COST * theta - SALE_PRICE * torch.minimum(theta, demand)
 
 
 @dataclass(frozen=True)
 class Problem:
-    """One decision problem: a loss, its ground cost and the radii to sweep.
+    """One decision problem, given by a loss, its ground cost and its radii.
 
     Attributes:
         name: Label used in the output and the figure.
@@ -180,8 +185,8 @@ def regret_loss_fn(
     """Wrap a per-scenario loss into its ex-post regret, for `MinimaxProblem`.
 
     The hindsight term `min_beta l(beta, xi_i)` does not depend on the
-    decision, so the wrapper only shifts each scenario; what it changes is
-    where the adversary finds it worthwhile to move mass.
+    decision, so the wrapper only shifts each scenario. What the shift
+    changes is where the adversary gains from moving mass.
     """
     return lambda theta: loss_fn(theta) - hindsight
 
@@ -199,7 +204,8 @@ def argmin_by_bisection(
             objective at that point, same shape.
         lower: Lower ends of the brackets.
         upper: Upper ends of the brackets, same shape as `lower`.
-        steps: Halvings; forty take a unit bracket below $10^{-12}$.
+        steps: Number of halvings. Forty of them shrink a unit bracket
+            below $10^{-12}$.
 
     Returns:
         The bracket midpoints after `steps` halvings.
@@ -285,11 +291,11 @@ def robust_regret(
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     r"""Compute the ex-ante robust regret of `theta` at every radius.
 
-    Evaluates $\sup_\beta \sup_P \mathbb{E}_P[\ell(\theta) - \ell(\beta)]$:
-    the inner supremum is a worst-case expectation of the loss difference,
-    the outer one starts from the best candidate in `benchmarks` on either
-    side of `theta` and alternates best responses until the pair
-    $(\beta, P)$ is stationary. Each round can only raise the value.
+    Evaluates $\sup_\beta \sup_P \mathbb{E}_P[\ell(\theta) - \ell(\beta)]$.
+    The inner supremum is a worst-case expectation of the loss difference.
+    The outer one starts from the best candidate in `benchmarks` on either
+    side of `theta` and then runs `rounds` rounds of best responses. Each
+    round can only raise the value.
 
     Args:
         ambiguity_set: Wasserstein ball with one radius per entry of
@@ -398,7 +404,7 @@ def cross_check_minimax(
     where the two policies have moved well away from the empirical-risk
     decision. Both objectives are piecewise linear in the decision, so a
     fixed step oscillates around the minimizer by about `step_size` times
-    the subgradient; the returned gap is read against that.
+    the subgradient, and the returned gap should be read against that.
 
     Returns:
         The larger of the two differences from the bisection solutions.

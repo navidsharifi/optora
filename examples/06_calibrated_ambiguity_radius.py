@@ -1,52 +1,55 @@
 """Calibrating the ambiguity radius from finite-sample theory.
 
-Every DRO example has to pick a radius, and picking one by hand is the
-weakest part of the whole pipeline: too small and the robust value is just
-the empirical mean, too large and it saturates at the worst scenario.
-Finite-sample theory removes the choice. For the chi-square ambiguity set
-built on an empirical distribution of `n` points, the profile divergence
+Every DRO example has to choose a radius, and a radius chosen by hand is
+hard to justify. If it is too small, the robust value equals the empirical
+mean, and if it is too large, it saturates at the worst scenario.
+Finite-sample theory gives a principled choice. For the chi-square
+ambiguity set built on an empirical distribution of `n` points, the
+profile divergence
 
     T_n(mu) = min { D_chi2(q || nominal) : E_q[Z] = mu }
 
 evaluated at the *true* mean satisfies `n * T_n(mu_true) -> chi2_1` in
-distribution, which is the empirical-likelihood / DRO calibration result of
-Duchi and Namkoong. So setting
+distribution, which is the empirical-likelihood calibration result used by
+Duchi and Namkoong for DRO. Setting
 
     radius(n, alpha) = chi2_{1, 1 - alpha} / n
 
-makes the ambiguity set an asymptotically valid `(1 - alpha)` confidence
-region for the true distribution, and the interval it induces on the mean,
+therefore makes the ambiguity set an asymptotically valid `(1 - alpha)`
+confidence region for the true distribution, and the interval it induces
+on the mean,
 
     [ -sup_q E_q[-Z] , sup_q E_q[Z] ]
 
-an asymptotically valid `(1 - alpha)` confidence interval. Nothing here is
-a new solver: `ChiSquareAmbiguitySet` is used exactly as it ships, and the
-radius comes from `optora.dro.chi_square_radius`.
+an asymptotically valid `(1 - alpha)` confidence interval. The script adds
+no new solver. It uses `ChiSquareAmbiguitySet` as it ships, with the radius
+from `optora.dro.chi_square_radius`.
 
-This script measures whether that promise holds at finite `n`. It draws
-many independent samples from a standard exponential (mean 1, variance 1,
-skewness 2 — deliberately far from Gaussian), builds the calibrated
-interval for each one, and reports the fraction of intervals that actually
-cover the true mean, against the nominal confidence and against `n`.
+The script measures how close this guarantee is to exact at finite `n`. It
+draws many independent samples from a standard exponential, which has mean
+1, variance 1 and skewness 2 and so is far from Gaussian. It builds the
+calibrated interval for each sample and reports the fraction of intervals
+that cover the true mean, against the nominal confidence and against `n`.
 
-Two things are worth watching:
+The output shows two effects.
 
 * Coverage is *below* nominal at small `n`. The calibration is asymptotic,
-  and skewness is exactly what the chi-square limit ignores.
-* The dual solve is not redundant. In the interior regime the worst-case
+  and the chi-square limit does not account for skewness.
+* The dual solve is needed. In the interior regime the worst-case
   expectation equals `mean + sqrt(radius * variance)`, but a large radius
-  drives some `q_i` to zero, where that formula overstates the worst case
+  drives some `q_i` to zero. There the formula overstates the worst case,
   and only the dual is correct. The printed `worst closed-form gap` column
-  is the most negative such discrepancy over the replications: it is solver
-  noise everywhere except at small `n` and high confidence, which is
-  precisely the regime where the calibration is under the most strain.
+  is the most negative such discrepancy over the replications. It is at
+  the level of floating-point rounding except at small `n` and high
+  confidence, which is also where the coverage error is largest.
 
 References:
     John C. Duchi and Hongseok Namkoong, "Learning Models with Uniform
     Performance via Distributionally Robust Optimization", Annals of
     Statistics 49(3), 2021.
     Rui Gao, "Finite-Sample Guarantees for Wasserstein Distributionally
-    Robust Optimization", Operations Research 73(4), 2025.
+    Robust Optimization: Breaking the Curse of Dimensionality", Operations
+    Research, 2025.
 
 Run:
     python examples/06_calibrated_ambiguity_radius.py
@@ -91,10 +94,10 @@ def build_ambiguity_sets(
 ) -> tuple[ChiSquareAmbiguitySet, ChiSquareAmbiguitySet]:
     """Build the two ambiguity sets that produce a two-sided mean interval.
 
-    The two are the same set: one is applied to the loss and the other to
-    its negation, which is what turns a one-sided worst case into a
-    two-sided interval. They are built separately only so the caller can
-    name them.
+    The two are the same set. One is applied to the loss and the other to
+    its negation, which turns a one-sided worst case into a two-sided
+    interval. They are built separately only so that the caller can name
+    them.
 
     Args:
         nominal: Uniform empirical distribution over the support.
@@ -115,8 +118,8 @@ def main() -> None:
     closed_form_gap_by_setting: dict[tuple[int, float], float] = {}
 
     for num_samples in SAMPLE_SIZES:
-        # Common random numbers across confidence levels: the calibrated sets
-        # are then nested by construction, so measured coverage is exactly
+        # Common random numbers across confidence levels make the calibrated
+        # sets nested by construction, so measured coverage is exactly
         # monotone in the nominal level rather than monotone up to noise.
         samples = exponential_samples(num_samples, generator)
         nominal = torch.full((num_samples,), 1.0 / num_samples, dtype=torch.float64)
@@ -124,9 +127,9 @@ def main() -> None:
         sample_variance = torch.var(samples, dim=-1, unbiased=False)
 
         # One batched solve per side covers every confidence level and every
-        # replication: the radii form a `(levels, 1)` column that broadcasts
-        # against the `(replications,)` batch of losses, so each side of the
-        # interval comes back as a `(levels, replications)` tensor.
+        # replication. The radii form a `(levels, 1)` column that broadcasts
+        # against the `(replications, n)` batch of losses, so each side of
+        # the interval comes back as a `(levels, replications)` tensor.
         radii = torch.tensor(
             [chi_square_radius(num_samples, level) for level in CONFIDENCE_LEVELS],
             dtype=torch.float64,
@@ -174,8 +177,8 @@ def main() -> None:
         print(f"  n={num_samples:<5} {error:.3f}")
     assert worst_error[SAMPLE_SIZES[-1]] < worst_error[SAMPLE_SIZES[0]]
 
-    # The boundary regime has to bind somewhere, or the dual solve would be
-    # an expensive way of evaluating `mean + sqrt(radius * variance)`.
+    # The boundary regime must be active in at least one setting. Otherwise
+    # the dual solve would only reproduce `mean + sqrt(radius * variance)`.
     assert closed_form_gap_by_setting[SAMPLE_SIZES[0], CONFIDENCE_LEVELS[-1]] < -1e-4
 
     _assert_calibration_matches_normal_interval()
@@ -221,9 +224,9 @@ def _assert_calibration_matches_normal_interval() -> None:
     In the interior regime the chi-square worst-case expectation is
     `mean + sqrt(radius * variance)`, so the calibrated radius
     `z_{1-alpha/2}^2 / n` must reproduce the half-width
-    `z_{1-alpha/2} * std / sqrt(n)` exactly. This is the algebraic identity
-    the whole experiment rests on, checked against the solver rather than
-    against itself.
+    `z_{1-alpha/2} * std / sqrt(n)` exactly. The experiment relies on this
+    identity, so it is checked against the solver rather than against the
+    algebra.
     """
     num_samples = 160
     confidence = 0.95

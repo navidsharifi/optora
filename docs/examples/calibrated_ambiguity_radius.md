@@ -1,26 +1,26 @@
 # Calibrating the ambiguity radius
 
-Every other page in this section quietly cheats. They sweep the radius,
-compare radii, or pick one that makes the plot legible — and none of them
-answers the question a reader actually has the first time they reach for
-DRO: *what radius should I use?*
+The other pages in this section sweep the radius, compare several radii, or
+pick one that makes the plot easy to read. None of them answers the
+question a reader has the first time they use DRO, namely how to choose
+the radius.
 
-Left to intuition, the answer is bad in both directions. Too small and the
-robust value collapses onto the empirical mean, so you have paid for a
-nested worst-case solve and bought nothing. Too large and it saturates at
-$\max_i \ell_i$, which is a statement about your worst observation rather
-than about your problem. Neither failure announces itself.
+A radius chosen by intuition can fail in both directions. If it is too
+small, the robust value collapses onto the empirical mean, and the nested
+worst-case solve changes nothing. If it is too large, the robust value
+saturates at $\max_i \ell_i$, which describes the worst observation rather
+than the problem. Neither failure is visible from the robust value alone.
 
-Finite-sample theory answers it properly. If the nominal distribution is an
-empirical measure over $n$ observations, then the radius is not a taste
-parameter at all — it is a *quantile*, and the ambiguity set it defines is
-a confidence region.
+Finite-sample theory gives a principled answer. If the nominal
+distribution is an empirical measure over $n$ observations, the radius can
+be set as a *quantile* of a limit distribution, and the ambiguity set it
+defines is then a confidence region.
 
 ## The calibration
 
 Fix a functional of interest, here the mean $\mu = \mathbb{E}[Z]$, and
 define the profile divergence of a candidate value $\mu$ against the
-empirical distribution $\hat{P}_n$:
+empirical distribution $\hat{P}_n$ as
 
 $$
 T_n(\mu) \;=\; \min_{q}
@@ -29,18 +29,18 @@ T_n(\mu) \;=\; \min_{q}
 $$
 
 This is the empirical-likelihood statistic with the $\chi^2$-divergence in
-place of the log-likelihood, and it obeys the same limit theorem: evaluated
-at the *true* mean $\mu_0$,
+place of the log-likelihood, and it obeys the same limit theorem. Evaluated
+at the *true* mean $\mu_0$, it satisfies
 
 $$
 n \, T_n(\mu_0) \;\xrightarrow{\ d\ }\; \chi^2_1 .
 $$
 
-Duchi and Namkoong[^dn] build their statistical theory of $\phi$-divergence
-DRO on exactly this expansion — the robust objective is an asymptotically
-exact upper confidence bound on the true risk, and its width is the
-variance term a $\chi^2$ ball generates. Read backwards, the theorem is a
-recipe. Choosing
+Duchi and Namkoong[^dn] base their statistical theory of $\phi$-divergence
+DRO on this expansion. The robust objective is an asymptotically exact
+upper confidence bound on the true risk, and its width is the variance term
+that a $\chi^2$ ball generates. Read in reverse, the theorem tells us how
+to set the radius. Choosing
 
 $$
 \rho_n(\alpha) \;=\; \frac{\chi^2_{1,\,1-\alpha}}{n}
@@ -55,24 +55,26 @@ $$
 \;,\;\; \sup_{q \in \mathcal{U}} \mathbb{E}_q[Z] \;\Big],
 $$
 
-is an asymptotically valid $(1-\alpha)$ confidence interval. The radius has
-stopped being a knob and become a confidence level.
+is an asymptotically valid $(1-\alpha)$ confidence interval. The radius is
+then determined by the confidence level instead of being a free parameter.
 
-The $\chi^2$ geometry is the one where this is cleanest, because the
-divergence itself is the test statistic, but the same expansion calibrates
-every $\varphi$-divergence smooth at one: the radius picks up a factor
-$\varphi''(1)/2$, which is $1$ for $\chi^2$ and $\tfrac{1}{2}$ for KL. The
-Wasserstein geometry admits the same programme. With the quadratic cost
-$\lVert x - y \rVert_2^2$ on the input space, Blanchet, Kang and
-Murthy[^bkm] show that the robust Wasserstein profile of the true risk is
-again $\chi^2_1$ in the limit, up to the scale
+The $\chi^2$ geometry is the simplest case, because the divergence itself
+is the test statistic. The same expansion calibrates every
+$\varphi$-divergence whose generator is smooth at one, with an extra factor
+$\varphi''(1)/2$ in the radius, which is $1$ for $\chi^2$ and $\tfrac{1}{2}$
+for KL. The Wasserstein geometry admits the same approach. With the
+quadratic cost $\lVert x - y \rVert_2^2$ on the input space, Blanchet, Kang
+and Murthy[^bkm] show that the robust Wasserstein profile of the true risk
+again converges to $\chi^2_1$, up to the scale
 $\mathrm{Var}(\ell) / \mathbb{E}\lVert \nabla_x \ell \rVert_2^2$, so the
-radius again shrinks like $1/n$ rather than at the dimension-dependent
-concentration rate a uniform guarantee needs[^gao].
+radius again shrinks like $1/n$. Classical finite-sample guarantees for
+Wasserstein balls instead tie the radius to the concentration rate of the
+empirical measure, which degrades with the dimension[^gao].
 
 ## The helpers
 
-`optora.dro` ships the calibration as plain functions, one per geometry:
+`optora.dro` provides the calibration as plain functions, one per
+geometry.
 
 | Function | Radius | Calibrates |
 | --- | --- | --- |
@@ -83,19 +85,20 @@ concentration rate a uniform guarantee needs[^gao].
 
 `confidence` is the coverage of the two-sided interval. Pass
 `one_sided=True` when only the upper bound
-$\sup_{q} \mathbb{E}_q[\ell] \ge \mathbb{E}_{P_0}[\ell]$ matters; it uses
-$z_{1-\alpha}^2$ in place of $z_{1-\alpha/2}^2$.
+$\sup_{q} \mathbb{E}_q[\ell] \ge \mathbb{E}_{P_0}[\ell]$ matters. The
+helpers then use $z_{1-\alpha}^2$ in place of $z_{1-\alpha/2}^2$.
 
 !!! tip "Covering a $d$-dimensional parameter"
 
     The three $\varphi$-divergence helpers accept `degrees_of_freedom=d`,
     which replaces $\chi^2_{1,1-\alpha}$ by $\chi^2_{d,1-\alpha}$. The ball
-    is then a confidence region for a $d$-dimensional parameter at once,
-    such as every component of a vector mean, or the minimizer of a risk
-    over $d$ parameters[^dn]. A $d = 1$ radius used for a vector parameter
-    under-covers: for $d = 3$ at a nominal 95%, the region covers the true
-    mean only about 72% of the time. `one_sided` is defined for $d = 1$
-    only.
+    is then a simultaneous confidence region for a $d$-dimensional
+    parameter, such as every component of a vector mean, or the minimizer
+    of a risk over $d$ parameters[^dn]. A $d = 1$ radius used for a vector
+    parameter under-covers. For $d = 3$ at a nominal 95%, the region covers
+    the true mean only about 72% of the time, because
+    $\Pr(\chi^2_3 \le \chi^2_{1,0.95}) \approx 0.72$. `one_sided` is
+    defined for $d = 1$ only.
 
 !!! warning "Wasserstein on a finite support"
 
@@ -110,17 +113,17 @@ $z_{1-\alpha}^2$ in place of $z_{1-\alpha/2}^2$.
     $D_{\chi^2}(q \| p) = \sum_i (q_i - p_i)^2 / p_i$, generated by
     $\phi(t) = (t-1)^2$. Duchi and Namkoong use
     $\phi(t) = \tfrac{1}{2}(t-1)^2$, so their radius is *half* of the one
-    written above. Converting a radius between papers is the single easiest
-    way to be silently wrong by $\sqrt{2}$ in every interval you report.
+    written above. A radius copied from a paper with the other
+    normalization changes the half-width of every reported interval by a
+    factor of $\sqrt{2}$.
 
-## The sanity check it has to pass
+## A sanity check against the normal interval
 
-The calibration is only believable if it reproduces something everybody
-already trusts. It does, and immediately. In the interior regime — no
-candidate $q_i$ pushed to zero — the $\chi^2$ worst-case expectation has
-the closed form $\bar{Z} + \sqrt{\rho \cdot \mathrm{Var}(Z)}$, so
-substituting $\rho_n(\alpha)$ and using
-$\chi^2_{1,1-\alpha} = z_{1-\alpha/2}^2$ gives
+The calibration should reproduce a result that is already well
+established, and it does. In the interior regime, where no candidate $q_i$
+is pushed to zero, the $\chi^2$ worst-case expectation has the closed form
+$\bar{Z} + \sqrt{\rho \cdot \mathrm{Var}(Z)}$. Substituting
+$\rho_n(\alpha)$ and using $\chi^2_{1,1-\alpha} = z_{1-\alpha/2}^2$ gives
 
 $$
 \sup_{q \in \mathcal{U}} \mathbb{E}_q[Z]
@@ -128,8 +131,9 @@ $$
 \;=\; \bar{Z} + z_{1-\alpha/2} \, \frac{s_n}{\sqrt{n}} ,
 $$
 
-the textbook normal interval, exactly. The script checks this against the
-solver rather than against the algebra, and so does
+which is exactly the textbook normal interval, with $s_n^2$ the plug-in
+variance. The script checks this identity against the solver rather than
+against the algebra, and so does
 `tests/dro/test_phi_dro.py::test_chi_square_calibrated_radius_gives_the_normal_interval`.
 
 !!! tip "No `scipy` required"
@@ -143,15 +147,16 @@ solver rather than against the algebra, and so does
 
 ## Measuring the coverage
 
-An asymptotic guarantee is a promise about $n \to \infty$, and the
-interesting question is how badly it is broken at the $n$ you actually
-have. So the script runs the experiment the theorem describes: draw 200
-independent samples from a standard exponential, build the calibrated
-interval for each, and count how often it contains the true mean of $1$.
+An asymptotic guarantee holds as $n \to \infty$, so the relevant question
+is how far it is from exact at the sample sizes we have. The script runs
+the experiment the theorem describes. It draws 200 independent samples
+from a standard exponential, builds the calibrated interval for each, and
+counts how often the interval contains the true mean of $1$.
 
-The exponential is chosen to be awkward. It has skewness $2$, and skewness
-is precisely what the $\chi^2$ limit throws away, so any under-coverage
-should be visible rather than buried under Monte Carlo noise.
+The exponential is a deliberately difficult case. Its skewness is $2$, and
+the $\chi^2$ limit is a first-order approximation that does not account for
+skewness, so under-coverage should be large enough to see above the Monte
+Carlo noise.
 
 | $1-\alpha$ | $n = 10$ | $n = 40$ | $n = 160$ |
 | --- | --- | --- | --- |
@@ -161,36 +166,37 @@ should be visible rather than buried under Monte Carlo noise.
 | 0.95 | 0.855 | 0.880 | 0.935 |
 | 0.99 | 0.920 | 0.945 | 0.975 |
 
-The pattern is the honest one: coverage is systematically *below* nominal,
-and the worst deviation shrinks from $0.110$ at $n = 10$ to $0.035$ at
-$n = 160$. A calibrated radius is not an exact one — it is a radius whose
-error you can name and watch decay.
+Coverage is below nominal in every cell except $n = 40$ at
+$1-\alpha = 0.50$, and the largest deviation shrinks from $0.110$ at
+$n = 10$ to $0.035$ at $n = 160$. A calibrated radius is therefore not
+exact, but its error can be measured and decreases as $n$ grows.
 
 !!! note "Common random numbers"
 
     Each sample size draws its replications once and reuses them for every
     confidence level. The calibrated sets are nested in $\alpha$, so the
-    measured coverage curve is *exactly* monotone in the nominal level
-    rather than monotone up to noise — which is why the script can assert
-    monotonicity instead of merely plotting it.
+    measured coverage is *exactly* monotone in the nominal level rather
+    than monotone up to noise. This is why the script can assert
+    monotonicity instead of only plotting it.
 
-## Where the closed form gives up
+## Where the closed form fails
 
-There is a reason this page asks the ambiguity set instead of evaluating
-$\bar{Z} + \sqrt{\rho\, s_n^2}$ directly. That formula is the *interior*
-optimum: it corresponds to the worst-case distribution
+The script evaluates the ambiguity set instead of computing
+$\bar{Z} + \sqrt{\rho\, s_n^2}$ directly, because that formula is only the
+*interior* optimum. It corresponds to the worst-case distribution
 
 $$
-q_i \;=\; \hat{p}_i \left( 1 + \frac{\ell_i - \bar{Z}}{s_n} \sqrt{\rho} \right),
+q_i \;=\; \hat{p}_i \left( 1 + \frac{Z_i - \bar{Z}}{s_n} \sqrt{\rho} \right),
 $$
 
-which stops being a distribution as soon as $\rho$ is large enough to drive
-some $q_i$ negative. Past that point the true worst case is *smaller* than
-the closed form, because the maximizer truncates to
-$q \propto \hat{p}\,(\ell - c)_+$ and the closed form does not.
+which stops being a distribution once $\rho$ is large enough to drive some
+$q_i$ negative. Beyond that point the true worst case is *smaller* than the
+closed form, because the maximizer is truncated to
+$q \propto \hat{p}\,(Z - c)_+$ and the closed form ignores the constraint
+$q \ge 0$.
 
 The script prints the most negative discrepancy over all replications, and
-it is a clean indicator function:
+the discrepancy is clearly nonzero in only two cells.
 
 | $1-\alpha$ | $n = 10$ | $n = 40$ | $n = 160$ |
 | --- | --- | --- | --- |
@@ -199,76 +205,79 @@ it is a clean indicator function:
 | 0.99 | $-2.1 \times 10^{-2}$ | $\approx 0$ | $\approx 0$ |
 
 Entries marked $\approx 0$ are floating-point rounding, a few times
-$10^{-16}$: the set is exact to working precision there and simply
-reproduces the closed form. The two negative ones are real: at
-$n = 10$ and high confidence the calibrated radius is large enough
-($\rho = 0.38$ and $\rho = 0.66$) to hit the boundary of the simplex. That
-is not a coincidence — it is the same small-$n$, high-confidence corner
-where the coverage table is worst. The regime in which the asymptotics
-strain is the regime in which the closed form is also wrong, and
-[`ChiSquareAmbiguitySet`](../api/dro/phi_dro.md) handles both without being
-told which one it is in.
+$10^{-15}$, so in those cells the set reproduces the closed form to working
+precision. The two negative entries are not rounding. At $n = 10$ and high
+confidence the calibrated radius ($\rho = 0.38$ and $\rho = 0.66$) is large
+enough to reach the boundary of the simplex. This is the same small-$n$,
+high-confidence region where the coverage table is worst. Where the
+asymptotic approximation is least accurate, the closed form is also wrong,
+and [`ChiSquareAmbiguitySet`](../api/dro/phi_dro.md) handles both regimes
+without being told which one applies.
 
 ## Reading the figure
 
-- **Left**: empirical coverage against nominal confidence, one curve per
-  sample size, with the diagonal marking exact calibration. Every curve
-  sits below the diagonal and climbs toward it as $n$ grows.
-- **Right**: the signed error, coverage minus nominal, against sample size
-  on a log axis. It trends to zero. It does not do so monotonically at
-  every level — with 200 replications the standard error of a coverage
-  estimate near $0.9$ is about $0.02$, which is exactly the size of the
-  wobble you can see at $1-\alpha = 0.50$.
+- The **left** panel plots empirical coverage against nominal confidence,
+  one curve per sample size, with the diagonal marking exact calibration.
+  The curves lie below the diagonal, apart from the single point at
+  $n = 40$ and $1-\alpha = 0.50$, and approach it as $n$ grows.
+- The **right** panel plots the signed error, coverage minus nominal,
+  against sample size on a log axis. The error tends to zero, but not
+  monotonically at every level. With 200 replications the standard error
+  of a coverage estimate $c$ is $\sqrt{c(1-c)/200}$, which is about $0.02$
+  near $0.9$ and $0.035$ near $0.5$. The non-monotone step at
+  $1-\alpha = 0.50$ is within this Monte Carlo noise.
 
 !!! note "One batched solve per side"
 
     Coverage is a Monte Carlo quantity, so the experiment needs
     $3 \times 5 \times 200 \times 2 = 6000$ worst-case solves. They are not
-    run one by one: `worst_case_expectation` accepts a loss of shape
+    run one at a time. `worst_case_expectation` accepts a loss of shape
     $(\dots, n)$ and a tensor radius that broadcasts against the batch, so
     the five confidence levels form a $(5, 1)$ column of radii and the 200
     replications a $(200, n)$ loss, and one call returns all
-    $5 \times 200$ values. Each sample size therefore costs two calls, one
-    per side of the interval, and the whole script runs in about ten
-    seconds.
+    $5 \times 200$ values. Each sample size therefore needs two calls, one
+    per side of the interval, and the whole experiment takes well under a
+    second on a CPU.
 
     Every element of that batch is bisected independently through
-    elementwise `torch.where`, to the same fixed depth, so the extreme
-    radii are resolved exactly as well as the mild ones. There is no shared
-    starting point to choose and no iteration budget that could leave one
-    corner of the grid short of its optimum, which matters here because a
-    few $10^{-4}$ of error is enough to move a coverage estimate.
+    elementwise reductions, to the same fixed depth set by the dtype, so
+    the extreme radii are resolved as accurately as the mild ones. There is
+    no shared starting point and no iteration budget that could leave part
+    of the grid short of its optimum. This matters here because an error of
+    a few $10^{-4}$ is enough to change a coverage estimate.
 
 ## Coverage as the sample grows
 
-The animation runs the experiment on a nested sample: one draw of 200
-replications, of which each frame uses the first $n$ observations. The
-left panel shows the 90% intervals of the first fifty replications,
-which shrink like $1/\sqrt{n}$ and recentre as the sample grows, with
-the misses in a second colour. The middle panel is the coverage curve at
-the current $n$ against the diagonal, and the right panel accumulates
-the signed error at five levels. Consecutive frames share their
-observations, so the curves are smoother than independent samples would
-make them; the standard error of about $0.02$ is still visible as
-wobble.
+The animation runs the experiment on a nested sample. It makes one draw of
+200 replications, and each frame uses the first $n$ observations of every
+replication. The left panel shows the 90% intervals of the first fifty
+replications, which shrink like $1/\sqrt{n}$ and recentre as the sample
+grows, with the intervals that miss the true mean in a second colour. The
+middle panel shows the coverage curve at the current $n$ against the
+diagonal, and the right panel accumulates the signed error at five levels.
+Consecutive frames share their observations, so the curves are smoother
+than independent samples would make them, although the standard error of
+about $0.02$ is still visible as small fluctuations.
 
 <figure class="figure" markdown="span">
   ![Calibrated chi-square intervals of a nested sample, their coverage against the nominal level, and the coverage error, as the sample size grows](../assets/figures/calibration-coverage-light.gif#only-light){ loading=lazy }
   ![Calibrated chi-square intervals of a nested sample, their coverage against the nominal level, and the coverage error, as the sample size grows](../assets/figures/calibration-coverage-dark.gif#only-dark){ loading=lazy }
-  <figcaption>Left: the 90% intervals of fifty replications at the current
-  sample size, with the true mean as a vertical line. Middle:
-  empirical coverage against nominal confidence. Right: coverage
-  minus nominal at five levels, accumulated as $n$ grows.</figcaption>
+  <figcaption>The left panel shows the 90% intervals of fifty replications
+  at the current sample size, with the true mean as a vertical line. The
+  middle panel shows empirical coverage against nominal confidence. The
+  right panel shows coverage minus nominal at five levels, accumulated as
+  $n$ grows.</figcaption>
 </figure>
 
 ## The figure
 
-Rendered from this script when the site is built, so it always shows the output of the current code:
+The figure is rendered from this script when the site is built, so it
+always shows the output of the current code.
 
 <figure class="figure" markdown="span">
   ![Empirical coverage of the calibrated chi-square interval against the nominal confidence](../assets/figures/06_calibrated_ambiguity_radius-light.png#only-light){ loading=lazy }
   ![Empirical coverage of the calibrated chi-square interval against the nominal confidence](../assets/figures/06_calibrated_ambiguity_radius-dark.png#only-dark){ loading=lazy }
-  <figcaption>Left: empirical coverage of the true mean by the interval at the calibrated radius against the nominal confidence level. Right: the under-coverage shrinks as the sample size grows.</figcaption>
+  <figcaption>The left panel shows the empirical coverage of the true mean by the interval at the calibrated radius against the nominal confidence level. The right panel shows that the under-coverage shrinks as the sample size grows.</figcaption>
 </figure>
 
 ## Source
@@ -280,21 +289,22 @@ Rendered from this script when the site is built, so it always shows the output 
 [^dn]:
     John C. Duchi and Hongseok Namkoong, "Learning Models with Uniform
     Performance via Distributionally Robust Optimization", *Annals of
-    Statistics* 49(3), 1378–1406 (2021).
+    Statistics* 49(3), 1378-1406 (2021).
     [arXiv:1810.08750](https://arxiv.org/abs/1810.08750).
     The companion asymptotic theory is Duchi, Glynn and Namkoong,
     "Statistics of Robust Optimization: A Generalized Empirical Likelihood
-    Approach", *Mathematics of Operations Research* 46(3), 946–969 (2021).
+    Approach", *Mathematics of Operations Research* 46(3), 946-969 (2021).
 
 [^bkm]:
     Jose Blanchet, Yang Kang and Karthyek Murthy, "Robust Wasserstein
     Profile Inference and Applications to Machine Learning", *Journal of
-    Applied Probability* 56(3), 830–857 (2019).
+    Applied Probability* 56(3), 830-857 (2019).
     [arXiv:1610.05627](https://arxiv.org/abs/1610.05627).
 
 [^gao]:
-    The same calibration question in the Wasserstein geometry, where the
-    radius must instead be tied to a concentration rate: Rui Gao,
-    "Finite-Sample Guarantees for Wasserstein Distributionally Robust
-    Optimization: Breaking the Curse of Dimensionality", *Operations
+    Rui Gao, "Finite-Sample Guarantees for Wasserstein Distributionally
+    Robust Optimization: Breaking the Curse of Dimensionality", *Operations
     Research* (2025). [arXiv:2009.04382](https://arxiv.org/abs/2009.04382).
+    The paper discusses the dimension-dependent radii that follow from
+    measure concentration and gives finite-sample guarantees for
+    Wasserstein DRO that avoid them.

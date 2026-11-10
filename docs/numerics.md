@@ -12,8 +12,8 @@ tests it names.
 
 ## Dtype support
 
-Every routine computes in a *working dtype*: the type promotion of its
-inputs, raised to at least float32
+Every routine computes in a *working dtype*, which is the type promotion of
+its inputs raised to at least float32
 ([`working_dtype`](api/core/precision.md)). The result is returned in the
 plain promotion of the inputs, without that floor, which is what any
 PyTorch operation on them would return. For an ambiguity set the inputs are
@@ -21,28 +21,30 @@ PyTorch operation on them would return. For an ambiguity set the inputs are
 
 | Input dtype | Computed in | Returned as | Accuracy | Tested by |
 | --- | --- | --- | --- | --- |
-| `float64` | `float64` | `float64` | Reference. Agrees with independent LP and closed-form references to about $10^{-12}$. | `tests/dro/test_oracles.py` |
-| `float32` | `float32` | `float32` | Within $128\,\varepsilon \cdot \max(\lvert v \rvert,\ \max \ell - \min \ell)$ of a float64 solve of the same inputs, where $v$ is the worst case. Typically a few $\varepsilon$. `MMDAmbiguitySet` adds the condition number of its Gram matrix to the 128 (see the exceptions below). | `tests/dro/test_ambiguity_set_device_dtype.py` |
-| `bfloat16` | `float32` | `bfloat16` | Exactly the float32 result rounded once. | `tests/dro/test_ambiguity_set_device_dtype.py`, `tests/divergences/test_divergence_device_dtype.py` |
-| `float16` | `float32` | `float16` | Exactly the float32 result rounded once. | as `bfloat16` |
-| mixed | the promotion, at least `float32` | the promotion | As its working dtype. | as `bfloat16` |
+| `float64` | `float64` | `float64` | The reference precision. It agrees with the independent LP and closed-form references within an absolute tolerance of $10^{-9}$. | `tests/dro/test_oracles.py` |
+| `float32` | `float32` | `float32` | The result is within $128\,\varepsilon \cdot \max(\lvert v \rvert,\ \max \ell - \min \ell)$ of a float64 solve of the same inputs, where $v$ is the worst case. Typical errors are a few $\varepsilon$. `MMDAmbiguitySet` adds the condition number of its Gram matrix to the 128, as described in the exceptions below. | `tests/dro/test_ambiguity_set_device_dtype.py` |
+| `bfloat16` | `float32` | `bfloat16` | It is exactly the float32 result rounded once. | `tests/dro/test_ambiguity_set_device_dtype.py`, `tests/divergences/test_divergence_device_dtype.py` |
+| `float16` | `float32` | `float16` | It is exactly the float32 result rounded once. | as `bfloat16` |
+| mixed | the promotion, at least `float32` | the promotion | Same as its working dtype. | as `bfloat16` |
 
-Here $\varepsilon$ is the machine epsilon of the input dtype:
+Here $\varepsilon$ is the machine epsilon of the input dtype, which is
 $2^{-23} \approx 1.2 \times 10^{-7}$ for float32.
 
 ??? question "Why half precision is computed in float32"
 
-    A worst case is a long reduction, a bisection whose trip count is read
-    off the dtype, and differences of nearly equal sums. An 8-bit
-    (`bfloat16`) or 11-bit (`float16`) significand loses most of that. Run
-    natively, half precision was off by up to $2 \times 10^4$ units in the
-    last place (Wasserstein, `float16`) and broke the bound
+    Computing a worst case involves long reductions, a bisection whose trip
+    count is set by the dtype, and differences of nearly equal sums. An
+    8-bit (`bfloat16`) or 11-bit (`float16`) significand loses most of the
+    accuracy of these steps. When half precision was computed natively,
+    the result was off by up to about $2 \times 10^4$ units in the last
+    place (Wasserstein, `float16`) and violated the bound
     $\mathbb{E}_{\mathrm{nominal}}[\ell] \le v \le \max \ell$. Computing in
-    float32 and rounding once leaves only the final rounding. This is the
-    same policy `torch.autocast` applies to `logsumexp`, `softmax` and
-    `cumsum`.
+    float32 and rounding once leaves only the final rounding error. This is
+    the same policy that
+    [`torch.autocast`](https://pytorch.org/docs/stable/amp.html) applies to
+    `logsumexp`, `softmax` and `cumsum`.
 
-Further guarantees, each tested:
+The following guarantees are also tested.
 
 - **Gradients.** The gradient with respect to a half-precision `loss` has
   the dtype of `loss`. It is exactly the float32 gradient rounded once.
@@ -52,40 +54,42 @@ Further guarantees, each tested:
   `.to(torch.bfloat16)` solves in float32 from those rounded buffers. A
   float32 set given a half-precision `loss` returns float32.
 
-The float32 row, measured when this site is built on a random support of
-256 scenarios, every set at seven fractions of its saturation radius:
+The figure below measures the float32 row when this site is built. It uses
+a random support of 256 scenarios and evaluates every set at seven
+fractions of its saturation radius.
 
 <figure class="figure" markdown="span">
   ![Float32 error of every ambiguity set against a float64 solve of the same inputs, in units of the float32 machine epsilon](assets/figures/float32-errors-light.svg#only-light){ loading=lazy }
   ![Float32 error of every ambiguity set against a float64 solve of the same inputs, in units of the float32 machine epsilon](assets/figures/float32-errors-dark.svg#only-dark){ loading=lazy }
   <figcaption>Cells are $\lvert v_{32} - v_{64} \rvert / \max(\lvert v_{64}
   \rvert, \max \ell - \min \ell)$ in float32 ulps, the quantity the table
-  bounds by 128. MMD is held to a bound set by its Gram matrix instead
-  (see below).</figcaption>
+  bounds by 128. MMD is instead held to a bound set by its Gram matrix, as
+  described below.</figcaption>
 </figure>
 
 !!! warning "Three documented exceptions"
 
     - **Mass far below $\varepsilon$.** When the worst case concentrates on
       scenarios with tiny nominal mass, for example $10^{-20}$ in float32,
-      the tilt sits near the top of its bisection bracket. The tilt rate is
-      then resolved only to a relative $\varepsilon / (1 - t)$. KL and
-      $\chi^2$ errors grow to about $10^{-4}$ relative (tested at
-      $2048\,\varepsilon$ in `tests/dro/test_tilt_robustness.py`).
+      the tilt $t$ lies near the upper end of its bisection bracket. The
+      tilt rate is then resolved only to a relative
+      $\varepsilon / (1 - t)$. KL and $\chi^2$ errors grow to about
+      $10^{-4}$ relative (tested at $2048\,\varepsilon$ in
+      `tests/dro/test_tilt_robustness.py`).
     - **`PhiAmbiguitySet` with a `dual_solver`.** Its accuracy is set by
-      that solver, in every dtype. Without one, the default, it is solved
-      exactly and held to the same bounds as the other tilted sets.
+      that solver, in every dtype. Without one, which is the default, it is
+      solved exactly and held to the same bounds as the other tilted sets.
     - **`MMDAmbiguitySet` in float32.** Its float32 error is that of
       factoring the Gram matrix $K$ in float32, so the bound is
       $(128 + \kappa(K))\,\varepsilon \cdot \max(\lvert v \rvert,\
       \max \ell - \min \ell)$, with $\kappa(K)$ the ratio of its largest to
-      its smallest eigenvalue. A tighter duality gap does not help: the
-      error is the same from a gap of $10^{-3}$ to $10^{-10}$. Over 428
-      test problems the error stayed below half of that bound, with a
-      median of 12 ulps, but support points that nearly coincide make
-      $\kappa(K)$ large, and at a small radius the error can then exceed
-      the robust excess $v - \mathbb{E}_{\mathrm{nominal}}[\ell]$ itself.
-      Solve such balls in float64:
+      its smallest eigenvalue. A tighter duality gap does not reduce this
+      error, which is the same for gaps from $10^{-3}$ to $10^{-10}$. Over
+      428 test problems the error stayed below half of that bound. Support
+      points that nearly coincide make $\kappa(K)$ large, however, and at a
+      small radius the error can then exceed the robust excess
+      $v - \mathbb{E}_{\mathrm{nominal}}[\ell]$ itself. Such balls should be
+      solved in float64.
 
       ```python
       ambiguity_set = MMDAmbiguitySet(nominal.double(), gram.double(), radius)
@@ -98,12 +102,11 @@ The float32 row, measured when this site is built on a random support of
 
       Second derivatives in float32 carry one more caveat. The Hessian is
       piecewise constant and jumps where the maximizer's support changes,
-      and a converged float32 solve tells a scenario's mass from its
-      multiplier only down to the square root of its duality-gap floor
-      over the support size, about $10^{-3}$ to $10^{-4}$. A scenario
-      whose mass sits near that level can land on either side of the
-      jump, and the Hessian then differs from float64 by order one in
-      that direction.
+      and a converged float32 solve distinguishes a scenario's mass from
+      its multiplier only down to the square root of its duality-gap floor
+      over the support size, about $10^{-3}$ to $10^{-4}$. A scenario whose
+      mass is near that level can fall on either side of the jump, and the
+      Hessian then differs from float64 by order one in that direction.
 
 ### Supported loss range
 
@@ -115,10 +118,10 @@ by the smallest positive cost difference to stay finite.
 
 ## Non-finite inputs and validation
 
-Metadata checks are free and always run. Checks that read tensor values
-back to the host block until the device has produced them, so they run only
-with `validate=True`, in the spirit of `torch.distributions`'
-`validate_args`.
+Metadata checks need no host synchronization and always run. Checks that
+read tensor values back to the host block until the device has produced
+them, so they run only with `validate=True`, in the spirit of the
+`validate_args` flag of `torch.distributions`.
 
 | Input | Default (`validate=False`) | `validate=True` |
 | --- | --- | --- |
@@ -128,11 +131,12 @@ with `validate=True`, in the spirit of `torch.distributions`'
 | Negative or `nan` tensor `radius` | Not checked. The result is meaningless. | `ValueError` at construction. |
 | Invalid `nominal` | Not checked. | `ValueError` at construction. |
 
-Tested by `tests/dro/test_non_finite_losses.py` and
+These cases are tested by `tests/dro/test_non_finite_losses.py` and
 `tests/core/test_radius_and_loss_validation.py`.
 
 Turn `validate=True` on while developing a model. Turn it off for training
-on an accelerator, where a host synchronization per step costs throughput.
+on an accelerator, where a host synchronization per step reduces
+throughput.
 
 ## Stability of the KL tilt
 
@@ -140,7 +144,7 @@ on an accelerator, where a host synchronization per step costs throughput.
 \mathrm{nominal} \cdot e^{-\beta\,\mathrm{gap}}$ by bisecting the tilt rate
 $\beta$. The gap $\mathrm{gap} = (\max \ell - \ell)/(\max \ell - \min \ell)$
 lies in $[0, 1]$ and is zero on the highest loss. Three choices keep every
-step finite and accurate:
+step finite and accurate.
 
 1. **Shifted exponent.** The largest exponent is exactly zero, which is the
    log-sum-exp shift, so no weight overflows however large $\beta$ becomes.
@@ -148,7 +152,8 @@ step finite and accurate:
    \mathrm{nominal} - \beta\,\mathrm{gap})$. A scenario whose nominal mass
    and weight would underflow as a product still gets its correct tilted
    mass.
-3. **Two forms of the divergence.** Each is accurate in its own regime:
+3. **Two forms of the divergence.** The divergence has two algebraically
+   equal forms, each accurate in its own regime,
 
     $$
     D_{\mathrm{KL}}(q_\beta \,\|\, \mathrm{nominal}) =
@@ -166,9 +171,10 @@ step finite and accurate:
     divergences. There the first would represent $e^{-D}$ as one plus a sum
     near $-1$, which rounds to exactly $-1$ once $D$ exceeds about 16 in
     float32 or 36 in float64. The second form also takes over when the
-    largest exponent $\beta\,\mathbb{E}_{q_\beta}[\mathrm{gap}]$ would
-    overflow `expm1`. That needs a highest-loss nominal mass below
-    $e^{-44}$ in float32.
+    largest centered exponent $\beta\,\mathbb{E}_{q_\beta}[\mathrm{gap}]$
+    exceeds half of the logarithmic range of the dtype, beyond which
+    `expm1` of the centered exponents could overflow. That requires a
+    highest-loss nominal mass below $e^{-44}$ in float32.
 
-    Choosing the form costs nothing extra per bisection step: both read
-    quantities the tilt has already computed.
+    Choosing the form adds no work per bisection step, because both forms
+    read quantities that the tilt has already computed.

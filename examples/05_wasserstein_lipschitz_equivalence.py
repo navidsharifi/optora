@@ -1,20 +1,20 @@
 """Wasserstein-DRO as Lipschitz regularization.
 
-Wasserstein-DRO is often justified by an equivalence: on a type-1
-Wasserstein ball built from a ground metric, robustifying an expected loss
-is the same as penalizing that loss's Lipschitz modulus. The linear
+Wasserstein-DRO is often justified by an equivalence with regularization.
+On a type-1 Wasserstein ball built from a ground metric, robustifying an
+expected loss is the same as penalizing the Lipschitz modulus of the loss. The linear
 surrogate this suggests is
 
     sup_{q : W(q, nominal) <= radius} E_q[loss]  ~  E_nominal[loss]
                                                     + radius * Lip(loss)
 
-which is exactly the "robustness = regularization" reading of the ball
-radius: `radius` buys nothing but a penalty proportional to how fast the
+which is the "robustness = regularization" reading of the ball radius.
+Under this reading the radius adds a penalty proportional to how fast the
 loss can change per unit of transport.
 
-On a finite support the identity is sharper than an approximation. The
-exact discrete dual solved by `WassersteinAmbiguitySet` is minimized at
-`gamma = L_n` for every sufficiently small radius, where
+On a finite support the identity holds exactly. The exact discrete dual
+solved by `WassersteinAmbiguitySet` is minimized at `gamma = L_n` for
+every sufficiently small radius, where
 
     L_n = max_{i != j} |loss_i - loss_j| / cost_ij
 
@@ -24,11 +24,12 @@ the surrogate built from the true constant `Lip(loss)` is
 
     gap(radius) = radius * (Lip(loss) - L_n) + (concavity correction)
 
-The concavity correction vanishes as the radius shrinks; the first term
-vanishes as the sample refines and `L_n -> Lip(loss)`. This script measures
-both limits, using `softplus` as a loss whose Lipschitz constant is exactly
-1 (its derivative is the sigmoid) but is only attained asymptotically, so
-`L_n < 1` strictly at every finite sample size.
+The concavity correction vanishes as the radius shrinks, and the first
+term vanishes as the sample refines and `L_n -> Lip(loss)`. This script
+measures both limits. It uses `softplus` as the loss, whose Lipschitz
+constant is exactly 1 because its derivative is the sigmoid. The slope 1
+is only approached asymptotically, so `L_n < 1` strictly at every finite
+sample size.
 
 Reference:
     Qinyu Wu, Jonathan Yu-Meng Li, Tiantian Mao, "On Generalization and
@@ -81,7 +82,7 @@ def empirical_measure(
 def empirical_lipschitz_constant(loss: torch.Tensor, cost: torch.Tensor) -> float:
     """Return the largest loss increment per unit of transport on the sample."""
     increments = torch.abs(loss.unsqueeze(-1) - loss.unsqueeze(-2))
-    # The diagonal has a zero increment; the added identity only keeps 0/0 out.
+    # The diagonal has a zero increment, and the added identity only avoids 0/0.
     separation = cost + torch.eye(cost.shape[-1], dtype=cost.dtype)
     return torch.max(increments / separation).item()
 
@@ -91,8 +92,8 @@ def normalized_gap(
 ) -> float:
     """Return `(surrogate - exact dual value) / radius` at `radius`.
 
-    Dividing by the radius removes the trivial part of the convergence: the
-    absolute gap shrinks with the radius no matter what, whereas the
+    Dividing by the radius removes the trivial part of the convergence. The
+    absolute gap shrinks with the radius for any loss, whereas the
     normalized gap isolates the Lipschitz deficiency `Lip(loss) - L_n` that
     the small-radius limit should expose.
     """

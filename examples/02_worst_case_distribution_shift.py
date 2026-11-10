@@ -1,16 +1,15 @@
-"""Tracking convergence across probability space: the TV-DRO worst-case
-candidate distribution as the ambiguity radius grows.
+"""The TV-DRO worst-case distribution as the ambiguity radius grows.
 
-`TotalVariationAmbiguitySet.worst_case_expectation` only returns the scalar
-`E_q*[loss]` at the worst-case candidate distribution `q*`, not `q*`
-itself -- the `AmbiguitySet` API is deliberately narrow (see
-`optora/core/dro_base.py`). This example reconstructs `q*` directly from
-the closed-form combinatorial solution the library documents internally
-(sort scenarios by loss, then reallocate probability mass from the
-cheapest scenarios to the single most expensive one, up to the radius
-budget -- see `optora/dro/phi_dro.py` and `progress/decisions.md`), then
-cross-checks `E_q*[loss]` against the library's own `worst_case_expectation`
-to confirm the reconstruction is exact, not just plausible.
+`TotalVariationAmbiguitySet.worst_case_expectation` returns the scalar
+`E_q*[loss]` at the worst-case distribution `q*` and not `q*` itself,
+because the `AmbiguitySet` interface is deliberately narrow (see
+`optora/core/dro_base.py`). This example reconstructs `q*` from the
+closed-form combinatorial solution documented in `optora/dro/phi_dro.py`.
+The scenarios are sorted by loss, and probability mass is moved from the
+cheapest scenarios to the single most expensive one until the radius
+budget is used up. The script then compares `E_q*[loss]` with the
+library's own `worst_case_expectation` to confirm that the reconstruction
+is exact.
 
 Run:
     python examples/02_worst_case_distribution_shift.py

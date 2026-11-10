@@ -1,16 +1,16 @@
 """Comparing the robust decision across all four ambiguity-set geometries.
 
-Problem: choose a single scalar decision `x` to minimize the worst-case
-expected squared error against four observed outcomes,
+The problem is to choose a single scalar decision `x` that minimizes the
+worst-case expected squared error against four observed outcomes,
 
     min_x sup_{q in ambiguity_set(nominal, radius)} E_q[(outcomes - x) ** 2]
 
 At `radius = 0` every ambiguity set collapses to `{nominal}`, so every
-formulation recovers the same ordinary empirical-risk decision (the
-nominal-weighted mean of `outcomes`). As `radius` grows, each formulation's
-robust decision `x*` is pulled toward the outcome that would hurt most if
-an adversary reallocated probability mass there; how quickly, and how far,
-depends on the divergence geometry underneath the ambiguity set.
+formulation recovers the same empirical-risk decision, the
+nominal-weighted mean of `outcomes`. As `radius` grows, the robust
+decision `x*` of each formulation moves toward the outcomes onto which
+the adversary shifts probability mass. How quickly and how far it moves
+depends on the divergence that defines the ambiguity set.
 
 Run:
     python examples/03_robust_decision_across_ambiguity_sets.py
@@ -36,12 +36,13 @@ OUTCOMES = torch.tensor([1.0, 2.0, 3.0, 10.0], dtype=torch.float64)
 NOMINAL = torch.full_like(OUTCOMES, 1.0 / OUTCOMES.numel())
 COST = (OUTCOMES.unsqueeze(0) - OUTCOMES.unsqueeze(1)) ** 2
 
-# Nested outer/inner solver composition is expensive in eager PyTorch (see
-# `progress/decisions.md`), so both budgets below are tuned down
-# aggressively from each solver's own defaults; this is a demo of
-# qualitative behavior, not a tight-tolerance convergence test.
+# Every outer step runs a full inner worst-case solve, so nested solves are
+# expensive in eager PyTorch. The outer iteration budget below is therefore
+# cut well below the solver's default. The example shows qualitative
+# behavior and is not a tight-tolerance convergence test.
 # The outer solver uses `check_interval=1` because one of its steps costs a
-# full inner worst-case solve, which dwarfs the synchronization a check costs.
+# full inner worst-case solve, which is far more than the synchronization a
+# convergence check costs.
 OUTER_SOLVER = GradientDescent(step_size=0.01, max_iter=120, tol=1e-7, check_interval=1)
 
 
