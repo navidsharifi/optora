@@ -9,8 +9,17 @@ At `radius = 0` every ambiguity set collapses to `{nominal}`, so every
 formulation recovers the same empirical-risk decision, the
 nominal-weighted mean of `outcomes`. As `radius` grows, the robust
 decision `x*` of each formulation moves toward the outcomes onto which
-the adversary shifts probability mass. How quickly and how far it moves
-depends on the divergence that defines the ambiguity set.
+the adversary shifts probability mass, and the divergence that defines
+the ambiguity set decides which outcomes those are.
+
+The KL, chi-square and total-variation balls depend only on the
+probabilities of the scenarios, so their adversaries put more mass on
+the outlier 10 and their decisions rise from 4.0 toward it. The
+Wasserstein ball also depends on the distances between outcomes. Under
+the squared cost, moving mass onto 10 costs at least 49 per unit, while
+moving mass from 2 and 3 down to 1 raises the loss near `x = 4` the
+most per unit of transport cost. Its decision therefore falls toward
+the low cluster and away from the outlier.
 
 Run:
     python examples/03_robust_decision_across_ambiguity_sets.py
