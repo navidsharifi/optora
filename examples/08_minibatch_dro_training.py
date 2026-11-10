@@ -1,55 +1,58 @@
 """Minibatch KL-DRO against the full-batch objective on the same problem.
 
-Every earlier example hands the ambiguity set the whole dataset. Training at
-scale cannot: each step sees a minibatch of `m` samples, and running the
-ambiguity set on that minibatch alone, the *plug-in* estimate, is biased. The
-worst case is a nonlinear functional of the sample, so its expectation over
-minibatches is not the full-batch worst case, and its gradient is not an
-unbiased stochastic gradient of the full-batch objective (Levy et al. 2020).
-For KL-DRO the plug-in is the log-sum-exp of a subsample, and it is biased
-*low*: a small batch rarely contains the rare, high-loss points the
-adversary would upweight.
+Every earlier example gives the ambiguity set the whole dataset. Training at
+scale cannot do that, because each step sees a minibatch of `m` samples, and
+the *plug-in* estimate, which runs the ambiguity set on that minibatch alone,
+is biased. The worst case is a nonlinear functional of the sample, so its
+expectation over minibatches is not the full-batch worst case, and its
+gradient is not an unbiased stochastic gradient of the full-batch objective
+(Levy et al. 2020). For KL-DRO the plug-in is the log-sum-exp of a subsample,
+and it is biased *low*, because a small batch rarely contains the rare,
+high-loss points that the adversary would upweight.
 
-The problem. A dataset of `N = 4096` points from the two-group regression of
-example 07 (90% with slope `(1, 0)`, 10% with slope `(1, 1.5)`, noise 0.3),
-a linear model with a bias, squared loss, and a KL ball. Minibatches are drawn
+The problem. The dataset has `N = 4096` points from the two-group regression
+of example 07, with 90% of the points on slope `(1, 0)`, 10% on slope
+`(1, 1.5)`, and noise level 0.3. The model is linear with a bias, the loss is
+the squared loss, and the ambiguity set is a KL ball. Minibatches are drawn
 with replacement from the dataset, so they are i.i.d. draws from its
 empirical distribution and the full-batch objective
 
     F(theta) = sup_{KL(q || uniform_N) <= radius} E_q[loss(theta)]
 
-is *exactly* the population objective the minibatch estimators target. No
-asymptotics are involved in the comparison: every number below is measured
-against `F`, computed exactly by `KLAmbiguitySet` on all `N` points.
+is *exactly* the population objective that the minibatch estimators target.
+No asymptotic argument enters the comparison. Every number below is measured
+against `F`, which `KLAmbiguitySet` computes exactly on all `N` points.
 
 Part 1 fixes the model at its least-squares fit and measures the bias of each
 estimator of `F`, as a fraction of the robust excess `F - mean(loss)`, over a
 range of radii that includes the 95% calibrated radius `kl_radius(N, 0.95)`.
-The estimators:
+The estimators are the following.
 
-* plug-in on `m = 16, 64, 256` samples;
-* `MultilevelMonteCarloEstimator` with base batch 16 and 4 levels: the bias
-  of the 256-sample plug-in at an expected batch of about 68 samples
-  (Blanchet and Glynn 2015; Levy et al. 2020);
+* The plug-in on `m = 16, 64, 256` samples.
+* `MultilevelMonteCarloEstimator` with base batch 16 and 4 levels, which has
+  the bias of the 256-sample plug-in at an expected batch of about 68
+  samples (Blanchet and Glynn 2015; Levy et al. 2020).
 * `StochasticPhiDual` on 64 samples, at the dual variables that are optimal
-  for the full batch: there its minibatch mean is exactly `F`.
+  for the full batch, where the expectation of its minibatch mean is
+  exactly `F`.
 
-Each estimate is reported minus the mean loss of the same minibatch (for the
-multilevel estimator, of its base level). That control variate has the
-full-batch mean loss as its expectation, so it changes no bias and removes
-most of the sampling noise of the mean itself.
+Each estimate is reported minus the mean loss of the same minibatch, and for
+the multilevel estimator minus the mean loss of its base level. That control
+variate has the full-batch mean loss as its expectation, so it leaves the
+bias unchanged and removes most of the sampling noise of the mean itself.
 
 Part 2 trains the model from a warm start (least squares on a pilot batch)
 with `torch.optim.Adam` on each minibatch objective, over several seeds, and
 tracks the suboptimality `F(theta_bar) - min F` of the averaged iterate
 against a full-batch L-BFGS reference. The plug-in descends quickly and then
-stalls at a floor set by its bias, not by its noise: more steps do not move
-it. The multilevel estimator goes below that floor on a comparable number of
-samples, at three exact solves per step. The stochastic dual has no inner
-solve and no bias, but KL's exponential conjugate makes its gradients heavy
-tailed, so it needs many more, much cheaper, steps, and a start for its dual
-variables on the scale of the loss: here the exact dual optimum of the pilot
-batch, which uses those samples alone.
+stalls at a floor that its bias sets, not its noise, so more steps do not
+move it. The multilevel estimator goes below that floor on a comparable
+number of samples, at three exact solves per step. The stochastic dual has
+no inner solve and no bias, but KL's exponential conjugate makes its
+gradients heavy-tailed. It therefore needs many more steps, each much
+cheaper, and a start for its dual variables on the scale of the loss. Here
+that start is the exact dual optimum of the pilot batch, which uses those
+samples alone.
 
 References:
     Daniel Levy, Yair Carmon, John C. Duchi, and Aaron Sidford, "Large-Scale
@@ -252,9 +255,10 @@ def pilot_dual_point(pilot_loss: torch.Tensor) -> tuple[float, float]:
     """Solve the KL dual exactly on the pilot batch.
 
     The stochastic dual's variables carry the loss's scale, and a start far
-    from it makes KL's exponential conjugate produce rare, enormous
-    gradients that stall Adam. The minibatch dual optimum of the pilot batch
-    is computed from those samples alone, so it is a legitimate start.
+    from it makes KL's exponential conjugate produce rare, very large
+    gradients that slow Adam down or stall it. The minibatch dual optimum of
+    the pilot batch is computed from those samples alone, so it is a valid
+    start that uses no other data.
 
     Args:
         pilot_loss: Losses of the pilot batch at the warm-start model.
@@ -281,8 +285,8 @@ def train(
 ) -> tuple[list[int], torch.Tensor]:
     """Train `NUM_SEEDS` models with Adam on one minibatch objective.
 
-    Training runs in float32, as a training loop would; the full-batch
-    objective is evaluated in float64.
+    Training runs in float32, as a typical training loop would. The
+    full-batch objective is evaluated in float64.
 
     Args:
         method: Key of `STEPS` naming the estimator.
@@ -418,8 +422,8 @@ def main() -> None:
             f"{float(final.mean()):>10.4f}{float(final.max()):>10.4f}"
         )
 
-    # Every seed stalls at nearly the same suboptimality: a bias floor, not
-    # noise, since independent minibatch noise would spread the seeds out.
+    # Every seed stalls at nearly the same suboptimality. This is a floor set
+    # by the bias, since independent minibatch noise would spread the seeds.
     plug_in_final = curves["plug-in (m = 64)"][1][-1]
     floor = float(plug_in_final.mean())
     assert float(plug_in_final.max() - plug_in_final.min()) < 0.5 * floor

@@ -89,11 +89,11 @@ To add a real visual to this README:
 
 ## Notes on solver tuning
 
-Several examples nest an outer `MinimaxSolver`/`GradientDescent` around an
-ambiguity set's own inner solve. That composition multiplies iteration
-counts fast in eager PyTorch, so the scripts here deliberately use small,
-tuned-down outer `max_iter`/`step_size` budgets rather than the solver's
-own defaults, and check qualitative behavior (monotonicity, closed-form
-limits, cross-checked reconstructions) rather than tight-tolerance
-convergence. See `progress/decisions.md` for the underlying numerical
-background.
+Several examples nest an outer `MinimaxSolver` or `GradientDescent` around
+the inner solve of an ambiguity set. Every outer iteration runs a full
+inner solve, so in eager PyTorch the total cost grows with the product of
+the two iteration counts. The scripts therefore use smaller outer
+`max_iter` and `step_size` budgets than the solver defaults. They check
+qualitative behaviour such as monotonicity, closed-form limits and
+cross-checked reconstructions, and they do not test convergence to a
+tight tolerance.

@@ -1,16 +1,17 @@
 """Convergence diagnostics for a KL-DRO robust decision problem.
 
-Two complementary views of "convergence" in a DRO minimax problem:
+A DRO minimax problem has an outer and an inner solve, and the script
+checks the convergence of each one separately.
 
-1. Outer convergence: manually unrolling the same fixed-step gradient
-   iteration `optora.solvers.GradientDescent` uses internally (instead of
-   calling `MinimaxSolver.solve` as a black box) to record the robust
-   decision `x` and the worst-case objective value at every iteration.
-2. Inner convergence: confirming, via a fine grid search over the KL-DRO
-   dual variable `eta`, that the ambiguity set's own inner dual solve
-   actually lands at the true minimizer of the dual objective -- i.e. that
-   the worst-case adversarial distribution has genuinely been found, not
-   merely approximated by an unconverged solver.
+1. For the outer solve, it unrolls by hand the fixed-step gradient
+   iteration that `optora.solvers.GradientDescent` runs, instead of
+   calling `MinimaxSolver.solve` as a black box, and records the robust
+   decision `x` and the worst-case objective at every iteration.
+2. For the inner solve, it evaluates the KL-DRO dual objective on a fine
+   grid of the dual variable `eta` and compares the grid minimum with the
+   value of the ambiguity set. The set computes that value by bisecting
+   the exponential tilt in the primal, so agreement confirms that it has
+   found the worst-case distribution.
 
 Run:
     python examples/04_convergence_diagnostics.py

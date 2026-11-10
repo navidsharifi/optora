@@ -1,12 +1,15 @@
-"""The benchmarks page: latency, scaling, batching, host synchronizations, references.
+"""Figures and tables of the benchmarks page.
 
-`benchmarks-data` measures everything once and writes `benchmarks-results.json`
-plus two Markdown fragments, the headline statistics (included by the
-benchmarks and positioning pages) and the detailed tables (benchmarks page
-only); `benchmarks-charts` draws that data once per colour scheme. The
-timings are those of the machine building the documentation (the CPU of the
-GitHub-hosted runner in CI); the page says so and shows how to reproduce
-them on any device.
+The page covers latency, scaling, batching, host synchronizations and the
+comparison with independent references. `benchmarks-data` measures
+everything once and writes `benchmarks-results.json` and two Markdown
+fragments. The first holds the headline statistics, which the benchmarks
+and positioning pages include, and the second holds the detailed tables,
+which only the benchmarks page includes. `benchmarks-charts` draws the
+same data once per colour scheme. The timings are those of the machine
+that builds the documentation, which in CI is the CPU of the GitHub-hosted
+runner. The page states this and shows how to reproduce the numbers on any
+device.
 """
 
 from __future__ import annotations
@@ -111,7 +114,7 @@ WORKLOADS: tuple[Workload, ...] = tuple(
 
 
 def radius_for(key: str, instance: Instance) -> float:
-    """Return the benchmark radius: a fixed fraction of the family's saturation."""
+    """Return the benchmark radius, a fixed fraction of the family's saturation."""
     family = FAMILY_BY_KEY.get(key, FAMILY_BY_KEY["kl"])
     return BUDGET_FRACTION * family.saturation(instance)
 
@@ -128,14 +131,14 @@ def support_sizes(key: str, quick: bool) -> list[int]:
 def median_seconds(function: Callable[[], Any], quick: bool) -> float:
     """Return the median wall time of one call of `function` in seconds.
 
-    Calls are timed in blocks long enough to resolve the clock, after two
-    warm-up calls, until the run has lasted `min_run_time`; the result is
-    the median over blocks of the mean time per call. The process's thread
-    settings are left untouched on purpose: `torch.utils.benchmark.Timer`
-    switches `torch.set_num_threads` around each measurement, which on
-    Windows MKL builds makes every later batched `lu_solve` fail (see
-    `progress/notes.md`), and the thread count a user runs with is the one
-    worth measuring.
+    After two warm-up calls, the function is timed in blocks of calls, each
+    long enough to resolve the clock, until the run has lasted
+    `min_run_time`. The result is the median over blocks of the mean time
+    per call. The thread settings of the process are deliberately left
+    unchanged. `torch.utils.benchmark.Timer` switches
+    `torch.set_num_threads` around each measurement, which on Windows MKL
+    builds makes every later batched `lu_solve` fail. The thread count a
+    user runs with is also the one worth measuring.
     """
     min_run_time = 0.02 if quick else 0.4
     block_time = 0.002 if quick else 0.02
@@ -385,7 +388,8 @@ def write_highlights(results: dict[str, Any], path: Path) -> None:
         _stat(
             "Host synchronizations",
             str(syncs),
-            "per tilt- or closed-form-solved worst case, forward and backward",
+            "per KL, chi-square, TV, CVaR, Wasserstein or Sinkhorn worst case, "
+            "forward and backward",
         ),
         _stat(
             "Fastest worst case",
@@ -402,7 +406,7 @@ def write_highlights(results: dict[str, Any], path: Path) -> None:
         _stat(
             "Agreement with references",
             f"{agreement:.1e}",
-            "largest |difference| / loss spread, float64",
+            "largest absolute difference relative to the loss spread, float64",
         ),
         "</div>",
     ]
@@ -429,7 +433,7 @@ def write_summary(results: dict[str, Any], path: Path) -> None:
     for row in latency:
         reference = reference_by_set.get(row["set"])
         if reference is None:
-            ref_columns = "none in the test suite | | "
+            ref_columns = "separately minimized dual, not timed | | "
         else:
             ref_columns = (
                 f"{reference['reference']} | {reference['agreement']:.1e} | "
@@ -443,8 +447,9 @@ def write_summary(results: dict[str, Any], path: Path) -> None:
     lines.append(
         f"The largest support in the scaling sweep is n = {largest}. "
         "The general phi set runs a fixed-step dual solve of "
-        f"{PHI_MAX_ITER} iterations with a convergence check every "
-        f"{PHI_CHECK_INTERVAL}, hence its host synchronizations."
+        f"{PHI_MAX_ITER} iterations and checks convergence every "
+        f"{PHI_CHECK_INTERVAL} iterations. Each check is one host "
+        "synchronization."
     )
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
@@ -576,7 +581,7 @@ def render_charts(context: Context) -> None:
         f"batch size (loss vectors of n = {workload['support']} solved in one call)"
     )
     axes.set_ylabel("loss vectors per second (log)")
-    axes.set_title("throughput grows with the batch: one joint solve, no Python loop")
+    axes.set_title("throughput of one joint solve grows with the batch size")
     _legend_below(axes)
     fig.tight_layout()
     context.save_static(fig, "benchmarks-throughput")

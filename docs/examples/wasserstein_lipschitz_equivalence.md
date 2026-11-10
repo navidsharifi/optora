@@ -1,71 +1,76 @@
 # Wasserstein-DRO and Lipschitz regularization
 
-Every introduction to Wasserstein-DRO eventually says some version of "and
-this is equivalent to regularization". I wanted to watch that equivalence
-happen on real numbers instead of taking it on trust, because the statement
-is easy to state and surprisingly easy to misread: it is *not* that the
-robust value is approximately a penalty, and it is *not* that the penalty
-is whatever norm your favourite paper happens to use. It is a statement
-about the Lipschitz modulus of the loss, measured in the same ground metric
-that defines the transport cost.
+Introductions to Wasserstein-DRO often state that it is equivalent to
+regularization. This page checks the equivalence numerically, because the
+statement is easy to misread. It does not say that the robust value is
+approximately a penalty, and it does not allow an arbitrary norm as the
+penalty. It concerns the Lipschitz modulus of the loss, measured in the
+same ground metric that defines the transport cost.
 
-The clean version, for a type-1 ball of radius $\rho$ around a nominal
-$\hat{P}$ and a loss $\ell$ that is Lipschitz with respect to the ground
-metric:
+For a type-1 ball of radius $\rho$ around a nominal $\hat{P}$ and a loss
+$\ell$ that is Lipschitz with respect to the ground metric, the
+Kantorovich-Rubinstein duality bounds the worst case by
+$\mathbb{E}_{\hat{P}}[\ell] + \rho \cdot \mathrm{Lip}(\ell)$. The bound
+holds with equality when the space is unbounded and the loss attains its
+Lipschitz modulus as a slope at infinity, as the softplus loss used below
+does. In the strong dual of Gao and Kleywegt (2022), the inner supremum
+$\sup_z \{\ell(z) - \gamma \lvert z - \hat{z} \rvert\}$ is then infinite
+for $\gamma < \mathrm{Lip}(\ell)$ and equal to $\ell(\hat{z})$ for
+$\gamma \ge \mathrm{Lip}(\ell)$, so the dual minimum is attained at
+$\gamma = \mathrm{Lip}(\ell)$ and gives
 
 $$
 \sup_{q \,:\, W(q, \hat{P}) \le \rho} \mathbb{E}_q[\ell]
 \;=\;
-\mathbb{E}_{\hat{P}}[\ell] \;+\; \rho \cdot \mathrm{Lip}(\ell)
+\mathbb{E}_{\hat{P}}[\ell] \;+\; \rho \cdot \mathrm{Lip}(\ell).
 $$
 
-Wu, Li and Mao[^wlm] prove this in a much broader setting than the one used
-here — general Wasserstein balls, general decision criteria, and an
-equivalence that is *exact* rather than an upper bound. This page checks
-the humble finite-support special case that Optora actually solves.
+Wu, Li and Mao[^wlm] prove exact equivalences of this kind in a much
+broader setting than the one used here, for general Wasserstein balls
+and general decision criteria. This page checks the finite-support
+special case that Optora solves.
 
-## What the discrete dual is really doing
+## What the discrete dual computes
 
-[`WassersteinAmbiguitySet`](../api/dro/wasserstein_dro.md) does not know
-anything about Lipschitz constants. It solves the exact discrete dual
+[`WassersteinAmbiguitySet`](../api/dro/wasserstein_dro.md) has no notion
+of a Lipschitz constant. It solves the exact discrete dual
 
 $$
 \inf_{\gamma \ge 0} \;
 \gamma \rho
-+ \sum_i \hat{p}_i \max_j \big( \ell_j - \gamma \, c_{ij} \big)
++ \sum_i \hat{p}_i \max_j \big( \ell_j - \gamma \, c_{ij} \big),
 $$
 
-and the regularization identity falls out of it. Since $c_{ii} = 0$, once
-$\gamma$ is large enough that no point can profitably be transported
-anywhere, the inner maximum is attained at $j = i$ for every $i$, and the
-whole objective collapses to $\mathbb{E}_{\hat{P}}[\ell] + \gamma\rho$ —
-strictly increasing in $\gamma$. The smallest $\gamma$ at which that
-happens is
+and the regularization identity follows from it. Since $c_{ii} = 0$, once
+$\gamma$ is large enough that no transport is profitable, the inner
+maximum is attained at $j = i$ for every $i$. The objective then reduces
+to $\mathbb{E}_{\hat{P}}[\ell] + \gamma\rho$, which is strictly increasing
+in $\gamma$. The smallest $\gamma$ at which this happens is
 
 $$
-L_n = \max_{i \ne j} \frac{|\ell_i - \ell_j|}{c_{ij}}
+L_n = \max_{i \ne j} \frac{|\ell_i - \ell_j|}{c_{ij}},
 $$
 
-which is exactly the Lipschitz modulus of the loss *restricted to the
-sample*. So the minimizer never sits above $L_n$, and for every radius
-below a positive threshold it sits exactly *at* $L_n$, giving
+which is the Lipschitz modulus of the loss *restricted to the sample*.
+The minimizer therefore never lies above $L_n$, and for every radius
+below a positive threshold it lies exactly *at* $L_n$, which gives
 
 $$
 \sup_{q \,:\, W(q, \hat{P}) \le \rho} \mathbb{E}_q[\ell]
 = \mathbb{E}_{\hat{P}}[\ell] + \rho \, L_n .
 $$
 
-That is the whole equivalence: robustifying the empirical risk over a small
-Wasserstein ball *is* penalizing the empirical Lipschitz modulus, with
-$\rho$ as the regularization weight. The only thing separating it from the
-population statement above is the gap between $L_n$ and
-$\mathrm{Lip}(\ell)$.
+This is the equivalence on a finite support. Robustifying the empirical
+risk over a small Wasserstein ball is the same as penalizing the
+empirical Lipschitz modulus, with $\rho$ as the regularization weight.
+It differs from the population statement above only by the gap between
+$L_n$ and $\mathrm{Lip}(\ell)$.
 
 ## The two ways the gap closes
 
-Writing the surrogate with the *true* constant, the gap decomposes into a
+If the surrogate is built with the *true* constant, the gap splits into a
 term that vanishes as the sample refines and a term that vanishes as the
-ball shrinks:
+ball shrinks,
 
 $$
 \underbrace{\mathbb{E}_{\hat{P}}[\ell] + \rho \, \mathrm{Lip}(\ell)}_{\text{surrogate}}
@@ -74,101 +79,108 @@ $$
 \;=\;
 \rho \big( \mathrm{Lip}(\ell) - L_n \big)
 \;+\;
-\underbrace{\text{concavity correction}}_{\to\, 0 \text{ as } \rho \to 0}
+\underbrace{\text{concavity correction}}_{\to\, 0 \text{ as } \rho \to 0}.
 $$
 
 | Limit | What closes the gap | What the script plots |
 | --- | --- | --- |
-| $\rho \to 0$ | the exact value is concave in $\rho$ and the surrogate is its tangent at the origin, so the correction dies | left panel: the normalized gap flattens onto $\mathrm{Lip}(\ell) - L_n$ |
-| $n \to \infty$ | the sample sees steeper and steeper secants, so $L_n \uparrow \mathrm{Lip}(\ell)$ | right panel: that plateau falls toward zero |
+| $\rho \to 0$ | the exact value is concave in $\rho$ with tangent $\mathbb{E}_{\hat{P}}[\ell] + \rho L_n$ at the origin, and it equals this tangent below a threshold radius, so the correction vanishes | left panel, where the normalized gap flattens onto $\mathrm{Lip}(\ell) - L_n$ |
+| $n \to \infty$ | a larger sample contains steeper secants, so $L_n \uparrow \mathrm{Lip}(\ell)$ | right panel, where that plateau decreases toward zero |
 
-The script divides the gap by $\rho$ throughout. Dividing is the honest
-choice: the raw gap shrinks with $\rho$ no matter what the loss looks like,
-which would make the small-radius panel a tautology rather than a test.
+The script divides the gap by $\rho$ throughout. Without the division the
+raw gap would shrink with $\rho$ for any loss, and the small-radius panel
+would show nothing specific to the Lipschitz modulus.
 
 ## Why `softplus`
 
 The loss is $\ell(z) = \log(1 + e^z)$ on a deterministic quantile
 discretization of $\mathcal{N}(0, 1)$, with $c_{ij} = |z_i - z_j|$.
 
-It is exactly $1$-Lipschitz — its derivative is the sigmoid, whose supremum
-is $1$ — but that slope is only ever *approached*, never attained on a
-bounded set. So $L_n < 1$ strictly at every finite sample size, and the
-sample-size axis has something to show.
+It is exactly $1$-Lipschitz, because its derivative is the sigmoid, whose
+supremum is $1$. The sigmoid is strictly below $1$ everywhere, so the
+slope $1$ is approached only as $z \to \infty$ and never attained. Every
+secant slope is therefore below $1$, so $L_n < 1$ at every finite sample
+size and the sample-size axis has a nonzero gap to show.
 
 !!! note "A piecewise-linear loss would hide the effect"
 
     Take $\ell(z) = |z|$ instead. Any two support points on the same side
-    of the origin already realize the full slope, so $L_n = \mathrm{Lip}$
-    at essentially any sample size and the small-radius gap is zero to
-    machine precision. That is a much better *unit test* than a plot — and
-    it is one, in
-    `tests/dro/test_equivalences.py::test_small_radius_dual_equals_lipschitz_regularized_expectation`,
-    next to the type-2 (squared-distance) counterpart, where the radius
-    buys a gradient-norm penalty instead.
+    of the origin attain the full slope, so $L_n = \mathrm{Lip}$ as soon
+    as the sample has two such points, and the small-radius gap is zero
+    to machine precision. That case is better suited to a unit test than to
+    a plot, and it is tested in
+    `tests/dro/test_equivalences.py::test_small_radius_dual_equals_lipschitz_regularized_expectation`.
+    The same file covers the type-2 (squared-distance) counterpart, where
+    the radius acts as a gradient-norm penalty instead.
 
 ## Reading the output
 
-The printed table gives $L_n$, the measured normalized gap, and the
-predicted deficiency $1 - L_n$ side by side; they agree to about $10^{-3}$
-across every sample size. The figure says the same thing twice:
+The printed table gives $L_n$, the measured normalized gap and the
+predicted deficiency $1 - L_n$ side by side. They agree to every printed
+digit at every sample size, and the script asserts agreement within
+$5 \times 10^{-3}$. The figure shows the result in two ways.
 
-- **Left**: the normalized gap against radius, one curve per sample size,
-  each with a dotted line at its own $1 - L_n$. The curves sit on their
-  dotted lines for roughly four decades of radius and only peel upward once
-  the ball is large enough to start saturating at $\max_i \ell_i$ — the
-  regime where robustness stops behaving like a linear penalty at all.
-- **Right**: the small-radius plateau against sample size, on log-log axes,
-  with the closed-form $1 - L_n$ overlaid. The two lines are
-  indistinguishable, which is the real claim: the solver is not
-  approximating the regularized problem, it *is* solving it.
+- **Left panel.** The normalized gap against the radius, one curve per
+  sample size, each with a dotted line at its own $1 - L_n$. Each curve
+  lies on its dotted line below a threshold radius and rises above it at
+  larger radii, where the dual minimizer $\gamma^\star$ moves below $L_n$
+  and the worst case grows more slowly than linearly in $\rho$. The
+  threshold shrinks as $n$ grows, because it is the transport cost of the
+  first profitable move, which falls as the support becomes denser.
+- **Right panel.** The small-radius plateau against the sample size, on
+  log-log axes, with the closed-form $1 - L_n$ overlaid. The two lines
+  coincide, which shows that the exact dual value equals the regularized
+  objective $\mathbb{E}_{\hat{P}}[\ell] + \rho L_n$ at this radius, up to
+  floating-point rounding.
 
-!!! warning "The dual is piecewise linear, so `converged` stays `False`"
+!!! warning "The dual is piecewise linear, so Optora bisects it"
 
-    The objective above is a minimum of finitely many affine functions of
-    $\gamma$, and its minimizer is a kink. A fixed-step gradient descent
-    cannot make the gradient norm small there — it oscillates across the
-    kink forever and reports `converged=False` no matter how long it runs.
-    That is fine here, and worth understanding rather than working around:
-    the slopes on both sides of the kink are $O(\rho)$ in the small-radius
-    regime, so the *value* is accurate to roughly $10^{-3}$ even though the
-    *gradient* never is. It is also why an occasional measured gap comes
-    out a hair negative when it should be exactly zero.
+    The objective above is a nonnegative combination of maxima of affine
+    functions of $\gamma$, so it is convex and piecewise linear, and its
+    minimizer generically lies at a kink. A fixed-step gradient method
+    cannot make the gradient norm small there. It oscillates across the
+    kink and never passes a gradient-norm stopping test. `WassersteinAmbiguitySet`
+    therefore bisects the sign change of the derivative, which is
+    monotone in $\gamma$, in a fixed number of steps set by the dtype.
+    The worst case is then read off the primal transport plan, so the
+    value is exact to working precision and the measured gap matches
+    $1 - L_n$ up to rounding.
 
 ## The dual's kink at $L_n$
 
 The equivalence is a statement about the minimizer of the dual, and the
-animation watches that minimizer as the radius shrinks over four and a
+animation follows that minimizer as the radius shrinks over four and a
 half decades. Subtracting $\mathbb{E}_{\hat{P}}[\ell]$ and dividing by
-$\rho$ gives the left panel a fixed shape: the line $\gamma$ to the right
-of $L_n$, where no transport is profitable, and a wall to the left whose
-height scales as $1/\rho$. For a large radius the wall is gentle and the
-minimizer sits below $L_n$; as the radius shrinks the wall steepens and
-the minimizer is pinned to the kink. The middle panel reads the same
-thing from the primal side: $\mathrm{d}V/\mathrm{d}\rho$, which is
-$\gamma^\star$ by the envelope theorem and is taken from autograd,
-settles at $L_n$ for every sample size, below the true constant. The
-right panel is the normalized gap of the static figure, with the
-markers moving along it.
+$\rho$ gives the curve in the left panel a fixed shape. To the right of
+$L_n$, where no transport is profitable, it is the line $\gamma$. To the
+left it rises steeply, by a term that scales as $1/\rho$. For a large
+radius this rise is gentle and the minimizer lies below $L_n$. As the
+radius shrinks the rise steepens and the minimizer is fixed at the kink.
+The middle panel shows the same behavior from the primal side. By the
+envelope theorem $\mathrm{d}V/\mathrm{d}\rho$ equals $\gamma^\star$, and
+the animation takes it from autograd. It settles at $L_n$ for every
+sample size, below the true constant. The right panel is the normalized
+gap of the static figure, with markers moving along it.
 
 <figure class="figure" markdown="span">
   ![The normalized Wasserstein dual in gamma, the derivative of the worst case in the radius, and the normalized gap, as the radius shrinks](../assets/figures/lipschitz-dual-light.gif#only-light){ loading=lazy }
   ![The normalized Wasserstein dual in gamma, the derivative of the worst case in the radius, and the normalized gap, as the radius shrinks](../assets/figures/lipschitz-dual-dark.gif#only-dark){ loading=lazy }
-  <figcaption>Left: the normalized dual objective at $n = 64$, with its minimizer,
-  the sample modulus $L_n$ dotted and the true Lipschitz constant
-  dashed. Middle: $\mathrm{d}V/\mathrm{d}\rho$ for three sample
-  sizes, settling on their own $L_n$. Right: the normalized gap,
-  flattening at $\mathrm{Lip} - L_n$.</figcaption>
+  <figcaption>The left panel shows the normalized dual objective at
+  $n = 64$, with its minimizer, the sample modulus $L_n$ dotted and the
+  true Lipschitz constant dashed. The middle panel shows
+  $\mathrm{d}V/\mathrm{d}\rho$ for three sample sizes, each settling on
+  its own $L_n$. The right panel shows the normalized gap, which flattens
+  at $\mathrm{Lip} - L_n$.</figcaption>
 </figure>
 
 ## The figure
 
-Rendered from this script when the site is built, so it always shows the output of the current code:
+The figure is rendered from this script when the site is built, so it always shows the output of the current code.
 
 <figure class="figure" markdown="span">
   ![Gap between the Lipschitz surrogate and the exact Wasserstein worst case, per unit radius, against the radius and the sample size](../assets/figures/05_wasserstein_lipschitz_equivalence-light.png#only-light){ loading=lazy }
   ![Gap between the Lipschitz surrogate and the exact Wasserstein worst case, per unit radius, against the radius and the sample size](../assets/figures/05_wasserstein_lipschitz_equivalence-dark.png#only-dark){ loading=lazy }
-  <figcaption>Left: as the radius shrinks, the surrogate's excess over the exact value per unit radius flattens at the Lipschitz deficiency $\mathrm{Lip} - L_n$. Right: that deficiency vanishes as the sample refines.</figcaption>
+  <figcaption>In the left panel, the excess of the surrogate over the exact value per unit radius flattens at the Lipschitz deficiency $\mathrm{Lip} - L_n$ as the radius shrinks. The right panel shows that this deficiency vanishes as the sample refines.</figcaption>
 </figure>
 
 ## Source

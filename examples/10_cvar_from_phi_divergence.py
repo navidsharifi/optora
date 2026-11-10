@@ -3,46 +3,49 @@ r"""Recovering CVaR from a phi-divergence ambiguity set.
 Conditional value-at-risk at level alpha, the mean of the worst alpha-fraction
 of outcomes, is itself a distributionally robust objective. It is the worst
 expected loss over every distribution q whose likelihood ratio to the nominal
-p never exceeds 1/alpha (Rockafellar and Uryasev 2002). That constraint is a
-phi-divergence ball (Ben-Tal et al. 2013) for the indicator generator
+p never exceeds 1/alpha (Artzner et al. 1999; Rockafellar and Uryasev 2002).
+That constraint is a phi-divergence ball (Ben-Tal et al. 2013) for the
+indicator generator
 
     phi_alpha(t) = 0 for 0 <= t <= 1/alpha, and +inf otherwise,
 
-whose convex conjugate is phi_alpha^*(s) = max(s, 0) / alpha. Put that
-conjugate into the general phi-DRO dual and the multiplier eta cancels,
-leaving the Rockafellar-Uryasev formula
+whose convex conjugate is phi_alpha^*(s) = max(s, 0) / alpha. With that
+conjugate in the general phi-DRO dual the multiplier eta cancels, which
+leaves the Rockafellar-Uryasev formula
 
     CVaR_alpha(loss) = min over lam of  lam + E_p[(loss - lam)_+] / alpha.
 
-So no new solver is needed. This script builds the ball with the general
+No new solver is needed. This script builds the ball with the general
 `PhiAmbiguitySet`, solves its dual with `GradientDescent`, and checks the
-value against CVaR computed straight from its definition, the mean of the
-upper alpha-tail. The dedicated `CVaRAmbiguitySet` is checked as well.
+value against CVaR computed directly from its definition, the mean of the
+upper alpha-tail. It checks the dedicated `CVaRAmbiguitySet` as well.
 
 Two numerical details matter. First, the dual is piecewise linear in lam,
 so a fixed step size only reaches the optimum to within a multiple of that
 step. The script therefore shrinks the step in stages and lets each stage
-warm-start from the last, which is a plain diminishing-step subgradient
-method. Every stage returns an upper bound on CVaR (weak duality), and the
-bound closes from above. Second, the radius is zero, and the set still
-solves. Most ambiguity sets return the nominal mean at radius 0.0 without
-solving, which is right for a generator that vanishes only at t = 1. This
-one vanishes on all of [0, 1/alpha], so its ball of radius zero is the full
-CVaR set, and `PhiAmbiguitySet` with a dual solver solves at every radius
-for exactly that reason.
+warm-start from the last, which is a diminishing-step subgradient method.
+By weak duality every stage returns an upper bound on CVaR, and the bound
+closes from above. Second, the radius is zero, and the set still solves.
+Most ambiguity sets return the nominal mean at radius 0.0 without solving,
+which is right for a generator that vanishes only at t = 1. This generator
+vanishes on all of [0, 1/alpha], so its ball of radius zero is the full
+CVaR set, and for this reason `PhiAmbiguitySet` with a dual solver solves
+at every radius.
 
-The script also tests a tempting shortcut: a total-variation ball with
-budget (1 - alpha)/alpha. It does not give CVaR. That number bounds how far
-each likelihood ratio may rise above one, which is a pointwise (sup-norm)
-constraint, while total variation limits the L1 mass that moves. For
-alpha <= 1/2 the budget is at least one and the TV worst case is simply the
-largest loss. The correct link is an identity: the TV worst case at budget
-1 - alpha is alpha * CVaR_alpha + (1 - alpha) * max(loss), because the TV
-adversary keeps the upper alpha-tail and moves all remaining mass onto the
-single worst scenario. CVaR can therefore be read off a TV ball, but only
-after that affine correction.
+The script also tests a tempting shortcut, a total-variation ball with
+budget (1 - alpha)/alpha, and shows that it does not give CVaR. That
+number bounds how far each likelihood ratio may rise above one, which is a
+pointwise (sup-norm) constraint, while total variation limits the L1 mass
+that moves. For alpha <= 1/2 the budget is at least one and the TV worst
+case is the largest loss. The correct link is an identity. The TV worst
+case at budget 1 - alpha equals alpha * CVaR_alpha + (1 - alpha) *
+max(loss), because the TV adversary keeps the upper alpha-tail and moves
+all remaining mass onto the single worst scenario. CVaR can therefore be
+read off a TV ball, but only after that affine correction.
 
 References:
+    Philippe Artzner, Freddy Delbaen, Jean-Marc Eber and David Heath,
+    "Coherent Measures of Risk", Mathematical Finance 9(3), 1999.
     Aharon Ben-Tal, Dick den Hertog, Anja De Waegenaere, Bertrand Melenberg
     and Gijs Rennen, "Robust Solutions of Optimization Problems Affected by
     Uncertain Probabilities", Management Science 59(2), 2013.
@@ -74,7 +77,7 @@ from optora.solvers import GradientDescent
 SEED = 20261102
 NUM_SCENARIOS = 400
 ALPHAS = torch.logspace(0.0, -2.0, 25, dtype=torch.float64)
-# Step sizes in the standardized units of `DualAmbiguitySet`; each stage
+# Step sizes in the standardized units of `DualAmbiguitySet`. Each stage
 # warm-starts from the previous optimum.
 STEP_SCHEDULE = (1e-2, 1e-3, 1e-4, 1e-5, 1e-6)
 STEPS_PER_STAGE = 1500
@@ -88,8 +91,8 @@ def sample_problem() -> tuple[torch.Tensor, torch.Tensor]:
     """Return a weighted sample of heavy-tailed (log-normal) losses.
 
     The weights are a uniform draw from the simplex, so no scenario boundary
-    lines up with a round value of alpha and the tail fill is genuinely
-    fractional at almost every level.
+    lines up with a round value of alpha, and the boundary scenario is only
+    partly in the tail at almost every level.
     """
     generator = torch.Generator().manual_seed(SEED)
     loss = torch.exp(
@@ -107,7 +110,7 @@ def tail_mean(
     """Compute CVaR from its definition, the mean of the upper alpha-tail.
 
     Scenarios are taken in decreasing order of loss with their full nominal
-    mass until the cumulative mass reaches alpha; the boundary scenario
+    mass until the cumulative mass reaches alpha, and the boundary scenario
     contributes the remainder (Acerbi and Tasche 2002).
     """
     order = torch.argsort(loss, descending=True)
@@ -120,7 +123,7 @@ def tail_mean(
 
 
 def cvar_generator(ratio: torch.Tensor, alpha: torch.Tensor) -> torch.Tensor:
-    """Indicator generator: zero on `[0, 1/alpha]` and `+inf` beyond it."""
+    """Return the indicator generator, zero on `[0, 1/alpha]` and `+inf` beyond."""
     return torch.zeros_like(ratio).masked_fill(ratio > 1.0 / alpha, torch.inf)
 
 

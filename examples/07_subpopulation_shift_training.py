@@ -1,96 +1,98 @@
 """Training a model with KL-DRO under subpopulation shift.
 
-Everything before this example evaluates DRO on a fixed loss vector. This one
-trains a model: a linear regressor fitted by `torch.optim.Adam` on the
-worst-case expected loss of a `KLAmbiguitySet`, against the same model fitted
-by empirical risk minimization (ERM), and asks the question DRO is sold on.
-When the test population mixes the training subpopulations in different
-proportions, does the robust model degrade more gracefully?
+The earlier examples evaluate DRO on a fixed loss vector. This one trains a
+model. A linear regressor is fitted by `torch.optim.Adam` on the worst-case
+expected loss of a `KLAmbiguitySet` and compared with the same model fitted
+by empirical risk minimization (ERM). The question is the one most often
+asked of DRO. When the test population mixes the training subpopulations in
+different proportions, does the robust model degrade more gracefully?
 
-Setup. Inputs are `x ~ N(0, I_2)` in both groups, so the group is latent and
-cannot be recovered from `x`. The groups differ in the conditional law of the
-label, `y = a_g . x + 0.3 * eps`:
+Setup. Inputs are `x ~ N(0, I_2)` in both groups, so the group is latent
+and cannot be recovered from `x`. The groups differ in the conditional law
+of the label, `y = a_g . x + 0.3 * eps`, as follows.
 
-* group A (majority, 90% of the training data) has slope `a_A = (1, 0)`;
-* group B (minority, 10%) has slope `a_B = (1, 1.5)`.
+* Group A (majority, 90% of the training data) has slope `a_A = (1, 0)`.
+* Group B (minority, 10%) has slope `a_B = (1, 1.5)`.
 
-Training uses
- = 400` points (360 from A, 40 from B), full batch, and the
-model is
-n.Linear(2, 1)` with a bias. The linear model is well specified for
-the *training mixture*: nothing is misspecified. What changes at test time is
-`P(y | x)`, through the mixing proportion `pi` of group B. This is the
-textbook favourable case for DRO (subpopulation shift, Duchi and Namkoong
-2021; Hashimoto et al. 2018), not a claim about DRO in general.
+Training uses `n = 400` points (360 from A, 40 from B) in full batch, and
+the model is `nn.Linear(2, 1)` with a bias. The linear model is well
+specified for the *training mixture*, so nothing is misspecified. What
+changes at test time is `P(y | x)`, through the mixing proportion `pi` of
+group B. This is the standard favourable case for DRO, namely subpopulation
+shift (Duchi and Namkoong 2021, Hashimoto et al. 2018), and it is not a
+claim about DRO in general.
 
-Because `x` has the same law in both groups, the risk of a model `(w, b)` on
-group `g` is available exactly,
+Because `x` has the same law in both groups, the risk of a model `(w, b)`
+on group `g` is available in closed form,
 
     R_g(w, b) = ||w - a_g||^2 + b^2 + sigma_g^2,
 
 and the test risk at mixing proportion `pi` is the exact line
-`R(pi) = (1 - pi) R_A + pi R_B`. No Monte Carlo sweep is needed; a large
-shared test set is used only once, to cross-check the formula. The slope of
-that line, `R_B - R_A`, is the model's *degradation rate*: how fast its risk
-grows as the population moves from A toward B.
+`R(pi) = (1 - pi) R_A + pi R_B`. No Monte Carlo sweep is needed, and a
+large shared test set is used only once, to cross-check the formula. The
+slope of that line, `R_B - R_A`, is the model's *degradation rate*, which
+measures how fast its risk grows as the population moves from A toward B.
 
-Models, all trained from the same data and initialization per seed, by the
-same full-batch Adam loop (the loss is batched over seeds and models, so each
-step is one joint solve):
+All models are trained from the same data and initialization per seed, by
+the same full-batch Adam loop. The loss is batched over seeds and models,
+so each step is one joint solve. The models are the following.
 
-* ERM: `KLAmbiguitySet(radius=0.0)`, the identical code path with no
-  ambiguity;
-* KL-DRO at radii 0.05, 0.2, 0.5;
-* a ridge control: ERM plus `0.3 * ||w||^2`.
+* ERM is `KLAmbiguitySet(radius=0.0)`, the identical code path with no
+  ambiguity.
+* KL-DRO is trained at radii 0.05, 0.2 and 0.5.
+* A ridge control is ERM plus `0.3 * ||w||^2`.
 
-The radii and the ridge penalty were fixed before any shifted-test result was
-looked at, and so were the slopes and noise level. A KL ball of radius `rho`
-around the empirical distribution can move at most `m(rho)` of the probability
-mass onto group B, with `m(0.05) ~ 0.21`, `m(0.2) ~ 0.33`, `m(0.5) ~ 0.50`
-(computed below, not asserted by hand); the sample-level adversary never sees
-the group labels, so it reaches only part of that.
+The radii and the ridge penalty were fixed before any shifted-test result
+was examined, and so were the slopes and the noise level. A KL ball of
+radius `rho` around the empirical distribution can move at most `m(rho)` of
+the probability mass onto group B, with `m(0.05) ~ 0.21`,
+`m(0.2) ~ 0.33` and `m(0.5) ~ 0.50`. These values are computed below
+rather than entered by hand. The sample-level adversary never sees the
+group labels, so it reaches only part of that mass.
 
-Why the minority differs in a second feature rather than by an opposite sign
-in one: with a single feature and opposite slopes, DRO is hard to tell from
-shrinkage toward zero, which is exactly what weight decay does. Here the
-population-optimal weights for mixing proportion `pi` are
+The minority differs in a second feature rather than by an opposite sign
+in one feature. With a single feature and opposite slopes, DRO is hard to
+distinguish from shrinkage toward zero, which is what weight decay does.
+Here the population-optimal weights for mixing proportion `pi` are
 `w*(pi) = (1 - pi) a_A + pi a_B`, a straight path that shrinkage cannot
-follow, and the ridge control checks that it does not. For reference the
-figure also draws a label-using ERM oracle that reweights group B explicitly;
-sample-level DRO does not need labels, and the oracle only marks the frontier.
+follow, and the ridge control checks that it does not. As a reference, the
+figure also draws a label-using ERM oracle that reweights group B
+explicitly. Sample-level DRO does not need labels, and the oracle only
+marks the frontier.
 
-What to watch for:
+The output reports the following quantities.
 
-* The exact crossing `pi*` per radius (DRO below ERM for `pi > pi*`), with
-  its seed spread, and the cost to the left of it.
-* The minority mass `q*` that the worst-case distribution actually uses,
-  next to the mass the ball allows.
-* A negative control with the identical pipeline: the minority differs only
-  in noise (`sigma_B = 1`, same slope). DRO upweights those points as well,
-  and gains nothing at any `pi`. It chases whatever is hard, not whatever is
-  shifted.
-* The ridge control: shrinkage moves the slope toward zero, which is away
-  from both `a_A` and `a_B`, so at any penalty it is worse than ERM on both
-  groups instead of trading one for the other. Measured against ERM, DRO
-  moves mostly along the path `w*(pi)` and ridge mostly off it.
+* The exact crossing `pi*` per radius, beyond which DRO has lower risk than
+  ERM, with its seed spread and the cost to the left of it.
+* The minority mass `q*` that the worst-case distribution uses, next to the
+  mass the ball allows.
+* A negative control with the identical pipeline, in which the minority
+  differs only in noise (`sigma_B = 1`, same slope). DRO upweights those
+  points as well and gains nothing at any `pi`. It upweights points with
+  high loss whether or not their distribution shifts at test time.
+* The ridge control. Shrinkage moves the slope toward zero, which is away
+  from both `a_A` and `a_B`, so at any penalty ridge is worse than ERM on
+  both groups instead of trading one group against the other. Measured
+  from ERM, DRO moves mostly along the path `w*(pi)` and ridge mostly off
+  it.
 
 Training and convergence. The inner worst case is a bracketed bisection, so
-every Adam step solves it exactly at a fixed cost and the outer gradient is
-never biased by an inner tolerance (`docs/training.md`). The script asserts
-that ERM and ridge match their closed forms, that every model's outer
-gradient is near zero, and that one DRO model matches an independent joint
-L-BFGS solve over `(w, b, log eta)`.
+every Adam step solves it exactly at a fixed cost, and no inner tolerance
+biases the outer gradient (`docs/training.md`). The script asserts that ERM
+and ridge match their closed forms, that every model's outer gradient is
+near zero, and that one DRO model matches an independent joint L-BFGS solve
+over `(w, b, log eta)`.
 
-Honest caveats. Every radius above zero costs in-distribution performance
+Caveats. Every radius above zero increases the in-distribution risk
 (`pi = 0.1`), and DRO only wins once the test share of group B exceeds
-`pi*`, which is above the training share. Risk can keep falling with the
-radius at high `pi`, so the example does not claim an interior optimal
+`pi*`, which is above the training share. The risk can keep falling with
+the radius at high `pi`, so the example does not claim an interior optimal
 radius. Sample-level DRO is label-free but only partly upweights the
-minority, and it is not the oracle: it reweights by loss, not by group, so
-it need not match the oracle's trade-off at the same minority mass. With 10
-seeds, individual per-seed numbers are noisy; the checks below use paired
-per-seed differences, and the thresholds were calibrated from runs of this
-script with slack.
+minority. It is also not the oracle, because it reweights by loss and not
+by group, so it need not match the oracle's trade-off at the same minority
+mass. With 10 seeds the individual per-seed numbers are noisy. The checks
+below therefore use paired per-seed differences, and their thresholds were
+set with slack from runs of this script.
 
 References:
     John C. Duchi and Hongseok Namkoong, "Learning Models with Uniform
@@ -201,17 +203,15 @@ class Fit:
 
 
 class BatchedLinear(nn.Module):
-    """Independent
-    n.Linear(2, 1)` models stacked over seeds and models.
+    """Independent `nn.Linear(2, 1)` models stacked over seeds and models.
 
-        Each seed's initialization is the default
-    n.Linear` one, uniform on
-        `[-1/sqrt(2), 1/sqrt(2)]`, shared by every model of that seed so that the
-        only difference between models is the objective.
+    Each seed's initialization is the default `nn.Linear` one, uniform on
+    `[-1/sqrt(2), 1/sqrt(2)]`, and is shared by every model of that seed, so
+    that the models differ only in their objective.
 
-        Attributes:
-            weight: Slopes of shape `(seeds, models, 2)`.
-            bias: Intercepts of shape `(seeds, models)`.
+    Attributes:
+        weight: Slopes of shape `(seeds, models, 2)`.
+        bias: Intercepts of shape `(seeds, models)`.
     """
 
     def __init__(
@@ -257,7 +257,7 @@ def sample_training_sets(
     """Draw one stratified training set per seed.
 
     The first `NUM_TRAIN - NUM_MINORITY` points belong to the majority and the
-    rest to the minority; the model never sees this ordering.
+    rest to the minority. The model never sees this ordering.
 
     Args:
         scenario: Population the groups are drawn from.
@@ -320,7 +320,7 @@ def least_squares(
         x: Inputs of shape `(seeds, n, 2)`.
         y: Labels of shape `(seeds, n)`.
         weights: Sample weights of shape `(variants, n)`, each summing to one.
-        ridge: Penalty on `||w||^2`; the intercept is not penalized.
+        ridge: Penalty on `||w||^2`. The intercept is not penalized.
 
     Returns:
         Slopes of shape `(seeds, variants, 2)` and intercepts of shape
@@ -500,7 +500,7 @@ def joint_reference(fit: Fit, radius: float) -> tuple[torch.Tensor, float]:
     Adam-plus-inner-solve training, from a different starting point.
 
     Args:
-        fit: Trained models; only its first training set is used.
+        fit: Trained models, of which only the first training set is used.
         radius: KL radius.
 
     Returns:
@@ -603,7 +603,7 @@ def paired_gain(risks: torch.Tensor, mixing: float) -> torch.Tensor:
         mixing: Proportion of group B at test time.
 
     Returns:
-        A `(seeds, models)` tensor; positive means the model beats ERM.
+        A `(seeds, models)` tensor, positive where the model beats ERM.
     """
     line = test_risk(risks, torch.tensor([mixing], dtype=DTYPE))[..., 0]
     return line[:, :1] - line
@@ -614,12 +614,12 @@ def displacement_from_erm(
 ) -> tuple[torch.Tensor, torch.Tensor]:
     """Split each model's move away from ERM into along- and off-path parts.
 
-    The path direction is `a_B - a_A`. Moving along it is what reweighting
-    toward group B does; moving off it (in `w` orthogonally, or in the
-    intercept) is what shrinkage or a bias does.
+    The path direction is `a_B - a_A`. Reweighting toward group B moves a
+    model along it, while shrinkage or a change of intercept moves it off
+    the path, orthogonally in `w` or in the intercept.
 
     Args:
-        weight: Slopes of shape `(seeds, models, 2)`; model 0 is ERM.
+        weight: Slopes of shape `(seeds, models, 2)`, with ERM as model 0.
         bias: Intercepts of shape `(seeds, models)`.
         scenario: Population defining the path direction.
 
@@ -883,9 +883,9 @@ def check_shift_claims(fit: Fit, risks: torch.Tensor, bounds: list[float]) -> No
     """Assert the paired, seed-robust claims about the shifted scenario.
 
     Every comparison is a per-seed difference between models trained on the
-    same data, so seed noise in the data cancels. Thresholds were calibrated
-    from runs of this script with slack; they are deliberately far from the
-    observed values and are not claims about exact numbers. In particular
+    same data, so seed noise in the data cancels. The thresholds were set
+    with slack from runs of this script. They are deliberately far from the
+    observed values and are not claims about exact numbers. In particular,
     nothing asserts an interior optimal radius.
 
     Args:

@@ -1,21 +1,24 @@
 """KL-DRO worst-case expectation across a growing ambiguity radius.
 
-Isolates the core DRO primitive: for a fixed nominal distribution and a
-fixed per-scenario loss, how does the worst-case expected loss
+The script isolates the core DRO primitive. For a fixed nominal
+distribution and a fixed per-scenario loss, it measures how the
+worst-case expected loss
 
     sup_{q: D_KL(q || nominal) <= radius} E_q[loss]
 
-grow as the KL-ball radius grows? Two closed-form limits bound the curve,
-and both are checked numerically below rather than only asserted:
+grows with the radius of the KL ball. Two closed-form limits bound the
+curve, and the script checks both numerically.
 
-- radius = 0: the ball collapses to `{nominal}`, so the worst case is
+- At radius 0 the ball collapses to `{nominal}`, so the worst case is
   exactly the nominal expectation `sum(nominal * loss)`.
-- radius -> inf: the ball eventually contains a distribution putting all
-  its mass on the single worst-case scenario, so the worst case saturates
-  at `loss.max()`. That happens exactly, not only in the limit: from
+- As the radius grows, the ball eventually contains the point mass on
+  the highest-loss scenario, so the worst case saturates at
+  `loss.max()`. This happens at a finite radius. From
   `radius = -log(nominal mass of that scenario)` on, the worst case is
-  `loss.max()`, and `KLAmbiguitySet` returns it directly instead of
-  chasing a dual minimizer that sits at infinity.
+  `loss.max()`. `KLAmbiguitySet` reaches it because it bisects a bounded
+  parameterization of the tilt whose upper end is that point mass. A
+  solve of the dual would instead have to approach its infimum as
+  `eta -> 0`.
 
 Run:
     python examples/01_kl_dro_radius_sweep.py

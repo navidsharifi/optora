@@ -1,56 +1,56 @@
 """Group DRO against ERM under a spurious correlation.
 
 A model trained by empirical risk minimization (ERM) is accurate on average
-and can still fail on a small group: when a feature that is easy to read
-agrees with the label on most of the training data, the model leans on it,
-and the examples where it disagrees are the ones it gets wrong. Group DRO
-(Sagawa, Koh, Hashimoto, and Liang 2020) trains on the worst group's loss
-instead. This script reproduces the paper's qualitative findings on a small
-synthetic problem: group DRO raises worst-group accuracy a lot at a small
-cost in average accuracy, but only with strong regularization. An
-over-parameterized model trained without it fits every training group
-perfectly, so the worst training group has no loss left to upweight, and
-group DRO ends where ERM does.
+and can still fail on a small group. When a feature that is easy to read
+agrees with the label on most of the training data, the model relies on it,
+and the examples where it disagrees with the label are the ones the model
+gets wrong. Group DRO (Sagawa, Koh, Hashimoto, and Liang 2020) trains on the
+worst group's loss instead. This script reproduces the paper's qualitative
+findings on a small synthetic problem. Group DRO raises worst-group accuracy
+substantially for a small loss in average accuracy, but only with strong
+regularization. An over-parameterized model trained without it fits every
+training group perfectly, so the worst training group has no loss left to
+upweight, and group DRO ends where ERM does.
 
 Data. A label `y` and a spurious attribute `a`, both in {-1, +1}, define
-four groups (y, a). The features are the spurious-correlation model of
-Sagawa, Raghunathan, Koh, and Liang (2020), in one dimension each:
+four groups (y, a). The features follow the spurious-correlation model of
+Sagawa, Raghunathan, Koh, and Liang (2020), with one-dimensional core and
+spurious features.
 
-* a core feature `y + 0.6 * eps`, which predicts the label in every group
-  (Bayes accuracy about 95%);
-* a spurious feature `a + 0.1 * eps`, which reads `a` almost exactly;
-* 1000 noise features, each `N(0, 1/1000)`, which a model can use to
-  memorize individual training examples.
+* A core feature `y + 0.6 * eps` predicts the label in every group, and
+  the Bayes accuracy of this feature alone is about 95%.
+* A spurious feature `a + 0.1 * eps` reads `a` almost exactly.
+* 1000 noise features, each `N(0, 1/1000)`, let a model memorize
+  individual training examples.
 
 In training, `a = y` for 400 of 420 examples (the majority groups, 200
 each) and `a = -y` for 20 (the minority groups, 10 each), so the spurious
 feature is right 95% of the time and is far less noisy than the core one.
-Test accuracy is measured on 2000 fresh examples per group; the average is
-weighted by the training proportions, as in the paper.
+Test accuracy is measured on 2000 fresh examples per group, and the average
+is weighted by the training proportions, as in the paper.
 
-Models. Logistic regression on all 1002 features, no bias, so it has more
-parameters than training examples. Four methods, each trained with
-`torch.optim.Adam` on minibatches of 128 drawn with replacement, over 5
-seeds, all jointly as one batched loss:
+Models. The model is logistic regression on all 1002 features without a
+bias, so it has more parameters than training examples. Four methods are
+trained with `torch.optim.Adam` on minibatches of 128 drawn with
+replacement, over 5 seeds, all jointly as one batched loss. They are ERM,
+ERM with a strong L2 penalty `0.1 ||w||^2`, group DRO, and group DRO with
+the same penalty.
 
-* ERM, and ERM with a strong L2 penalty `0.1 ||w||^2`;
-* group DRO, and group DRO with the same penalty.
-
-Every method runs through the same `OnlineGroupDRO`: per minibatch,
+Every method runs through the same `OnlineGroupDRO`. On each minibatch,
 `group_losses` averages the per-example losses within each group, `step`
 moves the group weights by exponentiated-gradient ascent, and the model
 descends the weighted loss (Algorithm 1 of Sagawa et al.). ERM is the same
-module with step size zero and the training proportions as weights: its
-objective is then the proportion-weighted minibatch group means, an
-estimate of the average loss. After training, the worst-group training loss
-is evaluated exactly with `CVaRAmbiguitySet(proportions, alpha=0.0)`, which
-is the maximum of the group losses.
+module with step size zero and the training proportions as weights, so its
+objective is the proportion-weighted sum of the minibatch group means, which
+is an estimate of the average loss. After training, the worst-group training
+loss is evaluated exactly with `CVaRAmbiguitySet(proportions, alpha=0.0)`,
+which is the maximum of the group losses.
 
-Expected result, matching the paper's table: ERM is about 97% accurate on
-average and below 50% on the worst group. Strong regularization alone does
-not change that. Group DRO without it fits the training groups perfectly
-and collapses to ERM. Group DRO with it raises worst-group accuracy above
-90% for a drop of about two points on average.
+Expected result, matching the pattern of the paper's table. ERM is about 97%
+accurate on average and below 50% on the worst group. Strong regularization
+alone does not change that. Group DRO without it fits the training groups
+perfectly and behaves like ERM. Group DRO with it raises worst-group
+accuracy above 90% for a drop of less than two points in average accuracy.
 
 References:
     Shiori Sagawa, Pang Wei Koh, Tatsunori B. Hashimoto, and Percy Liang,
@@ -73,8 +73,9 @@ from optora.dro import CVaRAmbiguitySet, OnlineGroupDRO, group_losses
 
 SEED = 20261031
 NUM_SEEDS = 5
-# Groups g = 2 [y = +1] + [a = +1]: (y, a) = (-1, -1), (-1, +1), (+1, -1),
-# (+1, +1). Groups 0 and 3 are the majority, 1 and 2 the minority.
+# Group g = 2 [y = +1] + [a = +1], so groups 0 to 3 are (y, a) = (-1, -1),
+# (-1, +1), (+1, -1), (+1, +1). Groups 0 and 3 are the majority, 1 and 2
+# the minority.
 GROUP_SIZES = (200, 10, 10, 200)
 MINORITY = (1, 2)
 TEST_GROUP_SIZE = 2000
@@ -288,9 +289,9 @@ def main() -> None:
 
     erm, erm_l2, dro, dro_l2 = range(len(METHODS))
     test_worst, test_avg = summary["test worst"], summary["test avg"]
-    # The qualitative result of Sagawa et al. (2020): worst-group accuracy
-    # up by a wide margin on every seed, average accuracy down slightly on
-    # average over seeds (a single seed can tie).
+    # The qualitative result of Sagawa et al. (2020) is that worst-group
+    # accuracy rises by a wide margin on every seed, while average accuracy
+    # drops slightly in the mean over seeds (a single seed can tie).
     assert bool(torch.all(test_worst[:, dro_l2] > test_worst[:, erm] + 0.3))
     assert bool(torch.all(test_worst[:, dro_l2] > test_worst[:, erm_l2] + 0.3))
     average_drop = float((test_avg[:, erm] - test_avg[:, dro_l2]).mean())

@@ -2,22 +2,23 @@ r"""Entropic (Sinkhorn) relaxation of Wasserstein DRO.
 
 The worst-case expectation over a Wasserstein ball on a finite support is
 a linear program, and its value is a piecewise-linear function of the loss
-vector. Along a smooth path of decisions that makes it piecewise smooth in
-the decision, with kinks wherever the optimal transport plan changes. The
-kinks are not a numerical artifact: the minimizer of the robust objective
-typically sits on one, because a maximum of smooth functions is minimized
-where two of them cross. Any outer method that relies on a gradient-norm
-stopping test then never stops, and a fixed-step gradient method oscillates
-around the kink forever.
+vector. Along a smooth path of decisions the robust objective is therefore
+piecewise smooth in the decision, with kinks wherever the optimal transport
+plan changes. The kinks are not a numerical artifact. The minimizer of the
+robust objective typically sits on one, because a maximum of smooth
+functions is minimized where two of them cross. An outer method that
+relies on a gradient-norm stopping test then never stops, and a fixed-step
+gradient method oscillates around the kink indefinitely.
 
 Sinkhorn DRO (Wang, Gao and Xie 2025) replaces the Wasserstein distance by
 its entropic regularization with strength epsilon. On a finite support the
-ball becomes a mixture of KL balls, one around each row of the Gibbs kernel
-Q_ij proportional to exp(-c_ij / epsilon), with one shared budget, and its
-worst case is an exponential tilt: a smooth function of the loss, with
-exact derivatives of every order. This is what `SinkhornAmbiguitySet`
-computes, with the same bracketed bisection as `KLAmbiguitySet`. What this
-script measures is the price and the payoff of the relaxation:
+ball becomes a mixture of KL balls with one shared budget, one around each
+row of the Gibbs kernel Q_ij proportional to exp(-c_ij / epsilon). Its
+worst case is an exponential tilt, a smooth function of the loss whose
+first and second derivatives are computed exactly. `SinkhornAmbiguitySet`
+computes it with the same bracketed bisection as `KLAmbiguitySet`. This
+script measures what the relaxation costs in accuracy and what it gains in
+smoothness.
 
 * As epsilon -> 0 the Sinkhorn worst case converges to the exact
   `WassersteinAmbiguitySet` value at the same radius, and so does the
@@ -27,27 +28,29 @@ script measures is the price and the payoff of the relaxation:
 * The Sinkhorn objective is differentiable everywhere. On a fine grid of
   decisions, the increments of its derivative between neighbouring points
   stay within the grid step times its largest second derivative, as the
-  mean value theorem requires of a twice differentiable function, while the
-  Wasserstein derivative breaks the bound its own curvature allows by an
-  order of magnitude: it jumps. The Sinkhorn second derivative is finite,
-  with peaks that sharpen toward the Wasserstein kinks as epsilon falls.
+  mean value theorem requires of a twice differentiable function. The
+  Wasserstein derivative exceeds the bound its own curvature allows by an
+  order of magnitude, because it jumps. The Sinkhorn second derivative is
+  finite, with peaks that sharpen toward the Wasserstein kinks as epsilon
+  falls.
 * `MinimaxSolver` with a fixed-step `GradientDescent` converges on the
   Sinkhorn objective and reports it, while on the Wasserstein objective it
   exhausts its iteration budget without meeting the gradient tolerance.
 
 One convention matters for the comparison. `SinkhornAmbiguitySet.radius` is
-the transport budget in excess of the entropic bias, the smallest Sinkhorn
-distance any distribution can have from the nominal, so radius zero is the
-kernel-smoothed nominal rather than the nominal itself. The bias is
-epsilon times the expected log-partition of the kernel rows,
-epsilon * sum_i p_i log sum_k exp(-c_ik / epsilon), and it vanishes with
+the transport budget in excess of the smallest Sinkhorn distance any
+distribution can have from the nominal, so radius zero is the
+kernel-smoothed nominal rather than the nominal itself. Under the counting
+reference measure that smallest distance is minus the entropic bias,
+epsilon * sum_i p_i log sum_k exp(-c_ik / epsilon), which is epsilon times
+the expected log-partition of the kernel rows. The bias vanishes with
 epsilon, so the same number serves as the radius of both sets in the
 limit. The script prints it next to the gap.
 
-The problem is the one of example 11: forty log-normal demands with equal
-weight, the ground cost |xi - xi'|, and the quadratic loss (theta - xi)^2
-of a scalar location decision. The loss is smooth in theta, so every kink
-in the Wasserstein objective comes from the ambiguity set.
+The problem is the one of example 11, namely forty log-normal demands with
+equal weight, the ground cost |xi - xi'|, and the quadratic loss
+(theta - xi)^2 of a scalar location decision. The loss is smooth in theta,
+so every kink in the Wasserstein objective comes from the ambiguity set.
 
 References:
     Jie Wang, Rui Gao and Yao Xie, "Sinkhorn Distributionally Robust
@@ -83,7 +86,7 @@ RADIUS = 0.1
 DECISION = 1.0
 EPSILONS = torch.logspace(0.0, -3.0, 13, dtype=torch.float64)
 # The value gap and the exact suboptimality of the relaxed decision are
-# asserted linear in epsilon from here down, with these constants; above it
+# asserted linear in epsilon from here down, with these constants. Above it
 # the kernel is so flat that the smoothed centre of the ball dominates.
 LINEAR_FROM, VALUE_RATE, DECISION_RATE = 0.1, 0.15, 0.05
 SMOOTH_EPSILONS = (0.1, 0.03, 0.01)
@@ -126,7 +129,7 @@ def derivatives(
 
     Both derivatives come from autograd. The first is exact for either set
     by the envelope theorem. For the Sinkhorn set the second is exact as
-    well; for the Wasserstein set autograd differentiates the active
+    well. For the Wasserstein set autograd differentiates the active
     transport plan, so it reports the curvature of the loss and misses the
     jumps of the first derivative, which have no finite second derivative.
 
@@ -162,8 +165,9 @@ def argmin_by_bisection(
 ) -> float:
     """Minimize a convex function by bisecting the sign of its derivative.
 
-    Exact to floating-point precision even where the derivative jumps, so
-    it serves as the reference minimizer of the nonsmooth objective.
+    Fifty halvings of the demand range locate the minimizer to about
+    1e-15, also where the derivative jumps, so the result serves as the
+    reference minimizer of the nonsmooth objective.
     """
     low = torch.tensor(lower, dtype=torch.float64)
     high = torch.tensor(upper, dtype=torch.float64)
@@ -271,7 +275,8 @@ def main() -> None:
     # A C^2 function moves its derivative by at most the step times its
     # largest curvature between neighbouring grid points, and attains that
     # bound where the curvature peaks are wide against the step. The
-    # Wasserstein derivative breaks it by an order of magnitude: it jumps.
+    # Wasserstein derivative exceeds it by an order of magnitude because it
+    # jumps.
     assert excess["wasserstein"] > 5.0
     assert all(excess[f"sinkhorn {epsilon}"] <= 1.05 for epsilon in SMOOTH_EPSILONS)
     uniform = [
