@@ -135,6 +135,32 @@ across every sample size. The figure says the same thing twice:
     *gradient* never is. It is also why an occasional measured gap comes
     out a hair negative when it should be exactly zero.
 
+## The dual's kink at $L_n$
+
+The equivalence is a statement about the minimizer of the dual, and the
+animation watches that minimizer as the radius shrinks over four and a
+half decades. Subtracting $\mathbb{E}_{\hat{P}}[\ell]$ and dividing by
+$\rho$ gives the left panel a fixed shape: the line $\gamma$ to the right
+of $L_n$, where no transport is profitable, and a wall to the left whose
+height scales as $1/\rho$. For a large radius the wall is gentle and the
+minimizer sits below $L_n$; as the radius shrinks the wall steepens and
+the minimizer is pinned to the kink. The middle panel reads the same
+thing from the primal side: $\mathrm{d}V/\mathrm{d}\rho$, which is
+$\gamma^\star$ by the envelope theorem and is taken from autograd,
+settles at $L_n$ for every sample size, below the true constant. The
+right panel is the normalized gap of the static figure, with the
+markers moving along it.
+
+<figure class="figure" markdown="span">
+  ![The normalized Wasserstein dual in gamma, the derivative of the worst case in the radius, and the normalized gap, as the radius shrinks](../assets/figures/lipschitz-dual-light.gif#only-light){ loading=lazy }
+  ![The normalized Wasserstein dual in gamma, the derivative of the worst case in the radius, and the normalized gap, as the radius shrinks](../assets/figures/lipschitz-dual-dark.gif#only-dark){ loading=lazy }
+  <figcaption>Left: the normalized dual objective at $n = 64$, with its minimizer,
+  the sample modulus $L_n$ dotted and the true Lipschitz constant
+  dashed. Middle: $\mathrm{d}V/\mathrm{d}\rho$ for three sample
+  sizes, settling on their own $L_n$. Right: the normalized gap,
+  flattening at $\mathrm{Lip} - L_n$.</figcaption>
+</figure>
+
 ## The figure
 
 Rendered from this script when the site is built, so it always shows the output of the current code:
