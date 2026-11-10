@@ -14,11 +14,12 @@ class ConvergenceStatus:
 
     A loop produces its convergence flag and iteration count on the
     iterate's device, so reporting them as a Python `bool` and `int` costs
-    two synchronizations per solve: exactly the cost `ConvergenceTracker`
+    two synchronizations per solve. That is the cost `ConvergenceTracker`
     removes from the loop, paid again once the loop is over. Under nesting
-    that becomes the dominant cost, since every outer iteration of an
-    `optora.dro.MinimaxSolver` runs an inner dual solve whose diagnostics
-    nothing ever reads.
+    it becomes the dominant cost, since every outer iteration of an
+    `optora.dro.MinimaxSolver` can run an inner solve, such as the dual
+    solve of `optora.dro.PhiAmbiguitySet` with a `dual_solver`, whose
+    diagnostics nothing reads.
 
     `ConvergenceStatus` therefore keeps the diagnostics as the tensors the
     loop computed and converts them on first access, caching each
@@ -54,7 +55,7 @@ class ConvergenceDiagnostics:
 
     Mixed into every solver result so `result.converged` and
     `result.num_iterations` read as plain Python values while the solve
-    itself stays asynchronous: `status` holds them as device tensors until
+    itself stays asynchronous. `status` holds them as device tensors until
     one of these properties is read.
 
     Attributes:
@@ -80,17 +81,18 @@ class ConvergenceTracker:
 
     A textbook iterative method tests `residual < tol` with a Python `if`,
     which forces a device-to-host copy of the residual on every iteration.
-    Optora composes such loops (an `optora.dro` ambiguity set's inner dual
-    solve runs inside a `MinimaxSolver` outer solve, and a Wasserstein
-    ambiguity set additionally runs Sinkhorn iterations), so a single solve
-    would issue thousands of accelerator stalls.
+    Optora nests such loops. The dual solve of `optora.dro.PhiAmbiguitySet`
+    with a `dual_solver`, or the interior-point loop of
+    `optora.dro.MMDAmbiguitySet`, runs inside every outer iteration of a
+    `MinimaxSolver`, so a single solve would issue thousands of host
+    synchronizations.
 
     `ConvergenceTracker` keeps the convergence flag and the iteration count
     as tensors on the iterate's device, updates them with ordinary
     elementwise kernels, and copies them to the host at most once every
     `check_interval` iterations. Callers must freeze their iterates with
     `torch.where(tracker.converged, ...)`, which makes the iterations that
-    run between two host reads exact no-ops: the returned solution is
+    run between two host reads exact no-ops. The returned solution is then
     identical to one produced by testing convergence every iteration,
     whatever `check_interval` is. Larger values trade those redundant
     frozen iterations for fewer synchronizations.
@@ -98,11 +100,11 @@ class ConvergenceTracker:
     That trade is only favourable when an iteration is cheap relative to a
     synchronization, which holds for the inner loops this was written for
     (a few elementwise kernels per iteration against a host read costing
-    microseconds). Raise `check_interval` only in that regime. Loops whose
-    single iteration is expensive — notably an outer solve whose objective
-    is an `optora.dro` worst-case expectation, where one frozen iteration
-    is an entire inner dual solve — should use `check_interval=1` and pay
-    the synchronization instead.
+    microseconds). Raise `check_interval` only in that regime. A loop whose
+    single iteration is expensive should use `check_interval=1` and pay
+    the synchronization instead. An example is an outer solve whose
+    objective is an `optora.dro` worst-case expectation, where one frozen
+    iteration costs an entire inner worst-case solve.
 
     Attributes:
         converged: Zero-dimensional boolean tensor, `True` once the
@@ -122,11 +124,11 @@ class ConvergenceTracker:
         """Initialize the tracker on the device of `reference`.
 
         Args:
-            tol: Positive tolerance the residual is compared against. Kept
-                as a Python float: comparing a tensor against a Python
-                scalar passes it to the comparison kernel directly, whereas
-                materializing it as a tensor would copy it to the device on
-                every solve.
+            tol: Positive tolerance the residual is compared against. It is
+                kept as a Python float, because comparing a tensor against a
+                Python scalar passes it to the comparison kernel directly,
+                whereas materializing it as a tensor would copy it to the
+                device on every solve.
             check_interval: Number of iterations between host reads of the
                 convergence flag.
             reference: Iterate whose device the convergence state is held
@@ -146,8 +148,8 @@ class ConvergenceTracker:
         A loop that evaluates its residual at the current iterate and steps
         with what it learned there tests the starting iterate once before
         iterating. That test is not an iteration, so it latches convergence
-        without advancing the iteration count: a loop that starts at its
-        own solution reports zero iterations.
+        without advancing the iteration count, and a loop that starts at
+        its own solution reports zero iterations.
 
         Args:
             residual: Zero-dimensional nonnegative convergence residual at
@@ -188,7 +190,7 @@ class ConvergenceTracker:
         the frozen iterates make exact for every element.
 
         Args:
-            iteration: Zero-based index of the iteration that just ran.
+            iteration: Zero-based index of the most recent iteration.
 
         Returns:
             `True` if this iteration is a checkpoint and the loop has

@@ -8,14 +8,14 @@ $$
 \qquad \lVert v \rVert_K = \sqrt{v^\top K v},
 $$
 
-is a second-order cone program with no one-dimensional structure: the
+is a second-order cone program with no one-dimensional structure. The
 nonnegativity of $q$ couples every scenario through $K$, so no scalar
-bracket pins the maximizer the way it does for the tilted sets. It is
-solved by a primal-dual interior-point method on the cone
+bracket pins the maximizer as it does for the tilted sets. It is solved by
+a primal-dual interior-point method on the cone
 $\mathbb{R}^n_+ \times \mathcal{Q}^{n+1}$ with Nesterov-Todd scaling and
 Mehrotra's predictor-corrector steps (Nesterov and Todd 1997; Mehrotra 1992;
-Vandenberghe 2010), batched over the loss and radius, which converges in a
-few tens of iterations however large the support.
+Vandenberghe 2010), batched over the loss and radius. In practice it
+converges in a few tens of iterations.
 """
 
 import math
@@ -129,7 +129,7 @@ class _Point(NamedTuple):
 class _Scaling:
     r"""Nesterov-Todd scaling of the cone at a primal-dual pair.
 
-    On the orthant $W = \mathrm{diag}(\sqrt{s/z})$; on the second-order cone
+    On the orthant $W = \mathrm{diag}(\sqrt{s/z})$. On the second-order cone
     $W = \beta (2 v v^\top - J)$ with $J = \mathrm{diag}(1, -I)$, so that
     $W z = W^{-1} s = \lambda$, the scaled point (Vandenberghe 2010, sec. 4).
     """
@@ -185,8 +185,8 @@ class _Program:
 
     The orthant block is $s_1 = x$ ($G_1 = -I$, $h_1 = 0$) and the cone block
     $s_2 = (\epsilon, L^\top (x - p))$ ($G_2 = [0; -L^\top]$, $h_2 =
-    (\epsilon; -L^\top p)$), with $K = L L^\top$ and the equality
-    $\mathbf{1}^\top x = 1$; $c = -\ell$.
+    (\epsilon; -L^\top p)$), with $K = L L^\top$, the equality
+    $\mathbf{1}^\top x = 1$, and $c = -\ell$.
     """
 
     loss: torch.Tensor
@@ -255,7 +255,7 @@ class _Solution(NamedTuple):
     """Maximizer and the multipliers of a solved worst case.
 
     `radius_dual` is the multiplier of the radius constraint as reported,
-    recovered from stationarity wherever that constraint is active;
+    recovered from stationarity wherever that constraint is active.
     `cone_dual` is the interior-point iterate of the same multiplier, the
     scalar part of the cone dual, accurate to the duality gap wherever the
     solve converged.
@@ -274,7 +274,7 @@ def _solve(
 
     Args:
         program: Batched cone program, every tensor detached.
-        tol: Tolerance on the relative duality gap; the residuals are held
+        tol: Tolerance on the relative duality gap. The residuals are held
             to `_RESIDUAL_SLACK` times it.
         max_iter: Maximum number of iterations.
         check_interval: Iterations between host reads of the convergence
@@ -286,8 +286,9 @@ def _solve(
         constraint, the latter recovered from stationarity wherever the
         radius constraint is active. An element whose normal matrix fails
         to factor, or whose direction is not finite, is frozen at its
-        current iterate and no longer holds the loop open for the others:
-        it would recompute the same direction from the same point forever.
+        current iterate and no longer holds the loop open for the others,
+        since it would recompute the same direction from the same point at
+        every iteration.
     """
     point = program.initial_point()
     degree = program.loss.shape[-1] + 1
@@ -354,10 +355,10 @@ def _stationary_radius_dual(
     \tilde\lambda = \frac{\mathrm{Cov}_q(d, \ell)}{\mathrm{Var}_q(d)},
     $$
 
-    which needs no support identification: a scenario of ambiguous mass
-    weighs as little as its mass. It replaces the interior-point iterate of
-    $\lambda$, which in float32 is less accurate than the maximizer: the
-    iterate of a converged element is held only by the dual-residual
+    which needs no support identification, since a scenario of ambiguous
+    mass weighs as little as its mass. It replaces the interior-point
+    iterate of $\lambda$, which in float32 is less accurate than the
+    maximizer. The iterate of a converged element is held only by the dual-residual
     tolerance, and where the normal matrix's Cholesky factorization breaks
     down near the solution the element freezes at an iterate whose
     multiplier can be off by orders of magnitude. In float64 the two agree
@@ -424,7 +425,7 @@ def _search_direction(
     r"""Return Mehrotra's combined predictor-corrector direction.
 
     The affine-scaling predictor solves the Newton system for the
-    complementarity target $\lambda \circ \lambda \to 0$; the corrector
+    complementarity target $\lambda \circ \lambda \to 0$. The corrector
     targets $\sigma \mu e$ with $\sigma = (1 - \alpha_{\mathrm{aff}})^3$ and
     adds the second-order term $(W^{-\top} \Delta s) \circ (W \Delta z)$
     of the predictor (Mehrotra 1992; Vandenberghe 2010, sec. 5.2).
@@ -562,7 +563,9 @@ def _loss_hessian(
 
     and zero rows and columns off $S$. Where the radius constraint is
     inactive (a saturated radius) the maximizer is locally constant and the
-    Jacobian is zero; so is it where $A^\top M A$ is singular, at a vertex.
+    Jacobian is zero. It is also returned as zero at a vertex, where $S$
+    holds one scenario and $A^\top M A$ is singular, and wherever the
+    factorization of $K_{SS}$ fails or the result is not finite.
 
     Args:
         gram: Gram matrix of shape `(n, n)`.
@@ -633,58 +636,61 @@ class MMDAmbiguitySet(AmbiguitySet):
     as the second-order cone program it is, by a batched primal-dual
     interior-point method with Nesterov-Todd scaling (see the module
     docstring), to a relative duality gap of `tol` on the loss standardized
-    to unit spread: in float64 the value is within about `tol` times the
+    to unit spread. In float64 the value is within about `tol` times the
     loss spread of the true worst case. In float32 the accuracy is set by
-    the Gram matrix instead: factoring it in float32 costs up to about its
+    the Gram matrix instead. Factoring it in float32 costs up to about its
     condition number $\kappa(K)$ in units of float32 epsilon, relative to
     the loss spread, which for nearly coincident support points or a smooth
     kernel can exceed the robust excess itself. Pass `nominal`, `gram`, and
-    `loss` in float64 when $\kappa(K)$ is large or the radius small; the
+    `loss` in float64 when $\kappa(K)$ is large or the radius small. The
     gradient still reaches a float32 `loss` through the cast (see
-    `docs/numerics.md`). Each iteration factors one
-    `(n, n)` matrix per batch element, and a few tens of iterations
-    suffice for supports into the thousands. The closed-form bound
+    `docs/numerics.md`). Each iteration factors one `(n, n)` matrix per
+    batch element, and a few tens of iterations suffice for supports into
+    the thousands. The closed-form bound
     $\ell^\top p + \epsilon \lVert \ell \rVert_{K^{-1}}$ of Staib and
-    Jegelka, which ignores $q \ge 0$, is not used: it overstates the worst
-    case whenever the ball reaches the boundary of the simplex.
+    Jegelka is not used. It drops the simplex constraints
+    $\mathbf{1}^\top q = 1$ and $q \ge 0$, so it can overstate the worst
+    case.
 
     The worst case is reported as $\sum_i q^\star_i \ell_i$ with $q^\star$
     detached, so its gradient in `loss` is the maximizer (Danskin's
     theorem). A zero-valued term adds its Hessian, the Jacobian
     $\partial q^\star / \partial \ell$ from the implicit function theorem on
     the optimality conditions over the maximizer's support, so second
-    derivatives in `loss` are exact as well; it is built only when `loss`
-    requires grad or the call runs inside a `torch.func` transform. The
-    derivatives with respect to `nominal` and a tensor `radius` are first
-    order, by the envelope theorem: the radius derivative is the multiplier
+    derivatives in `loss` are exact as well. The term is built only when
+    `loss` requires grad or the call runs inside a `torch.func` transform.
+    The derivatives with respect to `nominal` and a tensor `radius` are
+    first order, by the envelope theorem. The radius derivative is the
+    multiplier
     of the radius constraint, which the solve resolves to about `tol`
     divided by the radius, relative to the loss spread.
 
     A radius at or beyond the kernel diameter of the simplex,
     $\max_{i,j} \lVert e_i - e_j \rVert_K$, admits every distribution, so
-    the worst case is the largest loss; the solve caps the radius at twice
+    the worst case is the largest loss. The solve caps the radius at twice
     that diameter plus one, which leaves the value unchanged and keeps the
     program well scaled.
 
     A radius of zero admits only the nominal when $K$ is positive definite,
     and the worst case is then the exact `sum(nominal * loss)`. A singular
     $K$ (duplicate support points, or any kernel that does not separate
-    the support) does not: a distribution that differs from the nominal
+    the support) does not. A distribution that differs from the nominal
     along the null space of $K$ has zero discrepancy, so the ball of radius
     zero is a face of the simplex and the worst case can exceed the
     nominal expectation. Which case applies is read off the eigenvalues at
-    construction ($\lambda_{\min} > n \varepsilon \lambda_{\max}$). For a
-    singular $K$ a zero radius is solved at the probe radius $\epsilon$
-    used for the radius derivative and extrapolated along the cone-dual
-    multiplier, $V(0) = V(\epsilon) - \epsilon\,\lambda(\epsilon)$, which
-    is exact up to the solve tolerance whenever $V$ is linear on
-    $[0, \epsilon]$, as it is below the first change of the maximizer's
-    support.
+    construction, as $\lambda_{\min} > n \varepsilon \lambda_{\max}$ with
+    $\varepsilon$ the machine epsilon of the working dtype. For a singular
+    $K$ a zero radius is solved at a small probe radius $\delta$, equal to
+    $\sqrt{\mathrm{tol}}$ times the radius cap below, and extrapolated along
+    the cone-dual multiplier, $V(0) = V(\delta) - \delta\,\lambda(\delta)$.
+    This is exact up to the solve tolerance whenever $V$ is linear on
+    $[0, \delta]$, as it is below the first change of the maximizer's
+    support. The same probe solve gives the radius derivative at zero.
 
     Attributes:
         nominal: Reference distribution the ambiguity set is centered on.
-        divergence: `MMDDivergence` holding the Gram matrix; `contains` uses
-            it.
+        divergence: `MMDDivergence` holding the Gram matrix, which
+            `contains` uses.
         radius: Nonnegative bound $\epsilon$ on the maximum mean
             discrepancy, a float or a tensor of radii evaluated as one
             batch.
@@ -692,8 +698,8 @@ class MMDAmbiguitySet(AmbiguitySet):
             decomposition with negative rounding-level eigenvalues clipped,
             so a singular Gram matrix (duplicate support points) is valid.
         max_iter: Maximum number of interior-point iterations.
-        tol: Tolerance on the relative duality gap, floored at 100 ulps of
-            the working dtype.
+        tol: Tolerance on the relative duality gap, floored at 100 times
+            the machine epsilon of the working dtype.
         check_interval: Iterations between host reads of the convergence
             flag. An iteration factors a matrix per batch element, so a read
             every iteration is cheap by comparison.
@@ -784,9 +790,10 @@ class MMDAmbiguitySet(AmbiguitySet):
                 are a batch of independent loss vectors, solved together.
 
         Returns:
-            A tensor of shape `(...)` holding the worst-case expected loss:
-            the exact `sum(nominal * loss)` where the radius is zero and the
-            Gram matrix is positive definite, and otherwise the expectation
+            A tensor of shape `(...)` holding the worst-case expected loss.
+            It is the exact `sum(nominal * loss)` where the radius is zero
+            and the Gram matrix is positive definite, and otherwise the
+            expectation
             of `loss` under the interior-point maximizer, extrapolated to a
             zero radius of a singular Gram matrix as the class docstring
             describes.
@@ -892,8 +899,9 @@ class MMDAmbiguitySet(AmbiguitySet):
         all-ones direction, where it is not defined, so that $\sum_i p_i\,
         \partial V / \partial p_i = V$. At a zero radius of a positive
         definite Gram it is the loss itself, the derivative of
-        $\langle p, \ell \rangle$; of a singular Gram it is the envelope
-        derivative of the probe solve, accurate to about the probe radius.
+        $\langle p, \ell \rangle$. At a zero radius of a singular Gram it
+        is the envelope derivative of the probe solve, accurate to about
+        the probe radius.
         The radius derivative at a zero radius is the right derivative,
         read off the probe solve.
 

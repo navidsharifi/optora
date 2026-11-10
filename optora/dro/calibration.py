@@ -29,22 +29,22 @@ asymptotically exact confidence interval for it.
       \frac{\chi^2_{1,\,1-\alpha}}{n}.
   $$
 
-Both radii shrink like $1/n$, which is what makes the robust value a
-variance-sized correction to the empirical risk rather than a
-dimension-dependent one.
+Both radii shrink like $1/n$, so the robust value exceeds the empirical
+risk by a correction of order $\sqrt{\mathrm{Var}(\ell) / n}$ rather than
+by a dimension-dependent one.
 
 A two-sided `confidence` $1 - \alpha$ uses $\chi^2_{1,\,1-\alpha} =
-z_{1-\alpha/2}^2$; a one-sided upper bound at level $1 - \alpha$ uses
-$z_{1-\alpha}^2$, since each side of the interval fails with probability
-$\alpha / 2$.
+z_{1-\alpha/2}^2$. A one-sided upper bound at level $1 - \alpha$ uses
+$z_{1-\alpha}^2$ instead, since each side of the two-sided interval fails
+with probability $\alpha / 2$.
 
 A phi-divergence ball can instead be calibrated to cover a $d$-dimensional
 parameter simultaneously, such as every component of a vector risk or the
 minimizer of a risk over $d$ parameters, which replaces $\chi^2_1$ by
 $\chi^2_d$ (Duchi, Glynn, and Namkoong 2021). Every quantile is computed
 on the host in double precision, from the standard library's normal
-quantile for one degree of freedom and from the closed-form $\chi^2_d$
-survival function otherwise, so no helper here touches a device.
+quantile for one degree of freedom and from series for the two
+$\chi^2_d$ tails otherwise, so no quantile computation touches a device.
 """
 
 import math
@@ -63,8 +63,9 @@ def _chi_square_survival(value: float, degrees_of_freedom: int) -> float:
     r"""Return the upper tail $\Pr(\chi^2_d > x)$ of an integer-order chi-square.
 
     With $y = x / 2$ the tail is the regularized upper incomplete gamma
-    function $Q(d / 2, y)$, which at a half-integer order is a finite sum
-    of positive terms (Abramowitz and Stegun 1964, 26.4.4 and 26.4.5):
+    function $Q(d / 2, y)$. At an integer or half-integer order it is a
+    finite sum of positive terms (Abramowitz and Stegun 1964, 26.4.4 and
+    26.4.5),
 
     $$
     Q(k, y) = \sum_{j=0}^{k-1} \frac{e^{-y} y^j}{j!}, \qquad
@@ -107,7 +108,7 @@ def _chi_square_cdf(value: float, degrees_of_freedom: int) -> float:
 
     which keeps the relative precision that $1 - Q(a, y)$ loses once the
     lower tail is small. The series converges geometrically for $y < a + 1$
-    (Press et al. 2007, section 6.2); above that the lower tail is at least
+    (Press et al. 2007, section 6.2). Above that the lower tail is at least
     about one half, so it is formed as $1 - Q(a, y)$ without loss.
 
     Args:
@@ -150,13 +151,13 @@ def _chi_square_inverse_cdf(confidence: float, degrees_of_freedom: int) -> float
     so the residual keeps its relative precision at any level. The residual
     is taken between logarithms, $\log P(x) - \log c$ or $\log(1 - c) -
     \log Q(x)$, both increasing in $x$ and close to linear along the power
-    law and exponential decay of the two tails, where Newton steps on the
-    probabilities themselves would only converge linearly. Below the median
-    the bound $P(a, y) \le y^a / \Gamma(a + 1)$ gives a positive lower end
-    of the bracket; the upper end is found by doubling from the
-    Wilson-Hilferty approximation (Wilson and Hilferty 1931). Each Newton
-    step that would leave the bracket is replaced by a bisection step,
-    geometric while the bracket spans more than a factor of two.
+    law and exponential decay of the two tails. Far from the root, Newton
+    steps on the probabilities themselves would converge only linearly.
+    Below the median the bound $P(a, y) \le y^a / \Gamma(a + 1)$ gives a
+    positive lower end of the bracket. The upper end is found by doubling
+    from the Wilson-Hilferty approximation (Wilson and Hilferty 1931). Each
+    Newton step that would leave the bracket is replaced by a bisection
+    step, geometric while the bracket spans more than a factor of two.
 
     Args:
         confidence: Level $c \in (0, 1)$.
@@ -275,11 +276,11 @@ def phi_divergence_radius(
 
     Sets $\rho_n = \frac{\varphi''(1)}{2} \chi^2_{d,\,1-\alpha} / n$
     (Duchi, Glynn, and Namkoong 2021). With the default $d = 1$ the ball is
-    a confidence region for a scalar risk; with $d > 1$ it covers a
+    a confidence region for a scalar risk. With $d > 1$ it covers a
     $d$-dimensional parameter simultaneously, at the price of a larger
-    radius. The divergence is the one optora
-    computes, $D_\varphi(q \,\|\, p) = \sum_i p_i \varphi(q_i / p_i)$, so
-    the curvature is that of its generator: $1$ for KL
+    radius. The divergence is the one optora computes,
+    $D_\varphi(q \,\|\, p) = \sum_i p_i \varphi(q_i / p_i)$, so the
+    curvature is that of its generator, $1$ for KL
     ($\varphi(t) = t \log t - t + 1$) and $2$ for chi-square
     ($\varphi(t) = (t - 1)^2$). Papers that normalize $\varphi''(1) = 2$ or
     $\varphi(t) = \frac{1}{2}(t - 1)^2$ state radii that differ from these

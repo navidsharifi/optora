@@ -26,13 +26,11 @@ class MinimaxProblem:
         \mathbb{E}_q[\mathrm{loss\_fn}(x)]
     $$
 
-    Every `AmbiguitySet` subclass (`KLAmbiguitySet`, `PhiAmbiguitySet`,
-    `ChiSquareAmbiguitySet`, `TotalVariationAmbiguitySet`,
-    `WassersteinAmbiguitySet`) already reduces its inner supremum over
-    candidate distributions `q` to a tractable convex dual objective or an
-    exact closed form via `worst_case_expectation`. `MinimaxProblem`
-    therefore only needs to describe the remaining outer minimization over
-    the decision variable `x`.
+    Every `AmbiguitySet` subclass in `optora.dro` evaluates its inner
+    supremum over candidate distributions `q` in `worst_case_expectation`,
+    either in closed form or by a dedicated inner solve. `MinimaxProblem`
+    therefore only describes the remaining outer minimization over the
+    decision variable `x`.
 
     Attributes:
         ambiguity_set: Divergence-based ambiguity set whose
@@ -80,44 +78,39 @@ class MinimaxSolver(Solver[MinimaxProblem, MinimaxResult]):
         \mathbb{E}_q[\mathrm{loss\_fn}(x)]
     $$
 
-    Because every `AmbiguitySet` subclass already reformulates its inner
-    supremum as a tractable convex dual objective (or an exact closed form)
-    via `worst_case_expectation(loss)`, the composed function
-    `x -> ambiguity_set.worst_case_expectation(loss_fn(x))` is itself a
-    plain differentiable scalar objective of `x`, so the remaining work is
-    an ordinary minimization over `x`. `worst_case_expectation` stays
-    differentiable with respect to `x` by the envelope theorem: each
-    ambiguity set that needs an inner dual solve (`KLAmbiguitySet`,
-    `PhiAmbiguitySet`, `ChiSquareAmbiguitySet`, `WassersteinAmbiguitySet`)
-    finds its own dual variable in a detached inner solve, then
-    re-evaluates the dual objective at that (detached) optimum with the
-    still-attached `loss` tensor; since the dual objective's gradient with
-    respect to its own dual variable vanishes at that optimum, the gradient
-    of the re-evaluated objective with respect to `x` is exactly the
-    gradient one would get by differentiating through the full inner solve,
-    without actually needing to do so.
+    Every `AmbiguitySet` subclass evaluates its inner supremum in
+    `worst_case_expectation(loss)`, so the composed function
+    `x -> ambiguity_set.worst_case_expectation(loss_fn(x))` is an ordinary
+    differentiable scalar objective of `x`, and the remaining work is a
+    plain minimization over `x`. The composition stays differentiable in
+    `x` without differentiating through the inner solve. Each ambiguity
+    set finds its maximizer, or its dual optimum, in a detached solve and
+    attaches only the final value to the graph. By Danskin's theorem the
+    derivative of the supremum with respect to `loss` is the maximizing
+    distribution, so the chain rule through `loss_fn` gives the exact
+    gradient in `x`.
 
-    `MinimaxSolver` therefore reduces to wiring that composed objective into
-    `solver`, the outer solver minimizing over `x`. This deliberately does not
-    reimplement a
-    primal-dual ascent-descent directly over the full candidate
-    distribution `q` (as `SaddlePointSolver` does generically): every
-    concrete `AmbiguitySet` already reduces that potentially high-
-    dimensional inner maximization to a low-dimensional convex dual (or an
-    exact closed form), which is more numerically direct than a generic
-    ascent-descent over the simplex.
+    `MinimaxSolver` therefore passes that composed objective to `solver`,
+    the outer solver minimizing over `x`. It does not run a primal-dual
+    ascent-descent over the full candidate distribution `q`, as the
+    generic `SaddlePointSolver` does. Each concrete `AmbiguitySet` already
+    replaces that $n$-dimensional inner maximization with a closed form, a
+    scalar root search, a low-dimensional convex dual or, for
+    `MMDAmbiguitySet`, an interior-point method. None of them iterates
+    over the simplex.
 
-    One outer iteration therefore costs an entire inner dual solve, which
-    is orders of magnitude more expensive than the host synchronization a
-    convergence check costs. Configure `solver` with `check_interval=1`:
-    the library-wide default `optora.core.convergence.DEFAULT_CHECK_INTERVAL`
-    is tuned for cheap inner loops and would keep running frozen — and
-    therefore wasted — inner solves after the outer loop has converged.
+    One outer iteration therefore costs an entire inner solve, which is
+    orders of magnitude more expensive than the host synchronization of a
+    convergence check. Configure `solver` with `check_interval=1`. The
+    library-wide default `optora.core.convergence.DEFAULT_CHECK_INTERVAL`
+    is tuned for cheap inner loops, and with it the outer loop would keep
+    running frozen, and therefore wasted, inner solves after it has
+    converged.
 
     The solve composes with `torch.func` transforms of its caller whenever
-    `solver` does, as `optora.solvers.GradientDescent` does: every
-    ambiguity set's `worst_case_expectation` already supports them, so
-    `torch.func.vmap` over, for example, a tensor radius solves one robust
+    `solver` does, as `optora.solvers.GradientDescent` does. Every
+    ambiguity set's `worst_case_expectation` supports them, so
+    `torch.func.vmap` over a tensor radius, for example, solves one robust
     problem per radius in one call.
 
     Attributes:

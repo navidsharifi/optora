@@ -22,7 +22,7 @@ class SinkhornAmbiguitySet(TiltedAmbiguitySet):
     $\epsilon$, reference measure $\nu$, and ground cost $C$ is
     $\{P : \mathcal{W}_\epsilon(\hat P, P) \le \rho\}$ (see
     `optora.divergences.EntropicTransportDivergence`). On a finite support
-    it is a shared-budget mixture of KL balls (their Lemma 3.11):
+    it is a shared-budget mixture of KL balls (their Lemma 3.11),
 
     $$
     \sup_{P:\, \mathcal{W}_\epsilon(\hat P, P) \le \rho} \mathbb{E}_P[\ell]
@@ -36,28 +36,30 @@ class SinkhornAmbiguitySet(TiltedAmbiguitySet):
     row of support point $i$ and $\bar\rho = \rho - \min_P
     \mathcal{W}_\epsilon(\hat P, P)$ is the budget in excess of the
     entropic bias. `radius` is $\bar\rho$, so every nonnegative radius is
-    feasible and radius zero is the smallest non-empty set: the single
-    kernel-smoothed nominal $P^0 = \hat p^\top Q$, not $\hat P$ itself.
+    feasible. Radius zero gives the smallest non-empty set, the single
+    kernel-smoothed nominal $P^0 = \hat p^\top Q$ rather than $\hat P$
+    itself.
 
     Every row's maximizer is an exponential tilt
     $\gamma_i \propto Q_i\, e^{\ell/(\lambda \epsilon)}$ at one shared
     temperature (their Remark 3.3), so the worst case is pinned by the
-    bracketed tilt bisection of `optora.core.TiltedAmbiguitySet`, exactly
-    as for `optora.dro.KLAmbiguitySet`: solver-free, synchronization-free,
-    exact first and second derivatives. The worst-case distribution
+    bracketed tilt bisection of `optora.core.TiltedAmbiguitySet`, as for
+    `optora.dro.KLAmbiguitySet`. The solve needs no iterative solver and no
+    host synchronization, and its first and second derivatives are exact.
+    The worst-case distribution
     $\sum_i \hat p_i \gamma_i$ is supported on the support of $\nu$, not
     only of $\hat P$, and the worst case saturates at the largest loss on
     that support once
     $\bar\rho \ge \epsilon \sum_i \hat p_i \log(1 / Q_i(A))$, with $A$ the
     highest-loss scenarios. With a zero cost every row is $\nu$ and the set
-    is the KL ball of radius $\bar\rho/\epsilon$ around $\nu$; as
+    is the KL ball of radius $\bar\rho/\epsilon$ around $\nu$. As
     $\epsilon \to 0$ the dual tends to the Wasserstein-DRO dual (their
     Remark 3.2).
 
     Attributes:
         nominal: Nominal distribution $\hat P$ the transport starts from.
         divergence: `EntropicTransportDivergence` holding `cost`,
-            `reference`, and `epsilon`; `contains` uses it.
+            `reference`, and `epsilon`, which `contains` uses.
         radius: Nonnegative budget $\bar\rho$ in excess of the entropic
             bias, a float or a tensor of radii evaluated as one batch.
     """
@@ -92,11 +94,11 @@ class SinkhornAmbiguitySet(TiltedAmbiguitySet):
             reference: Nonnegative reference measure $\\nu$ of shape `(n,)`
                 that the worst case may move mass onto. Defaults to the
                 counting measure on the whole support.
-            max_iter: Sinkhorn iterations for `contains` only; the worst
-                case does not iterate.
+            max_iter: Sinkhorn iterations, used only by `contains`. The
+                worst case does not iterate.
             tol: Sinkhorn tolerance for `contains` only.
             eps: Deprecated and ignored, as in
-                `EntropicTransportDivergence`; passing it emits a
+                `EntropicTransportDivergence`. Passing it emits a
                 `DeprecationWarning`.
             check_interval: Sinkhorn host-read interval for `contains` only.
             validate: Whether to run the value checks that synchronize with
@@ -145,7 +147,7 @@ class SinkhornAmbiguitySet(TiltedAmbiguitySet):
 
     @property
     def _reachable(self) -> torch.Tensor:
-        """Scenarios the worst case can reach: the support of the reference."""
+        """Scenarios the worst case can reach, the support of the reference."""
         attached = self._attached_operands
         if attached is not None:
             return attached[1]
@@ -172,7 +174,7 @@ class SinkhornAmbiguitySet(TiltedAmbiguitySet):
         r"""Return the kernel-smoothed nominal $P^0 = \hat p^\top Q$, the ball's centre.
 
         Args:
-            dtype: Dtype to compute in; defaults to `nominal`'s.
+            dtype: Dtype to compute in. Defaults to `nominal`'s.
 
         Returns:
             The distribution attained at radius zero, of `nominal`'s shape.
@@ -189,7 +191,7 @@ class SinkhornAmbiguitySet(TiltedAmbiguitySet):
         return torch.sum(center * loss, dim=-1).expand(batch_shape)
 
     def _tilt_entries(self, gap: torch.Tensor, batch_shape: torch.Size) -> int:
-        """Return the entries of one tilt: every kernel row, `n` times the default."""
+        """Return the entries of one tilt, `n` times the default (one per row)."""
         return super()._tilt_entries(gap, batch_shape) * gap.shape[-1]
 
     def _tilted_distribution(

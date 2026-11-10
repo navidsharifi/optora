@@ -1,4 +1,4 @@
-"""DRO formulations wiring a divergence-based ambiguity set into `AmbiguitySet`."""
+"""Ambiguity sets for DRO and the solvers, estimators and calibration built on them."""
 
 from optora.dro.calibration import (
     chi_square_radius,

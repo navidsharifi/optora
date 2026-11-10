@@ -2,7 +2,7 @@ r"""Group distributionally robust optimization (Sagawa et al. 2020).
 
 The training population is a mixture of $G$ known groups, for example the
 combinations of a label and a spurious attribute, and group DRO minimizes the
-risk of the worst group rather than the average one:
+risk of the worst group rather than the average one,
 
 $$
 \min_\theta \max_{g = 1, \dots, G} R_g(\theta)
@@ -13,11 +13,12 @@ $$
 Over the empirical group risks, the inner supremum is a worst case over
 distributions on the groups, so it is an existing ambiguity set applied to
 the vector of group losses that `group_losses` computes, centred on the
-group proportions $p$:
+group proportions $p$. Four of the library's sets recover the worst group
+risk.
 
 - `CVaRAmbiguitySet(p, alpha=0.0)` is the maximum over the groups with
-  $p_g > 0$; its level $\alpha$ interpolates between ERM at $\alpha = 1$ and
-  group DRO as $\alpha \to 0$.
+  $p_g > 0$. Its level $\alpha$ interpolates between ERM at $\alpha = 1$
+  and group DRO as $\alpha \to 0$.
 - `TotalVariationAmbiguitySet(p, radius=1.0)` is the maximum over all
   groups.
 - `KLAmbiguitySet(p, radius)` and `ChiSquareAmbiguitySet(p, radius)` are
@@ -27,10 +28,10 @@ group proportions $p$:
 
 On a minibatch, the maximum of the minibatch group means overestimates the
 worst group risk ($\mathbb{E}[\max] \ge \max \mathbb{E}$), and the worst
-group can change from one minibatch to the next. `OnlineGroupDRO` is the
-online algorithm of Sagawa et al. instead: it keeps the group weights as
-state and moves them by exponentiated-gradient ascent, one step per
-minibatch.
+group can change from one minibatch to the next. `OnlineGroupDRO`
+implements the online algorithm of Sagawa et al. for this setting. It
+keeps the group weights as state and moves them by exponentiated-gradient
+ascent, one step per minibatch.
 """
 
 import torch
@@ -69,11 +70,11 @@ def group_losses(
     Args:
         loss: Per-sample losses of shape `(..., n)`.
         groups: Integer group index of each sample, in `[0, num_groups)`,
-            of a shape broadcasting against `loss`: `(n,)` for one group
-            assignment shared by every batch element. Indices out of range
-            are not checked, since the check would read the data on the
-            host: a CPU tensor raises an indexing error and a CUDA tensor
-            triggers a device-side assertion.
+            of a shape broadcasting against `loss`, for example `(n,)` for
+            one group assignment shared by every batch element. Indices out
+            of range are not checked, since the check would read the data
+            on the host. A CPU tensor then raises an indexing error and a
+            CUDA tensor triggers a device-side assertion.
         num_groups: Number of groups $G$, at least one.
 
     Returns:
@@ -135,9 +136,9 @@ class OnlineGroupDRO(nn.Module):
     optimizer.step()
     ```
 
-    in that order, as in Algorithm 1: the model step uses the weights
+    in that order. As in Algorithm 1, the model step uses the weights
     already updated on the same minibatch. `forward` alone never changes
-    the weights; without `step` it is a fixed reweighting.
+    the weights, so without `step` it is a fixed reweighting.
 
     A group absent from the minibatch has group loss zero (see
     `group_losses`), so `step` leaves its unnormalized weight unchanged,
@@ -156,7 +157,7 @@ class OnlineGroupDRO(nn.Module):
     The weights are state, kept as normalized log-weights in a buffer, so
     `.to(...)` moves them, `state_dict` checkpoints them, and a group with
     zero initial weight keeps weight zero. `step` runs without autograd and
-    is not part of the objective; `forward` is a pure function of the
+    is not part of the objective. `forward` is a pure function of the
     weights and the group losses, so it composes with `torch.func`
     transforms, while `step` must run outside them. Neither synchronizes
     with the host.
@@ -185,7 +186,7 @@ class OnlineGroupDRO(nn.Module):
             initial_weights: Starting group weights $q_0$, a nonnegative
                 floating-point tensor of shape `(..., G)` that sums to one
                 along its last dimension. Sagawa et al. start from the
-                uniform distribution; starting from the group proportions
+                uniform distribution. Starting from the group proportions
                 makes a zero step size exactly ERM. Leading dimensions give
                 independent adversaries, for example one per jointly
                 trained model.

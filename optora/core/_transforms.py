@@ -1,7 +1,7 @@
 """Introspection of the active `torch.func` transforms.
 
 PyTorch has no public query for whether code runs inside a `torch.func`
-transform, which a solver needs to know: `Tensor.requires_grad_` and
+transform. A solver needs to know, because `Tensor.requires_grad_` and
 `torch.autograd.grad` are unsupported there, and under `vmap` a tensor has
 no single value to read on the host. This module is the one place optora
 reads PyTorch's private interpreter stack, so a change to it is a one-line

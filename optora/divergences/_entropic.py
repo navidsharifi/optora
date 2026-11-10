@@ -62,7 +62,7 @@ def semi_dual(
     r"""Evaluate the semi-dual $\sum_j c_j g_j - \sum_i r_i \log \sum_j Q_{ij} e^{g_j}$.
 
     A column outside the solve carries the potential $-\infty$, which drops
-    it from every row's normalizer; its term $c_j g_j$ is the limit
+    it from every row's normalizer. Its term $c_j g_j$ is the limit
     $0 \cdot (-\infty) = 0$ and is read as zero, so it neither turns the
     value into `nan` nor sends a gradient into $c_j$.
 
@@ -117,8 +117,8 @@ def solve_semi_dual(
     takes the potential $-\infty$, the semi-dual's maximizer in that
     coordinate, so the solve is that of the problem restricted to the two
     supports. No coupling meets marginals of different total mass, so a
-    rounding-level mismatch would floor the marginal violation above `tol`;
-    the solve rescales the columns to the rows' total instead.
+    rounding-level mismatch would keep the marginal violation above `tol`.
+    The solve therefore rescales the columns to the total mass of the rows.
 
     Args:
         rows: Nonnegative row marginal of shape `(..., n)`.
@@ -130,7 +130,7 @@ def solve_semi_dual(
             below which the violation is rounding error.
         max_iter: Maximum number of Sinkhorn scaling iterations.
         newton_max_iter: Maximum number of damped Newton iterations run
-            after Sinkhorn stops short of `tol`; zero disables the phase.
+            after Sinkhorn stops short of `tol`. Zero disables the phase.
         check_interval: Sinkhorn iterations between host reads of the
             convergence flag. The Newton phase reads it every iteration.
 
@@ -173,11 +173,11 @@ def _sinkhorn(
             on `active`.
         log_kernel: Row-stochastic $\log Q$ of shape `(n, n)`.
         active: Boolean mask of shape `(..., n)` of the columns in the
-            solve; the potential stays `-inf` elsewhere.
+            solve. The potential stays `-inf` elsewhere.
         tol: Floored tolerance on the marginal violation.
         max_iter: Maximum number of iterations.
         check_interval: Iterations between host reads of the convergence
-            flag; the potentials freeze once converged.
+            flag. The potentials freeze once converged.
 
     Returns:
         The column potentials, and whether the marginal violation fell below
@@ -215,27 +215,29 @@ def _newton(
     is positive semidefinite with the constant vector in its kernel, since
     a common shift of $g$ leaves the semi-dual unchanged. Its entries scale
     with the column marginal, which can span the whole floating-point
-    range, so the step is solved in the metric $D = \mathrm{diag}(m)$: with
-    $\tilde H = D^{-1/2} H D^{-1/2}$, whose eigenvalues lie in $[0, 1]$, and
-    $v = D^{1/2}\mathbf{1} / \lVert D^{1/2}\mathbf{1} \rVert$ its unit
-    kernel vector, it solves
+    range, so the step is solved in the metric $D = \mathrm{diag}(m)$. Let
+    $\tilde H = D^{-1/2} H D^{-1/2}$, whose eigenvalues lie in $[0, 1]$,
+    and let $v = D^{1/2}\mathbf{1} / \lVert D^{1/2}\mathbf{1} \rVert$ be
+    its unit kernel vector. The method solves
     $(\tilde H + v v^\top + \mu I)\,u = D^{-1/2}\nabla$ for a per-element
-    Levenberg-Marquardt damping $\mu$ and steps by $d = D^{-1/2} u$, then
-    drops the step's mean. Unscaled, a column carrying a vanishing share of
-    the plan has curvature below the rounding error of the other entries,
-    and two such columns with equal kernel columns, as coincident support
-    points give, make the system exactly singular. A column of an
-    underflowed marginal keeps unit scale and is moved by the damping
-    alone. A step is accepted unless it lowers the semi-dual by
-    more than the rounding error of its evaluation: the final steps of a
-    converging Newton method improve it by less than that, so a strict
-    increase test would reject them. The damping falls on success, so the
-    method turns into a pure Newton method near the maximum, where it
+    Levenberg-Marquardt damping $\mu$, steps by $d = D^{-1/2} u$, and then
+    drops the step's mean. Without this scaling, a column carrying a
+    vanishing share of the plan has curvature below the rounding error of
+    the other entries, and two such columns with equal kernel columns, as
+    coincident support points give, make the system exactly singular. A
+    column of an underflowed marginal keeps unit scale and is moved by the
+    damping alone.
+
+    A step is accepted unless it lowers the semi-dual by more than the
+    rounding error of its evaluation. The final steps of a converging
+    Newton method improve it by less than that, so a strict increase test
+    would reject them. The damping falls after every accepted step, so the
+    method becomes a pure Newton method near the maximum, where it
     converges quadratically however sharp the kernel is. The solve does not
-    check for singularity: a failed solve yields a non-finite trial, which
+    check for singularity. A failed solve yields a non-finite trial, which
     is rejected like any other non-improving step. Columns outside the
     solve are pinned by an identity block in the system and keep the
-    potential `-inf`; rows of zero mass carry no plan and drop out of the
+    potential `-inf`. Rows of zero mass carry no plan and drop out of the
     Hessian.
 
     Args:
@@ -245,7 +247,7 @@ def _newton(
             on `active`.
         log_kernel: Row-stochastic $\log Q$ of shape `(n, n)`.
         active: Boolean mask of shape `(..., n)` of the columns in the
-            solve; the potential stays `-inf` elsewhere.
+            solve. The potential stays `-inf` elsewhere.
         tol: Floored tolerance on the marginal violation.
         max_iter: Maximum number of iterations.
 

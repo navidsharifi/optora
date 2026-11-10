@@ -29,31 +29,30 @@ class GradientDescent(Solver[MinimizationProblem, MinimizationResult]):
     $$
 
     until the gradient norm falls below `tol` or `max_iter` steps are
-    exhausted.
-    Solves `MinimizationProblem`, the shared unconstrained-minimization
-    contract, so it can be injected wherever a solver of that problem class
-    is expected — for example as the inner dual solver of an `optora.dro`
-    ambiguity set.
+    exhausted. It solves `MinimizationProblem`, the shared
+    unconstrained-minimization contract, so it can be injected wherever a
+    solver of that problem class is expected. One example is the
+    `dual_solver` of `optora.dro.PhiAmbiguitySet`.
 
     The gradient-norm test is evaluated on the iterate's device and read
-    back to the host only every `check_interval` steps; steps taken after
+    back to the host only every `check_interval` steps. Steps taken after
     convergence are frozen, so the solution does not depend on that
     interval. Keep `check_interval=1` when the objective is expensive, as
-    it is when this solver is the outer solver of an `optora.dro.MinimaxSolver`
-    and every step costs an inner dual solve. See
-    `optora.core.convergence.ConvergenceTracker`. The returned diagnostics
-    stay on the device as well (see
+    it is when this solver is the outer solver of an
+    `optora.dro.MinimaxSolver` and every step costs an inner worst-case
+    solve. See `optora.core.convergence.ConvergenceTracker`. The returned
+    diagnostics stay on the device as well (see
     `optora.core.convergence.ConvergenceStatus`), so a solve whose
-    `converged` and `num_iterations` nobody reads — every inner dual solve
-    of an `optora.dro` ambiguity set — never synchronizes for them.
+    `converged` and `num_iterations` nobody reads, such as the inner dual
+    solve of an `optora.dro` ambiguity set, never synchronizes for them.
 
     The point is a single tensor of any shape, and the stopping rule is the
     norm of the whole gradient. A batch of independent problems stacked into
-    one point (as an `optora.dro` ambiguity set does for a batched loss) is
-    therefore stopped jointly: iteration continues until every element is
-    stationary. Per-element early exit is deliberately not offered, since
-    retiring elements individually needs a host-side read of a per-element
-    mask on every step, which is exactly the synchronization
+    one point, as `optora.core.DualAmbiguitySet` does for a batched loss,
+    is therefore stopped jointly, and iteration continues until every
+    element is stationary. Per-element early exit is deliberately not
+    offered, since retiring elements individually needs a host-side read of
+    a per-element mask on every step, which is the synchronization
     `ConvergenceTracker` exists to avoid. The frozen-step rule makes the
     extra steps exact no-ops for elements that already converged.
 

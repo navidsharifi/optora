@@ -54,12 +54,13 @@ class WassersteinAmbiguitySet(AmbiguitySet):
     r"""Wasserstein-distance-constrained ambiguity set for Wasserstein-DRO.
 
     Bounds every candidate distribution `q`, sharing `nominal`'s finite
-    support with pairwise ground cost `cost`, by the type-1 Wasserstein
-    distance $W_c(q, \mathrm{nominal}) \le \mathrm{radius}$, where $W_c$ is
-    the optimal-transport cost of moving `nominal` to `q` under `cost`. The
-    worst-case expected loss over this set admits an exact strong-duality
-    reformulation (Mohajerin Esfahani and Kuhn 2018; Blanchet and Murthy
-    2019; Gao and Kleywegt 2022), specialized to a finite shared support:
+    support with pairwise ground cost `cost`, by the optimal-transport cost
+    $W_c(q, \mathrm{nominal}) \le \mathrm{radius}$ of moving `nominal` to
+    `q` under `cost`. For a metric `cost` this is the type-1 Wasserstein
+    distance. The worst-case expected loss over this set admits an exact
+    strong-duality reformulation (Mohajerin Esfahani and Kuhn 2018;
+    Blanchet and Murthy 2019; Gao and Kleywegt 2022), which on a finite
+    shared support reads
 
     $$
     \sup_{q:\, W_c(q, \mathrm{nominal}) \,\le\, \mathrm{radius}}
@@ -71,7 +72,7 @@ class WassersteinAmbiguitySet(AmbiguitySet):
         \right]
     $$
 
-    This follows from LP duality on the transportation polytope: the
+    This follows from LP duality on the transportation polytope. The
     primal is
 
     $$
@@ -84,16 +85,16 @@ class WassersteinAmbiguitySet(AmbiguitySet):
     (the column marginal, which defines the candidate `q`, is left free).
     Dualizing the budget constraint with multiplier $\gamma \ge 0$ and the
     row constraints with free multipliers, and maximizing out $\pi$
-    pointwise, yields exactly the one-dimensional convex dual above.
+    pointwise, yields the one-dimensional convex dual above.
 
-    Unlike `optora.dro.KLAmbiguitySet` and `optora.dro.PhiAmbiguitySet`,
-    this dual is not handed to an injected first-order solver. It is a
-    nonnegative combination of maxima of affine functions of the scalar
-    $\gamma$, hence convex **piecewise linear**: its derivative is
-    piecewise constant and jumps across the minimizer, so a fixed-step
+    This dual is not handed to a first-order solver, as
+    `optora.dro.PhiAmbiguitySet` does when it is given a `dual_solver`. It
+    is a nonnegative combination of maxima of affine functions of the
+    scalar $\gamma$, hence convex and **piecewise linear**. Its derivative
+    is piecewise constant and jumps at the minimizer, so a fixed-step
     gradient method oscillates around the kink and never satisfies a
-    gradient-norm stopping test. What the derivative does do is increase
-    monotonically,
+    gradient-norm stopping test. The derivative is, however,
+    nondecreasing,
 
     $$
     \frac{\partial}{\partial \gamma}\Big(
@@ -115,16 +116,16 @@ class WassersteinAmbiguitySet(AmbiguitySet):
     \qquad m_i = \min_j \mathrm{cost}_{ij},
     $$
 
-    with $j_0(i)$ the highest-loss column attaining $m_i$: beyond $\Gamma$
+    with $j_0(i)$ the highest-loss column attaining $m_i$. Beyond $\Gamma$
     every row is maximized at a cheapest column, the derivative is frozen
     at $\mathrm{radius} - \sum_i \mathrm{nominal}_i m_i \ge 0$, and the
     minimizer cannot lie further right. Bisection therefore reaches the
     dual optimum to working precision in a fixed, dtype-determined number
-    of steps, with no step size, iteration budget, or tolerance to tune --
-    the same treatment `optora.dro.TotalVariationAmbiguitySet` gets for its
-    own exactly solvable inner problem. It also removes the need to
-    reparameterize $\gamma$: the constraint $\gamma \ge 0$ is the left end
-    of the bracket, and the optimum is genuinely attained at $\gamma = 0$
+    of steps, with no step size, iteration budget, or tolerance to tune.
+    `optora.dro.TotalVariationAmbiguitySet` likewise solves its inner
+    problem exactly with nothing to tune. The bracket also removes the
+    need to reparameterize $\gamma$. The constraint $\gamma \ge 0$ is the
+    left end of the bracket, and the optimum is attained at $\gamma = 0$
     once `radius` is large enough to move all nominal mass onto the single
     highest-loss support point.
 
@@ -134,8 +135,8 @@ class WassersteinAmbiguitySet(AmbiguitySet):
     holds automatically for a ground cost with a zero diagonal, the
     standard choice, for which $m_i = 0$.
 
-    A zero radius is solved by the same bisection rather than short-circuited
-    to the nominal expectation, as the other ambiguity sets do. The ball
+    A zero radius is solved by the same bisection and is not short-circuited
+    to the nominal expectation. The ball
     $W_c(q, \mathrm{nominal}) \le 0$ reduces to $\{\mathrm{nominal}\}$ only
     for a metric cost, with $\mathrm{cost}_{ij} > 0$ for $i \ne j$. A
     pseudometric cost, such as one with duplicated support points, moves
@@ -150,27 +151,25 @@ class WassersteinAmbiguitySet(AmbiguitySet):
     dual objective there would differentiate through that tie with
     arbitrary weights, giving a transport plan that does not spend the
     radius exactly and therefore a wrong gradient with respect to `loss`.
-    The two ends of the final bracket instead name the two extreme
-    tie-breaks explicitly: the plan that is still worth paying for just
-    below $\gamma^\star$ overspends the radius, the one that takes over
-    just above it underspends, and the unique convex combination of the two
-    that spends exactly `radius` is the worst-case distribution
-    $q^\star$. Complementary slackness then makes
+    The two ends of the final bracket instead give the two extreme
+    tie-breaks. The plan optimal just below $\gamma^\star$ overspends the
+    radius, the plan optimal just above it underspends, and the unique
+    convex combination of the two that spends exactly `radius` is the
+    worst-case distribution $q^\star$. Complementary slackness then makes
     $\mathbb{E}_{q^\star}[\mathrm{loss}]$ equal to the dual minimum, and
     since $q^\star$ carries no autograd graph, differentiating that
     expectation gives exactly the envelope-theorem gradient with respect to
     `loss`. A minimizer at $\gamma^\star = 0$ is the degenerate case where
-    both ends agree and $q^\star$ simply moves all mass to the highest-loss
+    both ends agree and $q^\star$ moves all mass to the highest-loss
     support point.
 
-    `divergence` is fixed to a `SinkhornDivergence` over `cost` (the only
-    Wasserstein-type divergence implemented in `optora.divergences`), so
-    `contains(...)` checks the entropy-regularized Sinkhorn divergence as a
-    fast, differentiable approximation of exact Wasserstein-ball
-    membership. `worst_case_expectation` does not depend on this
-    approximation: it solves the exact (non-regularized) dual above
-    directly from `cost`, since that dual has a clean closed form and does
-    not need entropic relaxation for tractability.
+    `divergence` is fixed to a `SinkhornDivergence` over `cost`, so
+    `contains(...)` checks the debiased Sinkhorn divergence as a
+    differentiable approximation of exact Wasserstein-ball membership.
+    `worst_case_expectation` does not depend on this approximation. It
+    solves the exact, unregularized dual above directly from `cost`, since
+    that dual is a one-dimensional convex problem and needs no entropic
+    relaxation to be tractable.
 
     Attributes:
         nominal: Reference distribution the ambiguity set is centered on.
@@ -181,7 +180,8 @@ class WassersteinAmbiguitySet(AmbiguitySet):
             float or a tensor of radii evaluated as one batch.
         cost: Square, nonnegative pairwise ground cost matrix between the
             shared support points of `nominal` and any candidate
-            distribution. Aliases `divergence.cost`; not a separate buffer.
+            distribution. Aliases `divergence.cost` and is not a separate
+            buffer.
     """
 
     def __init__(
@@ -215,8 +215,8 @@ class WassersteinAmbiguitySet(AmbiguitySet):
                 iterations, passed through to `SinkhornDivergence`.
             sinkhorn_tol: Tolerance on the L1 marginal violation of the
                 Sinkhorn plan, passed through to `SinkhornDivergence`.
-            eps: Deprecated and ignored, as in `SinkhornDivergence`;
-                passing it emits a `DeprecationWarning`.
+            eps: Deprecated and ignored, as in `SinkhornDivergence`.
+                Passing it emits a `DeprecationWarning`.
             validate: Whether to check that `cost` is nonnegative, passed
                 through to `SinkhornDivergence`, and that `nominal` is a
                 valid probability distribution. The checks read reductions
@@ -272,7 +272,7 @@ class WassersteinAmbiguitySet(AmbiguitySet):
                 column instead of the cheapest. Ties are exactly the
                 multipliers at which the transport plan changes, so the two
                 settings recover the plan just below and just above such a
-                multiplier; picking arbitrarily among them would leave the
+                multiplier. Picking arbitrarily among them would leave the
                 plan undefined precisely where the dual is minimized. Ties
                 are detected within `_TIE_TOLERANCE_ULPS` of the inner
                 maximum rather than exactly, since both sides of a tie are
@@ -280,8 +280,8 @@ class WassersteinAmbiguitySet(AmbiguitySet):
 
         Returns:
             `argmax_j (loss_j - gamma * cost_ij)` for every row `i`, of shape
-            `batch_shape + (n, 1)`: the support point each unit of nominal
-            mass is transported to at this multiplier.
+            `batch_shape + (n, 1)`. Entry `i` is the support point that the
+            nominal mass of row `i` is transported to at this multiplier.
         """
         cost = self.cost.to(loss.dtype)
         shifted = loss.unsqueeze(-2) - gamma[..., None, None] * cost
@@ -317,10 +317,10 @@ class WassersteinAmbiguitySet(AmbiguitySet):
                 `_maximizing_columns`.
 
         Returns:
-            `sum_i nominal_i * values[i, columns_i]`, of shape `batch_shape`:
-            the transport cost of the implied plan when `values` is `cost`,
-            and the expected loss under the distribution it induces when
-            `values` is the loss.
+            `sum_i nominal_i * values[i, columns_i]`, of shape `batch_shape`.
+            This is the transport cost of the implied plan when `values` is
+            `cost`, and the expected loss under the distribution it induces
+            when `values` is the loss.
         """
         return torch.sum(self._constant_nominal * _selected(values, columns), dim=-1)
 
@@ -378,11 +378,11 @@ class WassersteinAmbiguitySet(AmbiguitySet):
 
         Returns:
             `radius - sum_i nominal_i * cost[i, argmax_j(loss_j - gamma *
-            cost_ij)]`, of shape `batch_shape`: the radius left unspent by
-            the cheapest transport plan this multiplier prices. Settling
-            ties on the cheapest column makes this the dual's right
-            derivative, which is negative exactly to the left of the
-            minimizer -- the sign test the bisection needs.
+            cost_ij)]`, of shape `batch_shape`. This is the radius left
+            unspent by the cheapest transport plan that is optimal at this
+            multiplier. Settling ties on the cheapest column makes it the
+            dual's right derivative, which is negative exactly to the left
+            of the minimizer. The bisection tests this sign.
         """
         return self.radius - self._transported(
             self.cost.to(loss.dtype), self._maximizing_columns(loss, gamma)
@@ -436,9 +436,9 @@ class WassersteinAmbiguitySet(AmbiguitySet):
 
         Returns:
             The two ends of the final bracket, each of shape `batch_shape`
-            and carrying no autograd graph: the largest multiplier found at
-            which the dual is still decreasing and the smallest at which it
-            is not. They straddle the minimizer to the working precision,
+            and carrying no autograd graph. They are the largest multiplier
+            found at which the dual is still decreasing and the smallest at
+            which it is not. They straddle the minimizer to the working precision,
             and their transport plans are the two that the worst-case
             distribution mixes. The left end stays exactly zero whenever the
             minimizer sits on the constraint boundary.

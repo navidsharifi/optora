@@ -16,10 +16,9 @@ class Divergence(nn.Module, ABC):
 
     Inherits from `torch.nn.Module` (rather than a plain ABC) so that any
     divergence holding tensor state (for example `SinkhornDivergence`'s
-    ground-cost matrix) can register it as a buffer: that state then moves
-    automatically with `.to(device)`/`.cuda()` and is included in
-    `state_dict()`, consistent with the rest of `optora` staying GPU-first.
-    Call an instance directly (`divergence(p, q)`); `nn.Module.__call__`
+    ground-cost matrix) can register it as a buffer. That state then moves
+    with `.to(device)`/`.cuda()` and is included in `state_dict()`. Call an
+    instance directly, as `divergence(p, q)`, and `nn.Module.__call__`
     dispatches to `forward`.
     """
 
@@ -34,12 +33,12 @@ class Divergence(nn.Module, ABC):
                 against `p`.
 
         Returns:
-            The divergence over the broadcast batch, of shape `(...)`: one
-            value per pair of distributions, reducing the last dimension
-            only, so an unbatched `(n,)` pair gives a scalar. Implementations
-            must return a nonnegative value that vanishes at the
-            divergence's centre. For every divergence except an entropic
-            transport cost the centre is `p == q`; for
+            The divergence over the broadcast batch, of shape `(...)`, with
+            one value per pair of distributions. Only the last dimension is
+            reduced, so an unbatched `(n,)` pair gives a scalar.
+            Implementations must return a nonnegative value that vanishes
+            at the divergence's centre. For every divergence except an
+            entropic transport cost the centre is `p == q`. For
             `optora.divergences.EntropicTransportDivergence` it is the
             kernel-smoothed reference, as documented there.
         """
