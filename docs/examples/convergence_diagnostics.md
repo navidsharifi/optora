@@ -74,6 +74,26 @@ curve in $\log \eta$ with the grid-search minimizer marked. Seeing that
 curve be smooth and single-troughed is itself reassuring; a kinked or flat
 landscape would explain a lot of otherwise mysterious solver behaviour.
 
+## Outer step, inner landscape
+
+The two static figures are the start and the end of the story; the
+animation runs through the middle. The left panel shows the robust
+objective in $x$ with the iterate rolling down it, the middle panel the
+trajectory $x_k$, and the right panel the inner dual landscape at the
+current $x_k$. That landscape moves with every outer step, because the
+loss vector changes, and the horizontal line at the library's value
+lands on the grid minimum every time, not only at the final decision.
+
+<figure class="figure" markdown="span">
+  ![The outer iterate on the robust objective, its trajectory, and the inner KL dual landscape at every step](../assets/figures/convergence-diagnostics-light.gif#only-light){ loading=lazy }
+  ![The outer iterate on the robust objective, its trajectory, and the inner KL dual landscape at every step](../assets/figures/convergence-diagnostics-dark.gif#only-dark){ loading=lazy }
+  <figcaption>Left: the robust objective and the nominal loss in $x$, with the
+  iterate and its trail. Middle: the decision per outer iteration.
+  Right: the dual objective in $\log\eta$ at the current iterate,
+  with the grid minimizer dashed and the library's worst-case value
+  as a horizontal line.</figcaption>
+</figure>
+
 ## The figures
 
 Rendered from this script when the site is built, so it always shows the output of the current code:

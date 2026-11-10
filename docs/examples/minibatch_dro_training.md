@@ -166,6 +166,30 @@ least-squares fit $0.415$.
     bisection is a fixed sequence of small kernels, and on 64-point
     minibatches the cost is launch overhead rather than arithmetic.
 
+## The bias as the batch grows
+
+Part 1 measures the bias at three batch sizes. The animation sweeps the
+batch size from 8 to 2048 at the training radius $0.2$, drawing two
+thousand minibatches at every size. The left panel is the distribution
+of the plug-in estimate of the robust excess $F - \bar\ell$ over those
+minibatches, against the full-batch value; the middle panel is the
+relative bias with its two-standard-error band, with the multilevel
+estimator and the stochastic dual marked at their own batch sizes; the
+right panel is the share of minibatches that contain at least one of
+the top 1% of losses. That share is where the plug-in's bias comes from:
+an adversary cannot upweight a point the batch does not hold.
+
+<figure class="figure" markdown="span">
+  ![The spread of the minibatch plug-in estimate, its relative bias and the share of minibatches holding a rare high loss, as the batch size grows](../assets/figures/plug-in-bias-light.gif#only-light){ loading=lazy }
+  ![The spread of the minibatch plug-in estimate, its relative bias and the share of minibatches holding a rare high loss, as the batch size grows](../assets/figures/plug-in-bias-dark.gif#only-dark){ loading=lazy }
+  <figcaption>Left: the plug-in estimates of the robust excess over two thousand
+  minibatches of the current size, with the full-batch value and
+  the mean estimate marked. Middle: relative bias against batch
+  size, with the multilevel estimator and the stochastic dual at
+  their own sizes. Right: the share of minibatches that contain a
+  top-1% loss, measured and in closed form.</figcaption>
+</figure>
+
 ## The figure
 
 Rendered from this script when the site is built, so it always shows the output of the current code:

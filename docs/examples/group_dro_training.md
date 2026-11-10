@@ -129,6 +129,32 @@ Means over 5 seeds, as printed by the script:
   groups, with the range over seeds shaded, against their training share
   of $0.048$.
 
+## The boundary during training
+
+The animation reruns the training with three seeds and a checkpoint
+every fifty steps. The left panel projects each model onto its two
+informative weights and draws the line it uses to separate the classes
+in the (core, spurious) plane, over a sample of test points with the
+minority groups coloured. ERM and its unregularized relatives settle on
+a diagonal that cuts straight through both minority groups, which is the
+50% worst-group accuracy of the middle panel; regularized group DRO
+turns the boundary onto the core feature. The right panel is the
+adversary's weight on the minority groups, which climbs to about ten
+times their training share only when the penalty keeps the groups from
+being fit exactly. The noise features are left out of the projection,
+so a model that memorizes the training set through them looks the same
+here as one that does not; the dashed training curves tell them apart.
+
+<figure class="figure" markdown="span">
+  ![The decision boundary of each method on the core and spurious features, the worst-group accuracy and the adversary's minority weight during training](../assets/figures/group-dro-boundary-light.gif#only-light){ loading=lazy }
+  ![The decision boundary of each method on the core and spurious features, the worst-group accuracy and the adversary's minority weight during training](../assets/figures/group-dro-boundary-dark.gif#only-dark){ loading=lazy }
+  <figcaption>Left: test points in the (core, spurious) plane, minority groups
+  coloured, with each method's boundary on those two features.
+  Middle: worst-group accuracy per step, test solid and train
+  dashed. Right: the online adversary's total weight on the
+  minority groups, with the range over seeds.</figcaption>
+</figure>
+
 ## The figure
 
 Rendered from this script when the site is built, so it always shows the output of the current code:

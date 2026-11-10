@@ -14,7 +14,10 @@ should?
 
 So the scripts under `examples/` are less "look how easy the API is" and
 more small numerical experiments. Each one runs end to end, prints the
-numbers it is checking, and draws a figure.
+numbers it is checking, and draws a figure. Each page also carries an
+animation, rendered from the library when the site is built, that
+replays the sweep or the training run one frame at a time; a
+mechanism is easier to follow when it moves.
 
 ## Running them
 

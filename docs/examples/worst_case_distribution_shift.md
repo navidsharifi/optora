@@ -56,6 +56,26 @@ the worst-loss band swells to absorb them. That staircase is the LP's
 vertex-hopping made visible, and it is a much better intuition for "what
 does robustness actually assume about the world" than any scalar curve.
 
+## The staircase, frame by frame
+
+The stackplot compresses forty radii into one picture. The animation
+replays them: the left panel shows the nominal and the worst-case
+distribution at the current radius, the middle one draws the stackplot
+up to that radius, and the right one follows the worst-case value. The
+value is piecewise linear in $\rho$ with one piece per drained scenario,
+because moving a unit of mass from scenario $i$ to the worst one adds
+$\ell_{\max} - \ell_i$, and the slope rises at every breakpoint as the
+adversary runs out of cheap mass and starts on dearer scenarios.
+
+<figure class="figure" markdown="span">
+  ![The total-variation worst-case distribution, the stacked scenario masses and the worst-case value as the radius grows](../assets/figures/tv-shift-light.gif#only-light){ loading=lazy }
+  ![The total-variation worst-case distribution, the stacked scenario masses and the worst-case value as the radius grows](../assets/figures/tv-shift-dark.gif#only-dark){ loading=lazy }
+  <figcaption>Left: the nominal and the worst-case distribution, one shade per
+  scenario. Middle: the stacked masses up to the current radius.
+  Right: the worst-case value, linear between the breakpoints where
+  a scenario runs dry.</figcaption>
+</figure>
+
 ## The figure
 
 Rendered from this script when the site is built, so it always shows the output of the current code:

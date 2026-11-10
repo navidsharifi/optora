@@ -20,7 +20,7 @@ from matplotlib import pyplot as plt
 from matplotlib.axes import Axes
 
 from optora.dro import WassersteinAmbiguitySet
-from tools.figures._base import Context, FigureSpec
+from tools.figures._base import Context, FigureSpec, set_bar_heights
 from tools.figures.problems import Instance, demo_instance
 
 HOLD_FRAMES = 10
@@ -198,15 +198,11 @@ def render_regret_landscape(context: Context) -> None:
     paths.set_title("DRRO stays at ERM, WDRO drifts")
     fig.tight_layout(w_pad=2.0)
 
-    def set_heights(bars: object, heights: torch.Tensor) -> None:
-        for bar, height in zip(bars, heights.tolist(), strict=True):  # type: ignore[call-overload]
-            bar.set_height(height)
-
     def update(frame: int) -> None:
         frame = min(frame, frames - 1)
-        set_heights(wdro_bars, wdro_adversary[frame])
-        set_heights(up_bars, push_up[frame, 0])
-        set_heights(down_bars, push_down[frame, 0])
+        set_bar_heights(wdro_bars, wdro_adversary[frame])
+        set_bar_heights(up_bars, push_up[frame, 0])
+        set_bar_heights(down_bars, push_down[frame, 0])
         wdro_line.set_data(grid.numpy(), robust_loss[frame].numpy())
         for line, branch in zip(branch_lines, branches[:, frame], strict=True):
             line.set_data(grid.numpy(), branch.numpy())

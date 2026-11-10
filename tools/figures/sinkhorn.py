@@ -17,7 +17,13 @@ from matplotlib.colors import LinearSegmentedColormap
 
 from optora.core import AmbiguitySet
 from optora.dro import SinkhornAmbiguitySet, WassersteinAmbiguitySet
-from tools.figures._base import Context, FigureSpec, set_color, worst_case_distributions
+from tools.figures._base import (
+    Context,
+    FigureSpec,
+    set_bar_heights,
+    set_color,
+    worst_case_distributions,
+)
 from tools.figures.problems import demo_instance
 
 RADIUS = 0.08
@@ -378,15 +384,11 @@ def render_sinkhorn_adversary(context: Context) -> None:
     derivative.legend(loc="upper left", fontsize=7.5)
     fig.tight_layout(w_pad=2.0)
 
-    def set_heights(bars: object, heights: torch.Tensor) -> None:
-        for bar, height in zip(bars, heights.tolist(), strict=True):  # type: ignore[call-overload]
-            bar.set_height(height)
-
     def update(frame: int) -> None:
         frame = min(frame, frames - 1)
         theta = float(thetas[frame])
-        set_heights(smooth_bars, smooth_adversary[frame])
-        set_heights(exact_bars, exact_adversary[frame])
+        set_bar_heights(smooth_bars, smooth_adversary[frame])
+        set_bar_heights(exact_bars, exact_adversary[frame])
         decision.set_xdata([theta, theta])
         exact_dot.set_data([theta], [float(exact_at[frame])])
         smooth_dot.set_data([theta], [float(smooth_at[frame])])

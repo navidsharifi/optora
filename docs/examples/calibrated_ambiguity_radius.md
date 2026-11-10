@@ -239,6 +239,28 @@ told which one it is in.
     corner of the grid short of its optimum, which matters here because a
     few $10^{-4}$ of error is enough to move a coverage estimate.
 
+## Coverage as the sample grows
+
+The animation runs the experiment on a nested sample: one draw of 200
+replications, of which each frame uses the first $n$ observations. The
+left panel shows the 90% intervals of the first fifty replications,
+which shrink like $1/\sqrt{n}$ and recentre as the sample grows, with
+the misses in a second colour. The middle panel is the coverage curve at
+the current $n$ against the diagonal, and the right panel accumulates
+the signed error at five levels. Consecutive frames share their
+observations, so the curves are smoother than independent samples would
+make them; the standard error of about $0.02$ is still visible as
+wobble.
+
+<figure class="figure" markdown="span">
+  ![Calibrated chi-square intervals of a nested sample, their coverage against the nominal level, and the coverage error, as the sample size grows](../assets/figures/calibration-coverage-light.gif#only-light){ loading=lazy }
+  ![Calibrated chi-square intervals of a nested sample, their coverage against the nominal level, and the coverage error, as the sample size grows](../assets/figures/calibration-coverage-dark.gif#only-dark){ loading=lazy }
+  <figcaption>Left: the 90% intervals of fifty replications at the current
+  sample size, with the true mean as a vertical line. Middle:
+  empirical coverage against nominal confidence. Right: coverage
+  minus nominal at five levels, accumulated as $n$ grows.</figcaption>
+</figure>
+
 ## The figure
 
 Rendered from this script when the site is built, so it always shows the output of the current code:

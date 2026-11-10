@@ -101,6 +101,30 @@ def test_quick_render_writes_every_declared_file(tmp_path: Path) -> None:
     assert all(path.is_file() and path.stat().st_size > 0 for path in written)
 
 
+EXAMPLE_ANIMATIONS = (
+    "kl-radius",
+    "tv-shift",
+    "decision-geometries",
+    "convergence-diagnostics",
+    "lipschitz-dual",
+    "calibration-coverage",
+    "shift-radius",
+    "plug-in-bias",
+    "group-dro-boundary",
+)
+
+
+@pytest.mark.parametrize("name", EXAMPLE_ANIMATIONS)
+def test_example_animation_renders_in_quick_mode(name: str, tmp_path: Path) -> None:
+    (spec,) = figures.select([name])
+    assert spec.page.startswith("examples/")
+
+    written = figures.render([spec], [DARK], tmp_path, quick=True)
+
+    assert written == [tmp_path / f"{name}-dark.gif"]
+    assert written[0].is_file() and written[0].stat().st_size > 0
+
+
 def test_examples_matplotlibrc_loads_with_the_theme_colours(tmp_path: Path) -> None:
     path = examples.write_matplotlibrc(DARK, tmp_path)
 

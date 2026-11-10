@@ -251,6 +251,28 @@ seed.
     groups, Gaussian inputs: it shows the mechanism and where it loses, not
     a general guarantee.
 
+## Turning the radius dial
+
+The static figure fixes three radii. The animation trains the same
+model at forty radii from zero to one half, in one batched Adam run, and
+turns the radius like a dial. The left panel shows the fitted slope
+leaving the ERM solution along the optimal trade-off path; the middle
+panel shows the exact test-risk line $R(\pi)$ tilting about its crossing
+$\pi^\star$ with the ERM line; the right panel shows the mass the
+adversary puts on the minority points, against the most a KL ball of
+that radius could put there. One seed and no controls: the animation is
+about the continuity of the mechanism, the statistics are below.
+
+<figure class="figure" markdown="span">
+  ![The fitted slope, the exact test-risk line and the adversary's minority mass of KL-DRO as the radius grows](../assets/figures/shift-radius-light.gif#only-light){ loading=lazy }
+  ![The fitted slope, the exact test-risk line and the adversary's minority mass of KL-DRO as the radius grows](../assets/figures/shift-radius-dark.gif#only-dark){ loading=lazy }
+  <figcaption>Left: the fitted slope on the $(w_1, w_2)$ plane, walking from the
+  ERM solution toward the minority slope. Middle: exact test risk
+  against the minority share $\pi$, for ERM and for KL-DRO at the
+  current radius, with the crossing marked. Right: the worst-case
+  mass on the minority points against the ball's allowance.</figcaption>
+</figure>
+
 ## The figure
 
 Rendered from this script when the site is built, so it always shows the output of the current code:

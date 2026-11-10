@@ -299,6 +299,12 @@ class FigureSpec:
         return names
 
 
+def set_bar_heights(bars: Iterable[Any], heights: torch.Tensor) -> None:
+    """Set the height of every bar in a `BarContainer` from a 1-d tensor."""
+    for bar, height in zip(bars, heights.tolist(), strict=True):
+        bar.set_height(height)
+
+
 def worst_case_distributions(
     build: Callable[[torch.Tensor], Any],
     loss: torch.Tensor,

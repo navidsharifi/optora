@@ -55,6 +55,28 @@ Three things to look at:
     flat part of the curve fail even though the answer is essentially
     right.
 
+## The adversary as the radius grows
+
+The static figure further down is a summary. The animation shows what
+produces it: at every radius, the worst-case distribution $q^\star$,
+read off the gradient of the worst-case value with respect to the loss
+(Danskin's theorem), next to the nominal. The exponential tilt moves mass
+from the cheap scenarios to the expensive one gradually, and the right
+panel checks the claim the ball makes: $D_{\mathrm{KL}}(q^\star \,\|\, p)$
+equals $\rho$ exactly until the radius reaches $-\log P^\star$, after
+which the point mass is feasible and the divergence stops growing.
+
+<figure class="figure" markdown="span">
+  ![The KL worst-case distribution, the worst-case value and the divergence of the adversary as the radius grows](../assets/figures/kl-radius-light.gif#only-light){ loading=lazy }
+  ![The KL worst-case distribution, the worst-case value and the divergence of the adversary as the radius grows](../assets/figures/kl-radius-dark.gif#only-dark){ loading=lazy }
+  <figcaption>Left: the nominal and the worst-case distribution at the current
+  radius. Middle: the worst-case value on the log-scaled radius axis,
+  with the nominal mean, the maximum loss and the saturation radius
+  marked. Right: the divergence of the adversary, on the diagonal
+  while the constraint binds and flat once the ball contains the
+  point mass.</figcaption>
+</figure>
+
 ## The figure
 
 Rendered from this script when the site is built, so it always shows the output of the current code:
