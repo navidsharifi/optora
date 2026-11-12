@@ -1,6 +1,6 @@
 r"""Distributionally robust regret against robust loss, animated over the radius.
 
-Both animations belong to the example page on Wasserstein distributionally
+Both animations belong to the tutorial page on Wasserstein distributionally
 robust regret optimization (Fiechtner and Blanchet 2025). The first draws
 the quadratic case, where the regret under a distribution $q$ is
 $(\theta - \mathbb{E}_q[\xi])^2$ and the robust regret is the squared
@@ -357,13 +357,13 @@ def render_regret_newsvendor(context: Context) -> None:
 FIGURES = (
     FigureSpec(
         name="regret-landscape",
-        page="examples/distributionally_robust_regret.md",
+        page="tutorials/distributionally_robust_regret.md",
         outputs=("regret-landscape-{theme}.gif",),
         render=render_regret_landscape,
     ),
     FigureSpec(
         name="regret-newsvendor",
-        page="examples/distributionally_robust_regret.md",
+        page="tutorials/distributionally_robust_regret.md",
         outputs=("regret-newsvendor-{theme}.gif",),
         render=render_regret_newsvendor,
     ),

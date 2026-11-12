@@ -220,11 +220,24 @@ __marimo__/
 # Streamlit
 .streamlit/secrets.toml
 
-# Optora examples/ artifact hygiene: examples/ scripts are git-tracked
-# source, but anything they generate at run time (figures, animations,
+# Optora tutorials/ and examples/ artifact hygiene: their scripts are
+# git-tracked source, but anything they generate at run time (figures, animations,
 # convergence/data logs) is not. Keep the Git tree free of heavy binary
 # media and simulation output; host any curated media externally instead
-# (see examples/README.md).
+# (see tutorials/README.md).
+tutorials/**/outputs/
+tutorials/**/results/
+tutorials/**/*.png
+tutorials/**/*.jpg
+tutorials/**/*.jpeg
+tutorials/**/*.gif
+tutorials/**/*.webp
+tutorials/**/*.svg
+tutorials/**/*.mp4
+tutorials/**/*.mov
+tutorials/**/*.json
+tutorials/**/*.csv
+tutorials/**/*.log
 examples/**/outputs/
 examples/**/results/
 examples/**/*.png
@@ -245,5 +258,5 @@ progress/
 AGENTS.md
 .github/copilot-instructions.md
 # Figures the documentation renders at build time (python -m tools.figures);
-# never committed, see examples/README.md.
+# never committed, see tutorials/README.md.
 docs/assets/figures/

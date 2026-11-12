@@ -63,26 +63,57 @@ watch = ["optora"]
 nav = [
   { "Home" = "index.md" },
   { "Mathematical formulations" = "formulations.md" },
-  { "Training with torch.optim" = "training.md" },
-  { "Numerical behaviour" = "numerics.md" },
-  { "API stability" = "stability.md" },
   { "Benchmarks" = "benchmarks.md" },
-  { "Positioning" = "positioning.md" },
+  { "Tutorials" = [
+    { "Overview" = "tutorials/index.md" },
+    { "Ambiguity sets and worst cases" = [
+      { "KL-DRO radius sweep" = "tutorials/kl_dro_radius_sweep.md" },
+      { "Worst-case distribution shift" = "tutorials/worst_case_distribution_shift.md" },
+      { "Recovering CVaR from a phi-divergence ball" = "tutorials/cvar_from_phi_divergence.md" },
+      { "Robust decisions across geometries" = "tutorials/robust_decision_across_ambiguity_sets.md" },
+    ] },
+    { "Wasserstein and optimal transport" = [
+      { "Wasserstein-DRO and Lipschitz regularization" = "tutorials/wasserstein_lipschitz_equivalence.md" },
+      { "Sinkhorn relaxation of Wasserstein DRO" = "tutorials/sinkhorn_relaxation_of_wasserstein_dro.md" },
+      { "Robust regret against robust loss" = "tutorials/distributionally_robust_regret.md" },
+    ] },
+    { "Radius and convergence" = [
+      { "Calibrating the ambiguity radius" = "tutorials/calibrated_ambiguity_radius.md" },
+      { "Convergence diagnostics" = "tutorials/convergence_diagnostics.md" },
+    ] },
+    { "Training models" = [
+      { "Training under subpopulation shift" = "tutorials/subpopulation_shift_training.md" },
+      { "Minibatch DRO against the full batch" = "tutorials/minibatch_dro_training.md" },
+      { "Group DRO under a spurious correlation" = "tutorials/group_dro_training.md" },
+    ] },
+  ] },
+  # BEGIN GENERATED EXAMPLES NAVIGATION
   { "Examples" = [
     { "Overview" = "examples/index.md" },
-    { "KL-DRO radius sweep" = "examples/kl_dro_radius_sweep.md" },
-    { "Worst-case distribution shift" = "examples/worst_case_distribution_shift.md" },
-    { "Robust decisions across geometries" = "examples/robust_decision_across_ambiguity_sets.md" },
-    { "Convergence diagnostics" = "examples/convergence_diagnostics.md" },
-    { "Wasserstein-DRO and Lipschitz regularization" = "examples/wasserstein_lipschitz_equivalence.md" },
-    { "Calibrating the ambiguity radius" = "examples/calibrated_ambiguity_radius.md" },
-    { "Training under subpopulation shift" = "examples/subpopulation_shift_training.md" },
-    { "Minibatch DRO against the full batch" = "examples/minibatch_dro_training.md" },
-    { "Group DRO under a spurious correlation" = "examples/group_dro_training.md" },
-    { "Recovering CVaR from a phi-divergence ball" = "examples/cvar_from_phi_divergence.md" },
-    { "Robust regret against robust loss" = "examples/distributionally_robust_regret.md" },
-    { "Sinkhorn relaxation of Wasserstein DRO" = "examples/sinkhorn_relaxation_of_wasserstein_dro.md" },
+    { "Divergences" = [
+      { "Phi-divergences" = "examples/divergences/phi_divergences.md" },
+      { "Sinkhorn divergence" = "examples/divergences/sinkhorn_divergence.md" },
+      { "Maximum mean discrepancy" = "examples/divergences/maximum_mean_discrepancy.md" },
+    ] },
+    { "Ambiguity sets" = [
+      { "KL ball" = "examples/ambiguity_sets/kl_ball.md" },
+      { "Chi-square, total-variation and CVaR balls" = "examples/ambiguity_sets/phi_divergence_balls.md" },
+      { "Wasserstein and Sinkhorn balls" = "examples/ambiguity_sets/wasserstein_and_sinkhorn_balls.md" },
+      { "MMD ball" = "examples/ambiguity_sets/mmd_ball.md" },
+      { "Choosing the radius" = "examples/ambiguity_sets/radius_calibration.md" },
+    ] },
+    { "Solvers" = [
+      { "Gradient descent" = "examples/solvers/gradient_descent.md" },
+      { "Saddle point of a Lagrangian" = "examples/solvers/saddle_point.md" },
+      { "Robust decision with MinimaxSolver" = "examples/solvers/minimax_decision.md" },
+    ] },
+    { "Training" = [
+      { "Training with torch.optim" = "examples/training/robust_regression.md" },
+      { "Minibatch estimators" = "examples/training/minibatch_estimators.md" },
+      { "Group DRO" = "examples/training/group_dro.md" },
+    ] },
   ] },
+  # END GENERATED EXAMPLES NAVIGATION
   # BEGIN GENERATED API NAVIGATION
   { "API reference" = [
     { "Overview" = "api/index.md" },

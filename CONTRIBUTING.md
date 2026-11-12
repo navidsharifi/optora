@@ -52,10 +52,10 @@ pytest tests/benchmarks --benchmark-enable --benchmark-only --benchmark-compare
 ## Dependencies
 
 `torch` is the only runtime dependency, and `optora/` imports nothing else.
-Data loaders, plotting, and example scripts belong under `examples/`, not the
-library.
+Data loaders, plotting, tutorial and example scripts belong under
+`tutorials/` and `examples/`, not the library.
 
-The optional extras (`dev`, `docs`, `examples`) serve the repository, never
+The optional extras (`dev`, `docs`, `tutorials`) serve the repository, never
 the library at runtime. A new runtime extra is justified only when a module
 under `optora/` needs it, and then it must:
 

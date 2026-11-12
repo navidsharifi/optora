@@ -80,9 +80,11 @@ Convergence diagnostics and helper functions live in `optora.core`.
   [`docs/formulations.md`](docs/formulations.md).
 - **Training an `nn.Module` against a DRO objective with `torch.optim`:**
   [`docs/training.md`](docs/training.md).
-- **Runnable, visualized DRO examples** (GitHub-only, not shipped with the
-  package): [`examples/`](examples/README.md) — install with the
-  `examples` extra (`pip install -e ".[examples]"`).
+- **Runnable, visualized DRO tutorials** (GitHub-only, not shipped with the
+  package): [`tutorials/`](tutorials/README.md) — install with the
+  `tutorials` extra (`pip install -e ".[tutorials]"`).
+- **Short examples, one component each**, runnable on a plain
+  `pip install optora`: [`examples/`](examples/).
 - **API reference:** built with Zensical from source docstrings, see
   [`docs/`](docs/index.md).
 - **Benchmarks:** latency, scaling, batched throughput, host
@@ -122,7 +124,8 @@ mypy
 CI runs the tests on Linux, macOS, and Windows against both the minimum and
 the latest PyTorch, enforces the coverage gate set in `pyproject.toml`, and
 installs the built wheel into a clean virtual environment to run every
-script under `examples/`. Reproduce that smoke test locally with:
+script under `tutorials/` and `examples/`. Reproduce that smoke test locally
+with:
 
 ```powershell
 python -m build

@@ -119,7 +119,7 @@ The benchmarks and their charts are produced by one command from a
 development install.
 
 ```bash
-pip install -e ".[dev,docs,examples]"
+pip install -e ".[dev,docs,tutorials]"
 python -m tools.figures --only benchmarks-data benchmarks-charts
 ```
 

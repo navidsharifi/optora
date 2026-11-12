@@ -1,6 +1,6 @@
 """Render the figures embedded in the documentation site.
 
-Nothing binary is committed to the repository (see `examples/README.md`),
+Nothing binary is committed to the repository (see `tutorials/README.md`),
 so every chart and animation the site shows is generated from the library
 itself by this package::
 
@@ -28,7 +28,6 @@ from tools.figures import (
     benchmarks,
     calibration,
     cvar,
-    examples,
     generators,
     geometry,
     group_dro,
@@ -44,6 +43,7 @@ from tools.figures import (
     sweeps,
     tilt,
     training,
+    tutorials,
     wasserstein,
 )
 from tools.figures._base import THEMES, Context, FigureSpec, Theme, themed
@@ -70,7 +70,7 @@ MODULES = (
     minibatch,
     group_dro,
     regret,
-    examples,
+    tutorials,
     benchmarks,
 )
 

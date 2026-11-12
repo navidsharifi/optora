@@ -23,8 +23,8 @@ The public API consists of the following.
 Everything else is internal and may change in any release. This includes
 names and modules with a leading underscore (also the underscore methods
 that subclasses of `AmbiguitySet`, `Divergence` or `Solver` inherit), names
-missing from every `__all__`, and the `tests/`, `tools/` and `examples/`
-directories of the repository.
+missing from every `__all__`, and the `tests/`, `tools/`, `tutorials/` and
+`examples/` directories of the repository.
 
 !!! note "Extending the contracts"
 

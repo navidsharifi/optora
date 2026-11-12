@@ -1,6 +1,6 @@
 """Group DRO against ERM under a spurious correlation, animated over training.
 
-The animation belongs to example 09. It trains the example's four methods
+The animation belongs to tutorial 09. It trains the tutorial's four methods
 on the spurious-correlation model and watches, step by step, the direction
 each model gives its two informative features: ERM leans on the spurious
 one and its boundary cuts between the two minority groups, regularized
@@ -32,7 +32,7 @@ BATCH = 128
 LEARNING_RATE = 0.01
 ADVERSARY_STEP_SIZE = 0.01
 STRONG_PENALTY = 0.1
-# (name, L2 penalty, adversary step size), as in example 09.
+# (name, L2 penalty, adversary step size), as in tutorial 09.
 METHODS = (
     ("ERM", 0.0, 0.0),
     ("ERM + strong L2", STRONG_PENALTY, 0.0),
@@ -305,7 +305,7 @@ def render_group_dro_boundary(context: Context) -> None:
 FIGURES = (
     FigureSpec(
         name="group-dro-boundary",
-        page="examples/group_dro_training.md",
+        page="tutorials/group_dro_training.md",
         outputs=("group-dro-boundary-{theme}.gif",),
         render=render_group_dro_boundary,
     ),

@@ -9,9 +9,10 @@ the distributionally robust optimization (DRO) core in `optora`. It states
 the problem `optora` solves, the convex duals behind each ambiguity set,
 and the design principles the public API follows. The root `README.md` is
 kept short and code-first on purpose, so the derivations live here. The
-[Examples](examples/index.md) section walks through the runnable scripts
-under `examples/` in the repository, which exercise this math end to end
-with plots. Every figure on this page is rendered from the library when the
+[Tutorials](tutorials/index.md) walk through the runnable scripts under
+`tutorials/` in the repository, which exercise this math end to end with
+plots, and the [Examples](examples/index.md) show each component on its
+own in a short script. Every figure on this page is rendered from the library when the
 site is built.
 
 ## Why distributionally robust optimization

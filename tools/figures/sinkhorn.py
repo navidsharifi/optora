@@ -2,7 +2,7 @@
 
 The first animation belongs to the formulations page and shows the Gibbs
 kernel sharpen as the entropic strength vanishes. The other two belong to
-the example on the Sinkhorn relaxation of Wasserstein DRO: one sweeps the
+the tutorial on the Sinkhorn relaxation of Wasserstein DRO: one sweeps the
 entropic strength and watches the robust objective, its derivative and its
 minimizer converge to the exact Wasserstein ones; the other sweeps the
 decision at a fixed strength and watches the Wasserstein adversary jump
@@ -413,13 +413,13 @@ FIGURES = (
     ),
     FigureSpec(
         name="sinkhorn-relaxation",
-        page="examples/sinkhorn_relaxation_of_wasserstein_dro.md",
+        page="tutorials/sinkhorn_relaxation_of_wasserstein_dro.md",
         outputs=("sinkhorn-relaxation-{theme}.gif",),
         render=render_sinkhorn_relaxation,
     ),
     FigureSpec(
         name="sinkhorn-adversary",
-        page="examples/sinkhorn_relaxation_of_wasserstein_dro.md",
+        page="tutorials/sinkhorn_relaxation_of_wasserstein_dro.md",
         outputs=("sinkhorn-adversary-{theme}.gif",),
         render=render_sinkhorn_adversary,
     ),

@@ -1,4 +1,4 @@
-r"""The robust decision problem of examples 03 and 04, animated.
+r"""The robust decision problem of tutorials 03 and 04, animated.
 
 Both animations draw the scalar location problem
 $\min_x \sup_{q} \mathbb{E}_q[(\xi - x)^2]$ on the outcomes
@@ -33,7 +33,7 @@ BISECTION_STEPS = 40
 GEOMETRIES = ("kl", "chi_square", "total_variation", "wasserstein")
 OUTCOMES = torch.tensor([1.0, 2.0, 3.0, 10.0], dtype=torch.float64)
 NOMINAL = torch.full_like(OUTCOMES, 1.0 / OUTCOMES.numel())
-# Example 03's instance: squared-distance ground cost, uniform nominal.
+# Tutorial 03's instance: squared-distance ground cost, uniform nominal.
 INSTANCE = Instance(
     points=OUTCOMES,
     nominal=NOMINAL,
@@ -341,13 +341,13 @@ def render_convergence_diagnostics(context: Context) -> None:
 FIGURES = (
     FigureSpec(
         name="decision-geometries",
-        page="examples/robust_decision_across_ambiguity_sets.md",
+        page="tutorials/robust_decision_across_ambiguity_sets.md",
         outputs=("decision-geometries-{theme}.gif",),
         render=render_decision_geometries,
     ),
     FigureSpec(
         name="convergence-diagnostics",
-        page="examples/convergence_diagnostics.md",
+        page="tutorials/convergence_diagnostics.md",
         outputs=("convergence-diagnostics-{theme}.gif",),
         render=render_convergence_diagnostics,
     ),
