@@ -1,6 +1,6 @@
 r"""The calibrated chi-square interval, animated over the sample size.
 
-The animation belongs to example 06. It grows a nested sample from a
+The animation belongs to tutorial 06. It grows a nested sample from a
 standard exponential and, at every size $n$, builds the two-sided mean
 interval $[-\sup_q \mathbb{E}_q[-Z],\, \sup_q \mathbb{E}_q[Z]]$ of the
 chi-square ball at the calibrated radius $\chi^2_{1,1-\alpha}/n$ for each
@@ -174,7 +174,7 @@ def render_calibration_coverage(context: Context) -> None:
 FIGURES = (
     FigureSpec(
         name="calibration-coverage",
-        page="examples/calibrated_ambiguity_radius.md",
+        page="tutorials/calibrated_ambiguity_radius.md",
         outputs=("calibration-coverage-{theme}.gif",),
         render=render_calibration_coverage,
     ),

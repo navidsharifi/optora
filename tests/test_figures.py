@@ -16,7 +16,7 @@ pytest.importorskip("seaborn")
 matplotlib.use("Agg")
 
 from tools import figures  # noqa: E402
-from tools.figures import examples  # noqa: E402
+from tools.figures import tutorials  # noqa: E402
 from tools.figures._base import DARK, LIGHT, THEMES, Context, FigureSpec  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -101,7 +101,7 @@ def test_quick_render_writes_every_declared_file(tmp_path: Path) -> None:
     assert all(path.is_file() and path.stat().st_size > 0 for path in written)
 
 
-EXAMPLE_ANIMATIONS = (
+TUTORIAL_ANIMATIONS = (
     "kl-radius",
     "tv-shift",
     "decision-geometries",
@@ -114,10 +114,10 @@ EXAMPLE_ANIMATIONS = (
 )
 
 
-@pytest.mark.parametrize("name", EXAMPLE_ANIMATIONS)
-def test_example_animation_renders_in_quick_mode(name: str, tmp_path: Path) -> None:
+@pytest.mark.parametrize("name", TUTORIAL_ANIMATIONS)
+def test_tutorial_animation_renders_in_quick_mode(name: str, tmp_path: Path) -> None:
     (spec,) = figures.select([name])
-    assert spec.page.startswith("examples/")
+    assert spec.page.startswith("tutorials/")
 
     written = figures.render([spec], [DARK], tmp_path, quick=True)
 
@@ -125,8 +125,8 @@ def test_example_animation_renders_in_quick_mode(name: str, tmp_path: Path) -> N
     assert written[0].is_file() and written[0].stat().st_size > 0
 
 
-def test_examples_matplotlibrc_loads_with_the_theme_colours(tmp_path: Path) -> None:
-    path = examples.write_matplotlibrc(DARK, tmp_path)
+def test_tutorials_matplotlibrc_loads_with_the_theme_colours(tmp_path: Path) -> None:
+    path = tutorials.write_matplotlibrc(DARK, tmp_path)
 
     loaded = matplotlib.rc_params_from_file(path, use_default_template=False)
 

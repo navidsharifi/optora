@@ -1,0 +1,256 @@
+"""Calibrating the ambiguity radius from finite-sample theory.
+
+Every DRO tutorial has to choose a radius, and a radius chosen by hand is
+hard to justify. If it is too small, the robust value equals the empirical
+mean, and if it is too large, it saturates at the worst scenario.
+Finite-sample theory gives a principled choice. For the chi-square
+ambiguity set built on an empirical distribution of `n` points, the
+profile divergence
+
+    T_n(mu) = min { D_chi2(q || nominal) : E_q[Z] = mu }
+
+evaluated at the *true* mean satisfies `n * T_n(mu_true) -> chi2_1` in
+distribution, which is the empirical-likelihood calibration result used by
+Duchi and Namkoong for DRO. Setting
+
+    radius(n, alpha) = chi2_{1, 1 - alpha} / n
+
+therefore makes the ambiguity set an asymptotically valid `(1 - alpha)`
+confidence region for the true distribution, and the interval it induces
+on the mean,
+
+    [ -sup_q E_q[-Z] , sup_q E_q[Z] ]
+
+an asymptotically valid `(1 - alpha)` confidence interval. The script adds
+no new solver. It uses `ChiSquareAmbiguitySet` as it ships, with the radius
+from `optora.dro.chi_square_radius`.
+
+The script measures how close this guarantee is to exact at finite `n`. It
+draws many independent samples from a standard exponential, which has mean
+1, variance 1 and skewness 2 and so is far from Gaussian. It builds the
+calibrated interval for each sample and reports the fraction of intervals
+that cover the true mean, against the nominal confidence and against `n`.
+
+The output shows two effects.
+
+* Coverage is *below* nominal at small `n`. The calibration is asymptotic,
+  and the chi-square limit does not account for skewness.
+* The dual solve is needed. In the interior regime the worst-case
+  expectation equals `mean + sqrt(radius * variance)`, but a large radius
+  drives some `q_i` to zero. There the formula overstates the worst case,
+  and only the dual is correct. The printed `worst closed-form gap` column
+  is the most negative such discrepancy over the replications. It is at
+  the level of floating-point rounding except at small `n` and high
+  confidence, which is also where the coverage error is largest.
+
+References:
+    John C. Duchi and Hongseok Namkoong, "Learning Models with Uniform
+    Performance via Distributionally Robust Optimization", Annals of
+    Statistics 49(3), 2021.
+    Rui Gao, "Finite-Sample Guarantees for Wasserstein Distributionally
+    Robust Optimization: Breaking the Curse of Dimensionality", Operations
+    Research, 2025.
+
+Run:
+    python tutorials/06_calibrated_ambiguity_radius.py
+"""
+
+import math
+from statistics import NormalDist
+
+import matplotlib.pyplot as plt
+import torch
+from _plotting import save_figure
+
+from optora.dro import ChiSquareAmbiguitySet, chi_square_radius
+
+CONFIDENCE_LEVELS = (0.50, 0.80, 0.90, 0.95, 0.99)
+SAMPLE_SIZES = (10, 40, 160)
+NUM_REPLICATIONS = 200
+SEED = 20260915
+POPULATION_MEAN = 1.0
+
+
+def exponential_samples(num_samples: int, generator: torch.Generator) -> torch.Tensor:
+    """Draw `NUM_REPLICATIONS` independent standard-exponential samples.
+
+    Args:
+        num_samples: Observations per replication.
+        generator: Seeded generator, so the reported coverage is
+            reproducible.
+
+    Returns:
+        A `(NUM_REPLICATIONS, num_samples)` tensor of nonnegative draws with
+        unit mean and unit variance.
+    """
+    uniform = torch.rand(
+        NUM_REPLICATIONS, num_samples, generator=generator, dtype=torch.float64
+    )
+    return -torch.log(uniform)
+
+
+def build_ambiguity_sets(
+    nominal: torch.Tensor, radius: torch.Tensor
+) -> tuple[ChiSquareAmbiguitySet, ChiSquareAmbiguitySet]:
+    """Build the two ambiguity sets that produce a two-sided mean interval.
+
+    The two are the same set. One is applied to the loss and the other to
+    its negation, which turns a one-sided worst case into a two-sided
+    interval. They are built separately only so that the caller can name
+    them.
+
+    Args:
+        nominal: Uniform empirical distribution over the support.
+        radius: Calibrated chi-square radius, a scalar or a tensor of radii
+            that broadcasts against the batch of losses.
+
+    Returns:
+        The `(lower, upper)` ambiguity sets.
+    """
+    lower = ChiSquareAmbiguitySet(nominal=nominal, radius=radius)
+    upper = ChiSquareAmbiguitySet(nominal=nominal, radius=radius)
+    return lower, upper
+
+
+def main() -> None:
+    generator = torch.Generator().manual_seed(SEED)
+    coverage_by_size: dict[int, list[float]] = {}
+    closed_form_gap_by_setting: dict[tuple[int, float], float] = {}
+
+    for num_samples in SAMPLE_SIZES:
+        # Common random numbers across confidence levels make the calibrated
+        # sets nested by construction, so measured coverage is exactly
+        # monotone in the nominal level rather than monotone up to noise.
+        samples = exponential_samples(num_samples, generator)
+        nominal = torch.full((num_samples,), 1.0 / num_samples, dtype=torch.float64)
+        sample_mean = torch.mean(samples, dim=-1)
+        sample_variance = torch.var(samples, dim=-1, unbiased=False)
+
+        # One batched solve per side covers every confidence level and every
+        # replication. The radii form a `(levels, 1)` column that broadcasts
+        # against the `(replications, n)` batch of losses, so each side of
+        # the interval comes back as a `(levels, replications)` tensor.
+        radii = torch.tensor(
+            [chi_square_radius(num_samples, level) for level in CONFIDENCE_LEVELS],
+            dtype=torch.float64,
+        ).unsqueeze(-1)
+        lower_set, upper_set = build_ambiguity_sets(nominal, radii)
+        lower = -lower_set.worst_case_expectation(-samples)
+        upper = upper_set.worst_case_expectation(samples)
+
+        covered = (lower <= POPULATION_MEAN) & (upper >= POPULATION_MEAN)
+        coverages = torch.mean(covered.to(samples.dtype), dim=-1).tolist()
+        asymptotic = sample_mean + torch.sqrt(radii * sample_variance)
+        closed_form_gaps = torch.amin(upper - asymptotic, dim=-1).tolist()
+
+        print(f"\nn = {num_samples}, {NUM_REPLICATIONS} replications")
+        print("  confidence   radius   coverage   worst closed-form gap")
+        for confidence, radius, coverage, closed_form_gap in zip(
+            CONFIDENCE_LEVELS,
+            radii.squeeze(-1).tolist(),
+            coverages,
+            closed_form_gaps,
+            strict=True,
+        ):
+            closed_form_gap_by_setting[num_samples, confidence] = closed_form_gap
+            print(
+                f"  {confidence:>9.2f}   {radius:>6.4f}   {coverage:>8.3f}"
+                f"   {closed_form_gap:>+21.2e}"
+            )
+        coverage_by_size[num_samples] = coverages
+
+    nominal_levels = torch.tensor(CONFIDENCE_LEVELS, dtype=torch.float64)
+    for num_samples, coverages in coverage_by_size.items():
+        measured = torch.tensor(coverages, dtype=torch.float64)
+        assert bool(torch.all(torch.diff(measured) >= 0.0)), num_samples
+
+    errors = {
+        num_samples: torch.tensor(coverages, dtype=torch.float64) - nominal_levels
+        for num_samples, coverages in coverage_by_size.items()
+    }
+    worst_error = {
+        num_samples: float(torch.max(torch.abs(error)))
+        for num_samples, error in errors.items()
+    }
+    print("\nlargest |coverage - nominal| by sample size")
+    for num_samples, error in worst_error.items():
+        print(f"  n={num_samples:<5} {error:.3f}")
+    assert worst_error[SAMPLE_SIZES[-1]] < worst_error[SAMPLE_SIZES[0]]
+
+    # The boundary regime must be active in at least one setting. Otherwise
+    # the dual solve would only reproduce `mean + sqrt(radius * variance)`.
+    assert closed_form_gap_by_setting[SAMPLE_SIZES[0], CONFIDENCE_LEVELS[-1]] < -1e-4
+
+    _assert_calibration_matches_normal_interval()
+
+    fig, (ax_coverage, ax_error) = plt.subplots(1, 2, figsize=(11, 4))
+    ax_coverage.plot(
+        CONFIDENCE_LEVELS,
+        CONFIDENCE_LEVELS,
+        color=plt.rcParams["text.color"],
+        linestyle="--",
+        label="exact calibration",
+    )
+    for num_samples, coverages in coverage_by_size.items():
+        ax_coverage.plot(
+            CONFIDENCE_LEVELS, coverages, marker="o", label=f"n = {num_samples}"
+        )
+    ax_coverage.set_xlabel("nominal confidence 1 - alpha")
+    ax_coverage.set_ylabel("empirical coverage")
+    ax_coverage.set_title("calibrated radius: coverage vs. nominal level")
+    ax_coverage.legend()
+
+    ax_error.axhline(0.0, color=plt.rcParams["text.color"], linestyle="--")
+    for index, confidence in enumerate(CONFIDENCE_LEVELS):
+        ax_error.plot(
+            SAMPLE_SIZES,
+            [float(errors[num_samples][index]) for num_samples in SAMPLE_SIZES],
+            marker="o",
+            label=f"1 - alpha = {confidence:.2f}",
+        )
+    ax_error.set_xscale("log")
+    ax_error.set_xlabel("sample size n")
+    ax_error.set_ylabel("coverage - nominal")
+    ax_error.set_title("under-coverage shrinks as the sample grows")
+    ax_error.legend(fontsize="small")
+
+    fig.tight_layout()
+    save_figure(fig, "06_calibrated_ambiguity_radius")
+
+
+def _assert_calibration_matches_normal_interval() -> None:
+    """Check the calibrated radius reproduces the textbook normal interval.
+
+    In the interior regime the chi-square worst-case expectation is
+    `mean + sqrt(radius * variance)`, so the calibrated radius
+    `z_{1-alpha/2}^2 / n` must reproduce the half-width
+    `z_{1-alpha/2} * std / sqrt(n)` exactly. The experiment relies on this
+    identity, so it is checked against the solver rather than against the
+    algebra.
+    """
+    num_samples = 160
+    confidence = 0.95
+    generator = torch.Generator().manual_seed(SEED)
+    sample = exponential_samples(num_samples, generator)[0]
+    nominal = torch.full((num_samples,), 1.0 / num_samples, dtype=torch.float64)
+    radius = torch.tensor(
+        chi_square_radius(num_samples, confidence), dtype=torch.float64
+    )
+
+    _, upper_set = build_ambiguity_sets(nominal, radius)
+    solved = float(upper_set.worst_case_expectation(sample))
+
+    normal_quantile = NormalDist().inv_cdf(0.5 * (1.0 + confidence))
+    standard_error = float(torch.std(sample, unbiased=False)) / math.sqrt(num_samples)
+    textbook = float(torch.mean(sample)) + normal_quantile * standard_error
+
+    print(
+        f"\ncalibrated upper bound at n={num_samples}, "
+        f"1 - alpha={confidence}: {solved:.9f}"
+    )
+    print(f"normal-quantile upper bound:               {textbook:.9f}")
+    assert abs(solved - textbook) < 1e-5
+
+
+if __name__ == "__main__":
+    main()

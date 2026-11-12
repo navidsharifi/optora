@@ -6,7 +6,9 @@ import pytest
 
 from tools.smoke import (
     ROOT,
-    find_examples,
+    SCRIPT_DIRECTORIES,
+    find_all_scripts,
+    find_scripts,
     find_wheel,
     isolated_environ,
     venv_python,
@@ -40,28 +42,36 @@ def test_find_wheel_rejects_a_stale_dist(tmp_path: Path) -> None:
         find_wheel(tmp_path, dist)
 
 
-def test_find_examples_returns_numbered_scripts_in_order(tmp_path: Path) -> None:
-    examples = tmp_path / "examples"
-    examples.mkdir()
+def test_find_scripts_returns_numbered_scripts_in_order(tmp_path: Path) -> None:
     for name in ("02_b.py", "01_a.py", "_plotting.py", "README.md"):
-        (examples / name).touch()
+        (tmp_path / name).touch()
 
-    assert [path.name for path in find_examples(tmp_path)] == ["01_a.py", "02_b.py"]
-
-
-def test_find_examples_rejects_an_empty_directory(tmp_path: Path) -> None:
-    (tmp_path / "examples").mkdir()
-
-    with pytest.raises(FileNotFoundError, match="no examples"):
-        find_examples(tmp_path)
+    assert [path.name for path in find_scripts(tmp_path)] == ["01_a.py", "02_b.py"]
 
 
-def test_find_examples_covers_the_repository_examples() -> None:
-    examples = find_examples(ROOT)
+def test_find_scripts_orders_grouped_scripts_by_group_first(tmp_path: Path) -> None:
+    for group, name in (("02_g", "01_c.py"), ("01_g", "02_b.py"), ("01_g", "01_a.py")):
+        (tmp_path / group).mkdir(exist_ok=True)
+        (tmp_path / group / name).touch()
 
-    assert examples
-    assert all(path.stem[:2].isdigit() for path in examples)
-    assert ROOT / "examples" / "_plotting.py" not in examples
+    found = [path.relative_to(tmp_path).as_posix() for path in find_scripts(tmp_path)]
+
+    assert found == ["01_g/01_a.py", "01_g/02_b.py", "02_g/01_c.py"]
+
+
+def test_find_scripts_rejects_an_empty_directory(tmp_path: Path) -> None:
+    with pytest.raises(FileNotFoundError, match="no scripts"):
+        find_scripts(tmp_path)
+
+
+def test_find_all_scripts_runs_tutorials_before_examples() -> None:
+    scripts = find_all_scripts(ROOT)
+    owners = [path.relative_to(ROOT).parts[0] for path in scripts]
+
+    assert owners == sorted(owners, key=SCRIPT_DIRECTORIES.index)
+    assert set(owners) == set(SCRIPT_DIRECTORIES)
+    assert all(path.stem[:2].isdigit() for path in scripts)
+    assert ROOT / "tutorials" / "_plotting.py" not in scripts
 
 
 def test_venv_python_matches_the_platform_layout(tmp_path: Path) -> None:

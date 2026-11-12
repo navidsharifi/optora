@@ -1,7 +1,7 @@
 r"""Conditional value-at-risk, animated over its level.
 
 The first animation shows CVaR as the mean of the upper tail. The other two
-belong to the example page on recovering CVaR from a phi-divergence ball:
+belong to the tutorial page on recovering CVaR from a phi-divergence ball:
 they set the CVaR ball beside the total-variation ball of radius
 $1 - \alpha$ that contains it, first on the probability simplex and then as
 likelihood ratios to the nominal.
@@ -433,13 +433,13 @@ FIGURES = (
     ),
     FigureSpec(
         name="cvar-tv-simplex",
-        page="examples/cvar_from_phi_divergence.md",
+        page="tutorials/cvar_from_phi_divergence.md",
         outputs=("cvar-tv-simplex-{theme}.gif",),
         render=render_cvar_tv_simplex,
     ),
     FigureSpec(
         name="cvar-tv-ratio",
-        page="examples/cvar_from_phi_divergence.md",
+        page="tutorials/cvar_from_phi_divergence.md",
         outputs=("cvar-tv-ratio-{theme}.gif",),
         render=render_cvar_tv_ratio,
     ),

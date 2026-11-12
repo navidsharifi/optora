@@ -1,6 +1,6 @@
 r"""Radius sweeps of the KL and total-variation balls, animated.
 
-Both animations belong to the first two example pages and draw their
+Both animations belong to the first two tutorial pages and draw their
 four-scenario instance. The first grows the KL radius and watches the
 worst-case distribution tilt toward the costly scenarios while the
 constraint $D_{\mathrm{KL}}(q^\star \,\|\, p) = \rho$ stays tight, until the
@@ -28,7 +28,7 @@ from tools.figures._base import (
 )
 
 HOLD_FRAMES = 10
-# The four-scenario instance examples 01 and 02 share.
+# The four-scenario instance tutorials 01 and 02 share.
 NOMINAL = torch.tensor([0.4, 0.3, 0.2, 0.1], dtype=torch.float64)
 LOSS = torch.tensor([0.5, 1.5, 3.0, 8.0], dtype=torch.float64)
 POSITIONS = np.arange(NOMINAL.shape[0])
@@ -245,13 +245,13 @@ def render_tv_shift(context: Context) -> None:
 FIGURES = (
     FigureSpec(
         name="kl-radius",
-        page="examples/kl_dro_radius_sweep.md",
+        page="tutorials/kl_dro_radius_sweep.md",
         outputs=("kl-radius-{theme}.gif",),
         render=render_kl_radius,
     ),
     FigureSpec(
         name="tv-shift",
-        page="examples/worst_case_distribution_shift.md",
+        page="tutorials/worst_case_distribution_shift.md",
         outputs=("tv-shift-{theme}.gif",),
         render=render_tv_shift,
     ),

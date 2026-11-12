@@ -8,9 +8,10 @@ include LICENSE
 include README.md
 include pyproject.toml
 
-# Never ship the documentation/examples ecosystem, progress tracker,
+# Never ship the documentation, tutorials and examples, progress tracker,
 # built docs site, tests, or release tooling in a source distribution.
 prune examples
+prune tutorials
 prune docs
 prune progress
 prune site

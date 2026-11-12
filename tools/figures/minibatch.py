@@ -1,6 +1,6 @@
 r"""The bias of the minibatch plug-in estimate, animated over the batch size.
 
-The animation belongs to example 08. On the example's dataset and
+The animation belongs to tutorial 08. On the tutorial's dataset and
 least-squares fit it draws two thousand minibatches of every size $m$ from
 $8$ to $2048$, runs the KL ball on each minibatch alone, and compares the
 spread of those plug-in estimates with the full-batch worst case. The
@@ -63,7 +63,7 @@ def plug_in_excess(
     """Return the plug-in robust excess of `draws` minibatches of `size`.
 
     Each estimate is the KL worst case of the minibatch minus the minibatch
-    mean, the control variate example 08 uses: it leaves the bias unchanged
+    mean, the control variate tutorial 08 uses: it leaves the bias unchanged
     and removes most of the noise of the mean itself.
     """
     batch = loss[torch.randint(NUM_POINTS, (draws, size), generator=generator)]
@@ -272,7 +272,7 @@ def render_plug_in_bias(context: Context) -> None:
 FIGURES = (
     FigureSpec(
         name="plug-in-bias",
-        page="examples/minibatch_dro_training.md",
+        page="tutorials/minibatch_dro_training.md",
         outputs=("plug-in-bias-{theme}.gif",),
         render=render_plug_in_bias,
     ),

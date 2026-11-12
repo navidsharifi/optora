@@ -1,6 +1,6 @@
 r"""Wasserstein DRO as Lipschitz regularization, animated over the radius.
 
-The animation belongs to example 05. It shrinks the type-1 Wasserstein
+The animation belongs to tutorial 05. It shrinks the type-1 Wasserstein
 radius and watches the discrete dual
 
 $$\inf_{\gamma \ge 0}\; \gamma\rho + \sum_i p_i \max_j (\ell_j - \gamma c_{ij})$$
@@ -29,11 +29,11 @@ SHOWN_SIZE = 64
 
 
 def empirical_measure(size: int) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-    """Return example 05's quantile discretization of the standard normal.
+    """Return tutorial 05's quantile discretization of the standard normal.
 
     Returns:
         The uniform nominal, the softplus loss on the support, and the
-        absolute ground cost, as in the example script.
+        absolute ground cost, as in the tutorial script.
     """
     quantiles = (torch.arange(size, dtype=torch.float64) + 0.5) / size
     support = torch.special.ndtri(quantiles)
@@ -224,7 +224,7 @@ def render_lipschitz_dual(context: Context) -> None:
 FIGURES = (
     FigureSpec(
         name="lipschitz-dual",
-        page="examples/wasserstein_lipschitz_equivalence.md",
+        page="tutorials/wasserstein_lipschitz_equivalence.md",
         outputs=("lipschitz-dual-{theme}.gif",),
         render=render_lipschitz_dual,
     ),

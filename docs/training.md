@@ -102,7 +102,7 @@ worst_case_distribution = loss.grad
 This by-product also shows what a robust training run does. In the
 animation below, Adam fits a linear model to data drawn from the same
 two-group model as in
-[Training under subpopulation shift](examples/subpopulation_shift_training.md),
+[Training under subpopulation shift](tutorials/subpopulation_shift_training.md),
 once by empirical risk minimization and once on the KL worst case.
 
 <figure class="figure" markdown="span">
@@ -364,7 +364,7 @@ remedies.
 | Ambiguity sets | Any set built from a nominal alone (KL, chi-square, total variation, CVaR, general phi) | Phi-divergence balls with a finite conjugate (KL, chi-square, CVaR) |
 | Per-step cost | Four exact solves, of which the two half-batch solves run as one batched call | One pass over the minibatch, no inner solve |
 
-[Minibatch DRO against the full batch](examples/minibatch_dro_training.md)
+[Minibatch DRO against the full batch](tutorials/minibatch_dro_training.md)
 measures the bias of the plug-in estimate, trains with all three
 estimators and compares each with the exact full-batch optimum.
 
@@ -438,7 +438,7 @@ centred on the group proportions.
 
 | Topic | Guidance |
 | --- | --- |
-| Regularization | Necessary when the model can fit the training set. Once the loss of every training group is near zero, the adversary has nothing left to upweight, and group DRO does no better than ERM on the worst group (Sagawa et al. 2020). Use a strong L2 penalty or early stopping, as [Group DRO under a spurious correlation](examples/group_dro_training.md) shows. |
+| Regularization | Necessary when the model can fit the training set. Once the loss of every training group is near zero, the adversary has nothing left to upweight, and group DRO does no better than ERM on the worst group (Sagawa et al. 2020). Use a strong L2 penalty or early stopping, as [Group DRO under a spurious correlation](tutorials/group_dro_training.md) shows. |
 | Absent groups | `group_losses` assigns loss zero to a group without samples, so `step` leaves its unnormalized weight unchanged, which is how Algorithm 1 treats a group that was not sampled. Sampling a fixed number of examples per group keeps every group in every minibatch. |
 | Generalization adjustment | Sagawa et al. add $C / \sqrt{n_g}$ to the loss of each group to favour small groups. Pass the adjusted losses to `step` and the raw losses to `forward`. The adjustment does not depend on $\theta$, so it changes the weights but not the form of the gradient. |
 | Many models at once | Initial weights of shape `(..., G)` give one adversary per batch element of the losses, and a tensor `step_size` sweeps several step sizes in one module. |
@@ -453,7 +453,7 @@ centred on the group proportions.
 | Device and dtype | `ambiguity_set.to(device)` moves `nominal` and every cached buffer. The returned value is on the device of `loss` and has the promoted dtype of `loss` and `nominal`. Half-precision inputs, including those produced under `torch.autocast`, are solved in float32, and the result is rounded once. See [Numerical behaviour](numerics.md). |
 | Debugging | `validate=True` checks `nominal` and a tensor `radius` for invalid values at construction, and checks every `loss` for non-finite values at each call. The per-call check costs one host synchronization. |
 | Differentiable inputs | These are `loss`, `nominal` and a tensor `radius` (`alpha` for CVaR), as described in [Gradients with respect to `nominal` and `radius`](#gradients-with-respect-to-nominal-and-radius). The extra derivatives are computed only when `nominal` or the radius requires grad. |
-| Choosing the radius | `optora.dro.kl_radius`, `chi_square_radius` and `phi_divergence_radius` turn a confidence level and a sample size into a radius under which the robust value of the phi-divergence ball is an asymptotically exact upper confidence bound on the true risk. `wasserstein_radius` does the same for a quadratic transport cost from the losses and their input gradients, calibrated for transport over the whole input space. See [Calibrating the ambiguity radius](examples/calibrated_ambiguity_radius.md). |
+| Choosing the radius | `optora.dro.kl_radius`, `chi_square_radius` and `phi_divergence_radius` turn a confidence level and a sample size into a radius under which the robust value of the phi-divergence ball is an asymptotically exact upper confidence bound on the true risk. `wasserstein_radius` does the same for a quadratic transport cost from the losses and their input gradients, calibrated for transport over the whole input space. See [Calibrating the ambiguity radius](tutorials/calibrated_ambiguity_radius.md). |
 | Zero radius | `radius=0.0` makes the objective equal to the nominal-weighted empirical risk, which is the natural non-robust baseline. For `WassersteinAmbiguitySet` this requires a metric `cost` (`cost[i, j] > 0` for `i != j`), because a zero-cost pair of distinct support points still lets mass move between them at zero radius. `PhiAmbiguitySet` with a `dual_solver` solves its dual at a zero radius as at any other radius, since a generator may vanish on an interval (the CVaR indicator). For an exact baseline, use it without a `dual_solver`, or use a dedicated set. `MMDAmbiguitySet` returns the nominal expectation at zero radius only when its Gram matrix is positive definite. Duplicate support points make the Gram matrix singular, mass can then move between them at zero radius, and the set solves that face of the simplex instead. |
 
 ## When to use `MinimaxSolver` instead
@@ -478,4 +478,4 @@ constant and does not differentiate through the steps of the solver.
 
 For a complete training run compared with an ERM baseline and two
 controls, see
-[Training under subpopulation shift](examples/subpopulation_shift_training.md).
+[Training under subpopulation shift](tutorials/subpopulation_shift_training.md).

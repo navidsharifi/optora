@@ -1,6 +1,6 @@
 r"""KL-DRO under subpopulation shift, animated over the radius.
 
-The animation belongs to example 07. It trains the example's linear model
+The animation belongs to tutorial 07. It trains the tutorial's linear model
 on the KL worst case at forty radii at once, from zero (empirical risk
 minimization) to one half, and turns the radius like a dial: the fitted
 slope walks from the majority slope toward the minority one along the
@@ -33,7 +33,7 @@ LEARNING_RATE_DECAY = 0.98
 def training_set(
     generator: torch.Generator,
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-    """Draw example 07's stratified training set.
+    """Draw tutorial 07's stratified training set.
 
     Returns:
         Inputs of shape `(n, 2)`, labels of shape `(n,)`, and the boolean
@@ -66,7 +66,7 @@ def train(
         labels: Training labels of shape `(n,)`.
         minority: Minority indicator of shape `(n,)`.
         radii: KL radii of shape `(R,)`; zero is empirical risk minimization.
-        steps: Adam steps, with example 07's learning rate and decay.
+        steps: Adam steps, with tutorial 07's learning rate and decay.
 
     Returns:
         Slopes of shape `(R, 2)`, intercepts of shape `(R,)`, and the mass the
@@ -266,7 +266,7 @@ def render_shift_radius(context: Context) -> None:
 FIGURES = (
     FigureSpec(
         name="shift-radius",
-        page="examples/subpopulation_shift_training.md",
+        page="tutorials/subpopulation_shift_training.md",
         outputs=("shift-radius-{theme}.gif",),
         render=render_shift_radius,
     ),

@@ -75,14 +75,14 @@ docs = [
   "matplotlib>=3.8",
   "seaborn>=0.13"
 ]
-# Only for running scripts under examples/ (never a runtime dependency of
+# Only for running scripts under tutorials/ (never a runtime dependency of
 # optora itself, and never shipped in the sdist/wheel — see MANIFEST.in).
-examples = [
+tutorials = [
   "matplotlib>=3.8"
 ]
 
 # Zero-bloat distribution: only the `optora` package ships in the wheel.
-# `examples/`, `docs/`, `progress/`, `site/`, `tests/`, and `tools/` are
+# `examples/`, `tutorials/`, `docs/`, `progress/`, `site/`, `tests/`, and `tools/` are
 # excluded from both the wheel (via `packages.find` below) and the sdist
 # (via MANIFEST.in). `include-package-data = false` and
 # `exclude-package-data` are defense-in-depth against any non-Python file
@@ -121,9 +121,10 @@ line-length = 88
 target-version = "py310"
 
 [tool.ruff.format]
-# These pages embed the example scripts through `--8<--` snippet includes
-# inside ```py fences; formatting them as Python would break the includes.
-exclude = ["docs/examples/*.md"]
+# These pages embed the tutorial and example scripts through `--8<--`
+# snippet includes inside ```py fences; formatting them as Python would
+# break the includes.
+exclude = ["docs/tutorials/*.md", "docs/examples/**/*.md"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B", "SIM"]
