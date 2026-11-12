@@ -71,9 +71,9 @@ class KLAmbiguitySet(TiltedAmbiguitySet):
 
     See `optora.core.dro_base.TiltedAmbiguitySet` for the bracketed
     bisection that runs the root solve, and `docs/formulations.md` for the
-    equivalence between the two. This formulation needs no
-    optimal-transport machinery, making it the simplest DRO formulation to
-    build (see `progress/architecture.md`).
+    equivalence between the two. Unlike the Wasserstein and Sinkhorn
+    sets, this formulation needs no ground cost and no optimal-transport
+    solve.
 
     Attributes:
         nominal: Reference distribution the ambiguity set is centered on.
@@ -147,7 +147,7 @@ class KLAmbiguitySet(TiltedAmbiguitySet):
         overflows however extreme $\beta$ becomes.
 
         The divergence has two algebraically equal forms, each accurate in
-        one regime, and the one suited to the regime is returned:
+        one regime, and the method returns the one suited to the regime.
 
         - **Small divergence.** $-\log
           \mathbb{E}_{\mathrm{nominal}}[e^{c}]$ with the exponent
@@ -175,8 +175,9 @@ class KLAmbiguitySet(TiltedAmbiguitySet):
         scenario whose nominal mass and tilt weight would underflow as a
         product still gets its correct, representable tilted mass. The
         cached `log_nominal` is used when it is already in `gap`'s working
-        precision; a half-precision set instead takes the logarithm of its
-        nominal in that precision, since a logarithm rounded to a
+        precision and the nominal carries no gradient. Otherwise, as for a
+        half-precision set, the logarithm of the nominal is taken again in
+        the working precision, since a logarithm rounded to a
         half-precision significand would perturb every tilted weight.
 
         Args:

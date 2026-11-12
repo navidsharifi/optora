@@ -10,18 +10,19 @@ $$
 \hat V_m = \sup_{q:\, D(q \,\|\, \hat P_m) \,\le\, \rho} \mathbb{E}_q[\ell],
 $$
 
-is a biased estimate of the population worst case $V$: the supremum is a
+is a biased estimate of the population worst case $V$. The supremum is a
 nonlinear functional of the sample, so $\mathbb{E}[\hat V_m] \neq V$ and the
 gradient of $\hat V_m$ is not an unbiased stochastic gradient of $V$
-(Levy, Carmon, Duchi, and Sidford 2020). For KL-DRO the plug-in is the
-log-sum-exp of a subsample.
+(Levy, Carmon, Duchi, and Sidford 2020). For KL-DRO the plug-in is a
+log-sum-exp of the minibatch losses at the optimal temperature.
 
-This module provides the two standard remedies:
+This module provides the two standard remedies.
 
 - `MultilevelMonteCarloEstimator` keeps the exact plug-in solve of any
   ambiguity set and removes its bias up to the largest batch size by
   randomized multilevel Monte Carlo (Blanchet and Glynn 2015; Levy et al.
-  2020), at a logarithmic increase in the expected batch size.
+  2020). The expected batch size grows only logarithmically in that
+  largest batch size.
 - `StochasticPhiDual` keeps the dual variables of a phi-divergence ball as
   learnable parameters, which turns the worst case into a plain expectation
   over $P_0$ whose minibatch mean is exactly unbiased (Ben-Tal et al. 2013;
@@ -58,7 +59,7 @@ class MultilevelMonteCarloEstimator(nn.Module):
     $$
 
     Each term has the distribution of a plug-in estimate on that many
-    i.i.d. samples, so the expectation telescopes:
+    i.i.d. samples, so the expectation telescopes,
 
     $$
     \mathbb{E}[\hat V] = \mathbb{E}[\hat V_{n_0}]
@@ -71,13 +72,13 @@ class MultilevelMonteCarloEstimator(nn.Module):
     at its own maximizer (Danskin). The estimator therefore has the bias of
     a batch of $n_0 2^L$ samples at an expected batch size of
     $n_0 L / (1 - 2^{-L})$ (Blanchet and Glynn 2015; Levy et al. 2020). The
-    antithetic halves keep its variance bounded as $L$ grows: the
+    antithetic halves keep its variance bounded as $L$ grows. The
     correction is the gap between one solve and the mean of two solves on
     the same samples, which vanishes as the plug-in converges. With
     `max_level=0` there is no correction and the estimator is the plain
     plug-in on $n_0$ samples.
 
-    Usage is a training loop whose batch size is drawn per step:
+    In a training loop the batch size is drawn anew at every step.
 
     ```python
     estimator = MultilevelMonteCarloEstimator(
@@ -96,7 +97,7 @@ class MultilevelMonteCarloEstimator(nn.Module):
             2 ** j` samples. Registered as submodules, so `.to(...)` moves
             and casts every level together.
         base_batch_size: Number of samples $n_0$ of the base level.
-        max_level: Largest level $L$; the bias is that of a batch of
+        max_level: Largest level $L$. The bias is that of a batch of
             `base_batch_size * 2 ** max_level` samples.
     """
 
@@ -117,9 +118,10 @@ class MultilevelMonteCarloEstimator(nn.Module):
                 once per level with a uniform nominal on `device` in
                 `dtype`.
                 Any set whose construction depends only on the nominal
-                qualifies (KL, chi-square, total variation, general phi); a
-                Wasserstein set also needs the samples' ground cost and does
-                not.
+                qualifies, such as the KL, chi-square, total-variation,
+                CVaR, and general phi sets. The Wasserstein, Sinkhorn, and
+                MMD sets also need a ground cost or a Gram matrix over the
+                samples and do not qualify.
             base_batch_size: Number of samples $n_0$ of the base level, at
                 least one.
             max_level: Largest level $L$, at least zero.
@@ -127,8 +129,8 @@ class MultilevelMonteCarloEstimator(nn.Module):
                 device when `None`.
             dtype: Dtype of the uniform nominals, the default dtype when
                 `None`. Build in the dtype the set will run in rather than
-                casting afterwards: `1 / m` rounded to float32 and cast to
-                float64 is not the float64 uniform distribution.
+                casting afterwards, since `1 / m` rounded to float32 and
+                cast to float64 is not the float64 uniform distribution.
 
         Raises:
             ValueError: If `base_batch_size` is less than one or `max_level`
@@ -174,8 +176,8 @@ class MultilevelMonteCarloEstimator(nn.Module):
         r"""Draw the batch size $n_0 2^J$ of the next step.
 
         The level is drawn on the CPU, so drawing it never waits on an
-        accelerator; the returned size is what the data pipeline needs on
-        the host anyway.
+        accelerator. The data pipeline needs the returned size on the host
+        in any case.
 
         Args:
             generator: CPU random number generator to draw the level with,
@@ -259,7 +261,7 @@ class StochasticPhiDual(nn.Module):
 
     an expectation over $P_0$ for fixed $(\eta, \lambda)$. Minimizing it
     *jointly* with the model parameters $\theta$ therefore needs only
-    unbiased estimates of that expectation, and the minibatch mean is one:
+    unbiased estimates of that expectation, and the minibatch mean is one.
     `forward` is linear in the empirical distribution, so its expectation
     over a minibatch, and that of its gradient with respect to $\theta$,
     $\log \eta$, and $\lambda$, is the population dual exactly. This is the
@@ -267,8 +269,8 @@ class StochasticPhiDual(nn.Module):
     2020; Jin et al. 2021, who analyze it for non-convex losses).
 
     At any $(\eta, \lambda)$ the population dual bounds the worst case from
-    above (weak duality); it is tight at the joint minimizer. The dual
-    variables are `nn.Parameter`s, so they train with the model:
+    above (weak duality), with equality at the joint minimizer. The dual
+    variables are `nn.Parameter`s, so they train with the model.
 
     ```python
     dual = StochasticPhiDual(radius=0.1, phi_conjugate=kl_conjugate)
@@ -277,20 +279,20 @@ class StochasticPhiDual(nn.Module):
     optimizer.step()
     ```
 
-    Use `optora.dro.kl_conjugate` for KL: it is $\phi^*(s) = e^s - 1$
+    Use `optora.dro.kl_conjugate` for KL. It is $\phi^*(s) = e^s - 1$
     continued along its tangent past a quarter of the dtype's exponent
     range, so a loss spike that $\lambda$ has not caught up with gives a
-    large, finite objective and gradient rather than the `inf`, and then
-    `nan` dual variables, of `torch.expm1`. The chi-square conjugate is
-    `optora.dro.chi_square_conjugate`. The price of
-    unbiasedness is that $(\eta, \lambda)$ are reached by stochastic
-    optimization rather than solved per batch: a conjugate that grows
-    exponentially, as KL's does, makes the objective's variance sensitive to
-    $\lambda$ trailing the loss scale, and nothing here standardizes the
-    loss, since a per-batch shift or scale would reintroduce the bias.
-    Start the dual variables on the scale of the loss: a reliable start is
-    the exact dual optimum of a pilot minibatch at the initial model, found
-    by minimizing this module on that batch alone. The defaults
+    large, finite objective and gradient. `torch.expm1` would instead give
+    `inf` and then `nan` dual variables. The chi-square conjugate is
+    `optora.dro.chi_square_conjugate`. The price of unbiasedness is that
+    $(\eta, \lambda)$ are reached by stochastic optimization rather than
+    solved per batch. A conjugate that grows exponentially, as KL's does,
+    makes the objective's variance sensitive to $\lambda$ trailing the loss
+    scale, and nothing here standardizes the loss, since a per-batch shift
+    or scale would reintroduce the bias. Start the dual variables on the
+    scale of the loss. A reliable start is the exact dual optimum of a
+    pilot minibatch at the initial model, found by minimizing this module
+    on that batch alone. The defaults
     `initial_log_eta=0` and `initial_lam=0` can stall training under KL.
 
     Attributes:

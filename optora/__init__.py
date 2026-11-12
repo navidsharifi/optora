@@ -4,8 +4,8 @@ The main mathematical nouns are re-exported here so that
 ``from optora import KLAmbiguitySet, MinimaxSolver`` works. Subpackage imports
 such as ``from optora.dro import KLAmbiguitySet`` remain equally valid, and the
 subpackages stay the home of everything not listed in ``__all__`` (convergence
-diagnostics, helper functions). No workflow functions live at the root; run an
-algorithm with ``Solver.solve(problem)``.
+diagnostics, helper functions). No workflow functions live at the root. An
+algorithm is run with ``Solver.solve(problem)``.
 """
 
 from optora._version import __version__

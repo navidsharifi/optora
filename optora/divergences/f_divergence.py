@@ -43,10 +43,10 @@ class PhiDivergence(Divergence):
     $$
 
     for a convex generator $\phi$ with $\phi(1) = 0$. `ChiSquareDivergence`
-    and `TotalVariationDivergence` are `PhiDivergence` instances with a fixed
-    generator; researchers can subclass or instantiate `PhiDivergence`
-    directly with any other convex generator to define further
-    phi-divergence-based ambiguity sets in `optora.dro.phi_dro`.
+    and `TotalVariationDivergence` are subclasses with a fixed generator.
+    Any other convex generator can be passed here directly, or fixed in a
+    subclass, to define further phi-divergence ambiguity sets with
+    `optora.dro.PhiAmbiguitySet`.
 
     Attributes:
         phi: Convex generator function with `phi(1) = 0`, applied elementwise
@@ -127,13 +127,13 @@ class ChiSquareDivergence(PhiDivergence):
     def forward(self, p: torch.Tensor, q: torch.Tensor) -> torch.Tensor:
         r"""Compute the chi-square divergence of `p` from `q`.
 
-        Uses the closed form $(p-q)^2 / q$ directly instead of routing
-        through `PhiDivergence`'s generic $q \, \phi(p/q)$ path:
-        $q \, (p/q - 1)^2$ and $(p-q)^2 / q$ are algebraically identical, but
-        the generic path divides by `q` and then multiplies by `q` again
-        after squaring, a round trip that costs an extra elementwise
-        operation and loses precision by squaring an already-divided ratio
-        before rescaling it back up.
+        Uses the closed form $(p-q)^2 / q$ instead of the generic
+        $q \, \phi(p/q)$ of `PhiDivergence`. The two are algebraically
+        identical, but the generic form divides by `q` and multiplies by `q`
+        again after squaring, which costs an extra elementwise operation.
+        It also forms $p/q - 1$ from a rounded ratio, which loses relative
+        precision when $p_i$ is close to $q_i$, whereas the difference
+        $p_i - q_i$ is computed first here.
 
         Args:
             p: Candidate distribution of shape `(..., n)`, nonnegative and
@@ -184,12 +184,11 @@ class TotalVariationDivergence(PhiDivergence):
     def forward(self, p: torch.Tensor, q: torch.Tensor) -> torch.Tensor:
         r"""Compute the total variation divergence of `p` from `q`.
 
-        Uses the closed form $\frac{1}{2}\sum |p-q|$ directly instead of
-        routing through `PhiDivergence`'s generic $q \, \phi(p/q)$ path: for
-        $q > 0$, $q \, |p/q - 1| = |p-q|$, so the `q` factor and the division
-        it required cancel out algebraically. This removes the division
-        (and its `eps` clamp) from the computation entirely rather than
-        merely guarding it.
+        Uses the closed form $\frac{1}{2}\sum |p-q|$ instead of the generic
+        $q \, \phi(p/q)$ of `PhiDivergence`. For $q > 0$ the identity
+        $q \, |p/q - 1| = |p-q|$ cancels the factor `q` against the
+        division, so the closed form needs neither the division nor its
+        `eps` clamp.
 
         Args:
             p: Candidate distribution of shape `(..., n)`, nonnegative and

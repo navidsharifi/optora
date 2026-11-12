@@ -28,8 +28,8 @@ def _bisection_steps(dtype: torch.dtype) -> int:
     Bisecting the unit interval `k` times narrows the bracket to `2 ** -k`,
     so there is nothing left to gain once that width drops below the
     spacing of the floating-point numbers near one. The count is therefore
-    read off the dtype rather than exposed as a tolerance: 52 steps in
-    float64 and 23 in float32.
+    read off the dtype rather than exposed as a tolerance. It is 52 steps
+    in float64 and 23 in float32.
 
     Args:
         dtype: Floating-point dtype the bisection iterates in.
@@ -57,9 +57,10 @@ def _search_bits(entries: int) -> int:
     A step that evaluates $2^b - 1$ evenly spaced tilts narrows the bracket
     by $2^b$, so it replaces $b$ bisection steps at $2^b - 1$ times the
     arithmetic per step. The largest $b$ whose batched evaluation stays
-    within `_LAUNCH_BOUND_ENTRIES` is chosen: small problems, whose steps
-    are dominated by kernel launches, take few wide steps, and large ones
-    bisect. The choice reads only shapes, so it never synchronizes.
+    within `_LAUNCH_BOUND_ENTRIES` is chosen. Small problems, whose steps
+    are dominated by kernel launches, therefore take few wide steps, and
+    large ones bisect. The choice reads only shapes, so it never
+    synchronizes.
 
     Args:
         entries: Number of entries of one tilt evaluation, the batch size
@@ -185,20 +186,20 @@ def _broadcast_batch_shapes(**shapes: torch.Size) -> torch.Size:
 class AmbiguitySet(nn.Module, ABC):
     """Set of distributions within a bounded divergence of a nominal distribution.
 
-    An ambiguity set pairs a `Divergence` with a radius: every distribution
+    An ambiguity set pairs a `Divergence` with a radius. Every distribution
     `q` inside the set satisfies `divergence(q, nominal) <= radius`. Modules
     in `optora.dro` subclass `AmbiguitySet` to implement the inner
     maximization of the DRO minimax problem for a specific divergence
     geometry (for example KL, a general phi-divergence, or Wasserstein).
 
     Inherits from `torch.nn.Module` (rather than a plain ABC) so `nominal`
-    is registered as a buffer and `divergence` as a submodule: a single
+    is registered as a buffer and `divergence` as a submodule. A single
     `.to(device)`/`.cuda()` call then moves the nominal distribution and any
     tensor state the divergence holds (for example `SinkhornDivergence`'s
     ground-cost matrix) together, and both surface through `state_dict()`.
 
-    Numerical policy, shared by every subclass through `_prepare_loss` and
-    `_as_result`:
+    Every subclass follows the numerical policy below. Precision and
+    validation are handled by `_prepare_loss` and `_as_result`.
 
     - **Precision.** The worst case is computed in
       `optora.core.working_dtype(loss, nominal)`, so half-precision losses
@@ -206,7 +207,7 @@ class AmbiguitySet(nn.Module, ABC):
       returned in `torch.promote_types(loss.dtype, nominal.dtype)`.
     - **Non-finite losses.** A `nan` or infinite loss entry makes the
       corresponding batch element of the result non-finite (`nan`, or the
-      infinite value itself), never a finite number; other batch elements
+      infinite value itself), never a finite number. Other batch elements
       are unaffected.
     - **Validation.** Metadata checks (shapes, a negative or `nan` float
       radius) always run. Checks that read tensor values back to the host
@@ -214,8 +215,8 @@ class AmbiguitySet(nn.Module, ABC):
       `torch.distributions`' `validate_args`.
     - **Gradients.** The worst case is differentiable in `loss` by
       Danskin's theorem, and to first order in `nominal` and a tensor
-      `radius` by the envelope theorem (`_attach_parameter_gradients`);
-      only the derivative along directions that keep `nominal` summing to
+      `radius` by the envelope theorem (`_attach_parameter_gradients`).
+      Only the derivative along directions that keep `nominal` summing to
       one is defined.
 
     Attributes:
@@ -226,9 +227,9 @@ class AmbiguitySet(nn.Module, ABC):
             inside the ambiguity set from `nominal`, either a Python float
             or a tensor of radii broadcastable against the batch shape of
             `worst_case_expectation`'s `loss`.
-        validate: Whether value checks that synchronize with the device run:
-            on `nominal` and a tensor `radius` at construction, and on
-            `loss` at every `worst_case_expectation` call.
+        validate: Whether the value checks that synchronize with the device
+            run. They cover `nominal` and a tensor `radius` at construction,
+            and `loss` at every `worst_case_expectation` call.
     """
 
     nominal: torch.Tensor
@@ -251,16 +252,16 @@ class AmbiguitySet(nn.Module, ABC):
                 inside the ambiguity set from `nominal`. A tensor radius is
                 registered as a buffer and broadcast against the batch
                 shape of `worst_case_expectation`'s `loss`, which evaluates
-                a whole sweep of radii in one call; its entries are checked
+                a whole sweep of radii in one call. Its entries are checked
                 for nonnegativity only when `validate` is set, since reading
                 them on the host would block on the device, and a tensor
                 radius never takes the zero-radius shortcut. An infinite
                 radius is allowed and admits every distribution the
                 divergence can reach.
             validate: Whether to run the value checks that synchronize with
-                the device: that `nominal` is nonnegative and sums to one
-                along its last dimension, that a tensor `radius` is
-                nonnegative and not `nan`, and, on every
+                the device. These check that `nominal` is nonnegative and
+                sums to one along its last dimension, that a tensor `radius`
+                is nonnegative and not `nan`, and, on every
                 `worst_case_expectation` call, that `loss` is finite. They
                 are opt-in and off by default to keep construction and
                 evaluation asynchronous. The shape and hyperparameter
@@ -303,7 +304,7 @@ class AmbiguitySet(nn.Module, ABC):
 
         Returns:
             The broadcast of `loss`'s leading dimensions against those of
-            `nominal` and against `radius`'s shape: the shape every
+            `nominal` and against `radius`'s shape. This is the shape every
             `worst_case_expectation` returns, and the shape of the per-batch
             dual variables solved for along the way.
 
@@ -710,7 +711,7 @@ class _TiltedExpectation(torch.autograd.Function):
         """Return the directional derivative along the input tangents.
 
         Forward mode is opt-in, so the derivatives are always rebuilt
-        differentiably here: reverse mode over forward mode, as in
+        differentiably here. Reverse mode over forward mode, as in
         `torch.func.jacrev(torch.func.jacfwd(...))`, then sees their
         Jacobians rather than constants. Forward mode over forward mode does
         not differentiate a custom `jvp` rule in PyTorch, so it is
@@ -736,20 +737,21 @@ class TiltedAmbiguitySet(AmbiguitySet):
 
     For the divergence balls whose inner supremum has a known maximizer
     shape, the worst-case distribution is a one-parameter *tilt* of the
-    nominal: a family $q_t$ with $q_0 = \mathrm{nominal}$ along which the
-    divergence $D(q_t \,\|\, \mathrm{nominal})$ increases monotonically
-    from $0$ to the divergence of the distribution concentrated on the
-    highest-loss scenarios. KL-DRO tilts exponentially,
-    $q \propto \mathrm{nominal} \cdot e^{\beta\,\mathrm{loss}}$, and
-    chi-square-DRO tilts linearly,
-    $q \propto \mathrm{nominal} \cdot (\mathrm{loss} - c)_+$; both read
-    directly off the primal KKT conditions
+    nominal, that is, a family $q_t$ with $q_0 = \mathrm{nominal}$ along
+    which the divergence $D(q_t \,\|\, \mathrm{nominal})$ increases
+    monotonically from $0$ to the divergence of the distribution
+    concentrated on the highest-loss scenarios. KL-DRO tilts
+    exponentially, $q \propto \mathrm{nominal} \cdot e^{\beta\,\mathrm{loss}}$,
+    and chi-square-DRO tilts linearly,
+    $q \propto \mathrm{nominal} \cdot (\mathrm{loss} - c)_+$. Both forms
+    follow from the KKT conditions of the primal problem
     (Hu and Hong 2013; Ben-Tal et al. 2013; Duchi and Namkoong 2021).
 
     Because the divergence along the path is monotone, the constraint
     $D(q_t \,\|\, \mathrm{nominal}) \le \mathrm{radius}$ pins the tilt by a
     *bracketed* scalar root solve rather than by minimizing a convex dual.
-    That is what this class implements, once, for every such formulation:
+    This class implements that solve once for every such formulation, with
+    the properties below.
 
     - **A guaranteed bracket.** The tilt is parameterized by
       $t \in [0, 1)$, a bounded reparameterization of the unbounded
@@ -762,11 +764,11 @@ class TiltedAmbiguitySet(AmbiguitySet):
       of device-side kernels with no host read of a convergence flag. A
       small problem, whose cost is kernel launches rather than arithmetic,
       evaluates up to 15 tilts per step in one batched call and so needs a
-      quarter of the steps (`_search_bits`); a large one bisects.
+      quarter of the steps (`_search_bits`). A large one bisects.
     - **Feasibility by construction.** Each step keeps the endpoint that
       tested feasible, so the returned tilt always satisfies the radius
       constraint. The reported value is therefore a primal objective value
-      at a feasible distribution: it can never exceed $\max \mathrm{loss}$,
+      at a feasible distribution. It can never exceed $\max \mathrm{loss}$,
       and it is `nan`-free whatever the support size or loss scale.
     - **Saturation without a special case.** Once `radius` reaches the
       divergence of the distribution concentrated on the highest-loss
@@ -776,15 +778,16 @@ class TiltedAmbiguitySet(AmbiguitySet):
 
     The tilt is computed on the loss standardized to unit spread,
     $(\max \ell - \ell) / (\max \ell - \min \ell)$. An ambiguity set does
-    not depend on `loss`, so the maximizer of an affinely rescaled loss is
-    the same distribution; standardizing only keeps the tilt parameter and
-    the divergence well conditioned on a loss of any scale or offset.
+    not depend on `loss`, so a positive affine rescaling of the loss leaves
+    the maximizer unchanged. Standardizing only keeps the tilt parameter
+    and the divergence well conditioned on a loss of any scale or offset.
 
     The maximum and minimum are taken over the reachable scenarios only
-    (`_reachable`): the support of the nominal by default, or of whatever
-    base distribution a subclass tilts, such as the reference measure of
-    `optora.dro.SinkhornAmbiguitySet`, which also moves the path's start
-    off the nominal (`_center_expectation`). With the default, every tilt
+    (`_reachable`). By default these are the support of the nominal. A
+    subclass that tilts another base distribution uses that distribution's
+    support instead, as `optora.dro.SinkhornAmbiguitySet` does with its
+    reference measure, which also moves the path's start off the nominal
+    (`_center_expectation`). With the default, every tilt
     is a reweighting $q \propto \mathrm{nominal} \cdot w$, so a
     scenario with zero nominal mass is unreachable whatever its loss, and
     letting its loss set the scale would both misreport the saturated value
@@ -841,7 +844,7 @@ class TiltedAmbiguitySet(AmbiguitySet):
             gap: Shortfall of each scenario below the maximum loss on the
                 nominal's support, standardized to unit spread, of shape
                 `(..., n)` and therefore lying in $[0, 1]$ with at least one
-                zero entry on the support; scenarios off the support carry
+                zero entry on the support. Scenarios off the support carry
                 `1`. Parameterizing by the gap rather than by the loss keeps
                 the tilt of the highest-loss scenarios exactly `1` however
                 extreme the tilt becomes.
@@ -867,8 +870,8 @@ class TiltedAmbiguitySet(AmbiguitySet):
         On the standardized loss $-\mathrm{gap}$, the derivative with
         respect to `radius` is the multiplier $\lambda^\star$ of the radius
         constraint. Only the part of the derivative with respect to
-        `nominal` along directions that keep it summing to one is defined;
-        it is returned as the representative $g$ with
+        `nominal` along directions that keep it summing to one is defined.
+        It is returned as the representative $g$ with
         $\sum_i \mathrm{nominal}_i \, g_i = 0$, which stays finite as the
         radius vanishes, where $\lambda^\star$ grows without bound.
 
@@ -1024,8 +1027,8 @@ class TiltedAmbiguitySet(AmbiguitySet):
         """Return the expectation under the tilt path's start, `tilt = 0`.
 
         This is the exact worst case of a zero-radius set. It is the nominal
-        expectation by default; a formulation whose path starts elsewhere
-        overrides this.
+        expectation by default, and a formulation whose path starts
+        elsewhere overrides it.
 
         Args:
             loss: Per-scenario loss values of shape `(..., n)`.
@@ -1040,8 +1043,8 @@ class TiltedAmbiguitySet(AmbiguitySet):
         """Return the number of entries one tilt evaluation computes.
 
         This is the size `_search_bits` weighs against the launch-bound
-        threshold. A tilt reweights the support once per batch element by
-        default; a formulation whose tilt evaluates a larger intermediate,
+        threshold. By default a tilt reweights the support once per batch
+        element. A formulation whose tilt evaluates a larger intermediate,
         such as a matrix of kernel rows, overrides this so that a solve
         bound by arithmetic is not mistaken for a launch-bound one.
 
@@ -1133,12 +1136,13 @@ class TiltedAmbiguitySet(AmbiguitySet):
                 in one vectorized solve.
 
         Returns:
-            A tensor of shape `(...)` holding the worst-case expected loss:
-            the exact `sum(nominal * loss)` when `radius` is a zero float
-            (the set then contains only `nominal`), and otherwise the
+            A tensor of shape `(...)` holding the worst-case expected loss.
+            When `radius` is a zero float it is the exact expectation at
+            the start of the tilt path (`_center_expectation`), which is
+            `sum(nominal * loss)` by default. Otherwise it is the
             expectation of `loss` under the feasible tilted distribution
-            the bisection returned, which is exactly the largest loss on
-            the nominal's support once the radius saturates the set.
+            the search returned, which equals the largest reachable loss
+            once the radius saturates the set.
 
             The expectation is accumulated as a correction to `max(loss)`
             rather than directly. Every term of
@@ -1230,9 +1234,10 @@ class TiltedAmbiguitySet(AmbiguitySet):
         nominal, is the maximizer with its exact Jacobian, and the envelope
         derivatives, closed forms in the tilt, the maximizer, and the
         nominal, come with theirs. That is all a second derivative of the
-        worst case needs. The standardizing shift and scale stay fixed,
-        which is harmless: the tilt path for any fixed positive affine image
-        of the loss is the same family of distributions.
+        worst case needs. The standardizing shift and scale stay fixed.
+        This does not change the result, because the tilt path for any
+        fixed positive affine image of the loss is the same family of
+        distributions.
 
         Where the slope vanishes the constraint is inactive (a saturated
         radius, a constant loss, or a zero tilt at a zero radius). The
@@ -1260,7 +1265,7 @@ class TiltedAmbiguitySet(AmbiguitySet):
             The maximizer of shape `batch_shape + (n,)`, equal in value to
             the forward pass's, and, if `sensitivities` is set, the
             derivatives with respect to `nominal` and `radius`, otherwise
-            `None` twice; all differentiable in `loss`, `nominal`, and
+            `None` twice. All are differentiable in `loss`, `nominal`, and
             `radius`.
         """
         with self._attached_path(nominal.detach(), operands):
@@ -1380,19 +1385,21 @@ class DualAmbiguitySet(AmbiguitySet):
     Every divergence-based ambiguity set that reformulates its inner
     supremum as a convex dual minimization over a handful of dual variables
     (`optora.dro.PhiAmbiguitySet` over $(\log(\eta), \lambda)$) runs the
-    same machinery around a formulation-specific dual objective, so that
-    machinery lives here: hold an injected `dual_solver`, start it from a
-    dual point, and re-evaluate the dual objective at the returned optimum
-    so the result stays differentiable with respect to `loss`, `nominal`,
-    and `radius` by the envelope theorem. A zero-valued implicit-function
-    term (`_implicit_curvature`) built from the dual Hessian at the optimum
-    makes second derivatives exact as well, once the solve has converged.
+    same machinery around a formulation-specific dual objective, and this
+    class holds that machinery. It keeps an injected `dual_solver`, starts
+    it from a dual point, and re-evaluates the dual objective at the
+    returned optimum so the result stays differentiable with respect to
+    `loss`, `nominal`, and `radius` by the envelope theorem. A zero-valued
+    implicit-function term (`_implicit_curvature`) built from the dual
+    Hessian at the optimum makes second derivatives exact as well, once
+    the solve has converged.
 
     Repeated calls are warm-started. The dual optimum moves only slightly
     between consecutive `worst_case_expectation` calls on a slowly changing
-    loss — exactly what an `optora.dro.MinimaxSolver` outer iteration
-    produces — so `_solve_dual` caches the detached optimum of each solve
-    and starts the next solve from it instead of from `initial_dual_point`.
+    loss, which is the sequence the outer iterations of an
+    `optora.dro.MinimaxSolver` produce. `_solve_dual` therefore caches the
+    detached optimum of each solve and starts the next solve from it
+    instead of from `initial_dual_point`.
     That makes the second and later solves of such a sequence converge in
     far fewer inner iterations at the same optimum, since each dual is
     convex and its solution does not depend on where the iteration started.
@@ -1403,12 +1410,14 @@ class DualAmbiguitySet(AmbiguitySet):
     A batched `loss` of shape `(..., n)` is solved with one set of dual
     variables per batch element, since the duals decouple across batch
     elements. `_solve_dual` therefore hands `dual_solver` the *sum* of the
-    per-element dual objectives: the sum's gradient with respect to any one
-    element's dual variables is that element's own gradient, so a single
-    joint solve reproduces independent per-element solves exactly.
-    Convergence is judged on the joint gradient norm over the whole batch,
-    so every element keeps iterating until the batch as a whole is
-    stationary (see `progress/decisions.md`).
+    per-element dual objectives. The gradient of the sum with respect to
+    one element's dual variables is that element's own gradient, so a
+    single joint solve takes the same steps as independent per-element
+    solves. Convergence is judged on the joint gradient norm over the whole
+    batch, so every element keeps iterating until the batch as a whole is
+    stationary. Stopping elements one by one would need a host read of a
+    per-element mask at every step, the synchronization
+    `optora.core.convergence.ConvergenceTracker` avoids.
 
     The loss scale is handled here once rather than in each formulation.
     The set of candidate distributions does not depend on `loss`, so
@@ -1417,7 +1426,7 @@ class DualAmbiguitySet(AmbiguitySet):
     so a step size tuned for an order-one loss diverges on a wide one. The
     dual is therefore solved on the loss standardized to unit spread,
     $(\ell - \min \ell) / (\max \ell - \min \ell)$, with a detached shift
-    and scale: for any fixed constants this is the same function of `loss`,
+    and scale. For any fixed constants this is the same function of `loss`,
     so values and every derivative are unchanged. `initial_dual_point` and
     the warm start stay in the units of the raw loss and are converted at
     the boundary by `_to_standard_units` and `_from_standard_units`.
@@ -1479,14 +1488,15 @@ class DualAmbiguitySet(AmbiguitySet):
                 units of the raw loss (the default, for a start the caller
                 chose) or already in standardized units (for a default
                 start that must not depend on the loss scale).
-            validate: Whether to check that `nominal` is a valid
-                probability distribution, off by default because the check
-                synchronizes with the device.
+            validate: Whether to run the value checks of `AmbiguitySet` on
+                `nominal`, a tensor `radius`, and every `loss`. They are off
+                by default because they synchronize with the device.
 
         Raises:
             ValueError: If `nominal` is a scalar tensor, if `radius` is a
-                negative float, or if `validate` is set and `nominal` is not
-                a valid probability distribution.
+                negative or `nan` float, or if `validate` is set and
+                `nominal` is not a valid probability distribution or a
+                tensor `radius` holds a negative or `nan` entry.
         """
         super().__init__(
             nominal=nominal,
@@ -1545,7 +1555,7 @@ class DualAmbiguitySet(AmbiguitySet):
         Returns:
             The same dual point for the standardized loss. A multiplier
             with the units of a loss (such as `lam`) maps to
-            `(lam - shift) / scale`; a log-scale variable (such as
+            `(lam - shift) / scale`, and a log-scale variable (such as
             `log(eta)`) maps to `log(eta) - log(scale)`.
         """
         raise NotImplementedError
@@ -1578,9 +1588,9 @@ class DualAmbiguitySet(AmbiguitySet):
         Returns:
             A tensor of shape `(...)` holding the worst-case expected loss,
             the dual objective evaluated at the optimum found by
-            `dual_solver`. The dual value bounds the worst case from above
-            for any dual point, so an unconverged solve reports a
-            conservative number rather than a wrong direction.
+            `dual_solver`. By weak duality the dual value bounds the worst
+            case from above at any dual point, so an unconverged solve can
+            overestimate the worst case but never underestimates it.
 
             A float radius of zero is solved like any other rather than
             short-circuited to `sum(nominal * loss)`. The dual constrains
@@ -1641,10 +1651,10 @@ class DualAmbiguitySet(AmbiguitySet):
             with `loss`, `nominal`, and `radius`. It is built only when the
             re-evaluated objective requires grad or the call runs inside a
             `torch.func` transform. The cached warm start is reused only
-            when its shape
-            still matches the batch being solved. Both the initial point and
-            the cache are kept in raw-loss units and converted to and from
-            the standardized units the solver iterates in.
+            when its shape still matches the batch being solved. Both the
+            initial point and the cache are kept in raw-loss units and
+            converted to and from the standardized units the solver
+            iterates in.
 
         Raises:
             RuntimeError: If `dual_solver` is `None`.

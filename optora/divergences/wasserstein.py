@@ -37,7 +37,7 @@ class SinkhornDivergence(Divergence):
         + c(p, q),
     $$
 
-    where $c(p, q) = -\epsilon \sum_i p_i \log p_i - \epsilon \sum_j q_j
+    where $c(p, q) = \epsilon \sum_i p_i \log p_i + \epsilon \sum_j q_j
     \log q_j - \epsilon$ collects terms that cancel in the debiased
     divergence below and are therefore dropped. The potentials stay finite
     even where `p` or `q` has no mass, and zero-mass entries are excluded
@@ -51,17 +51,17 @@ class SinkhornDivergence(Divergence):
 
     The value is the dual objective at the final potentials, with $f$ the
     exact $c$-transform of $g$, rather than the transport cost
-    $\langle \mathrm{cost}, \pi \rangle$ of the final plan: every dual point
-    bounds $\mathrm{OT}_\epsilon$ from below and is off by an amount
-    second order in the marginal violation, where the plan, which does not
-    meet its marginals until the solve converges, would be off to first
-    order. The potentials are held fixed under autograd, so by the
-    envelope theorem the gradients, $f$ in `p` and $g$ in `q`, are exact
-    once the solve has converged.
+    $\langle \mathrm{cost}, \pi \rangle$ of the final plan. Every dual point
+    bounds $\mathrm{OT}_\epsilon$ from below, and its error is second order
+    in the marginal violation. The plan does not meet its marginals until
+    the solve converges, so its cost would be off to first order. The
+    potentials are held fixed under autograd, so by the envelope theorem
+    the gradients, $f$ in `p` and $g$ in `q`, are exact once the solve has
+    converged.
 
-    Plain entropic OT cost is biased: $\mathrm{OT}_\epsilon(p, p)$ is not
-    exactly zero for `eps > 0`. This class instead computes the debiased
-    Sinkhorn divergence
+    The plain entropic cost is biased, since $\mathrm{OT}_\epsilon(p, p)$
+    is not zero for $\epsilon > 0$. This class therefore computes the
+    debiased Sinkhorn divergence
 
     $$
     S_\epsilon(p, q) = \mathrm{OT}_\epsilon(p, q)
@@ -69,9 +69,10 @@ class SinkhornDivergence(Divergence):
         - \tfrac{1}{2}\mathrm{OT}_\epsilon(q, q),
     $$
 
-    which removes that self-transport bias so $S_\epsilon(p, p) = 0$ exactly,
-    as required by the `Divergence` contract, while still converging to the
-    Wasserstein distance induced by `cost` as $\epsilon \to 0$. The three
+    which removes the self-transport bias so that $S_\epsilon(p, p) = 0$
+    exactly, as the `Divergence` contract requires. As $\epsilon \to 0$ it
+    converges to the unregularized optimal transport cost under `cost`
+    (Feydy et al. 2019). The three
     transport costs the debiasing needs share one ground cost, so they are
     solved as a single batched Sinkhorn problem rather than three
     sequential loops. `optora.dro.wasserstein_dro` uses this divergence to
@@ -80,20 +81,20 @@ class SinkhornDivergence(Divergence):
     Attributes:
         cost: Square, nonnegative pairwise ground cost matrix between the
             shared support points of `p` and `q`, shape `(n, n)`.
-        epsilon: Positive entropic regularization strength; smaller values
-            approximate the exact Wasserstein distance more closely at the
-            cost of more Sinkhorn iterations to converge.
+        epsilon: Positive entropic regularization strength. Smaller values
+            approximate the unregularized transport cost more closely and
+            need more Sinkhorn iterations to converge.
         max_iter: Maximum number of Sinkhorn scaling iterations.
         tol: Convergence tolerance on the L1 marginal violation of the
             transport plan, taken over the whole batched problem so it stops
             when its slowest element does, and floored at $n$ times the
             machine epsilon of the working dtype.
-        eps: Deprecated and unused; `None` unless passed explicitly.
+        eps: Deprecated and unused. It is `None` unless passed explicitly.
         check_interval: Number of Sinkhorn iterations between host reads of
             the convergence flag. The potentials are frozen once converged,
             so the divergence does not depend on this interval.
         newton_max_iter: Maximum number of damped Newton iterations run
-            after Sinkhorn stops short of `tol`; zero disables the phase.
+            after Sinkhorn stops short of `tol`. Zero disables the phase.
     """
 
     cost: torch.Tensor
@@ -122,7 +123,7 @@ class SinkhornDivergence(Divergence):
                 which the violation is rounding error.
             eps: Deprecated and ignored. Zero-mass entries of `p` and `q`
                 are excluded from the solve exactly, so there is nothing
-                left to clamp; passing it emits a `DeprecationWarning`, and
+                left to clamp. Passing it emits a `DeprecationWarning`, and
                 it will be removed in a future minor release.
             check_interval: Number of Sinkhorn iterations between host
                 reads of the convergence flag. Raise it to trade redundant
@@ -135,7 +136,7 @@ class SinkhornDivergence(Divergence):
                 always run.
             newton_max_iter: Maximum number of damped Newton iterations run
                 after Sinkhorn stops short of `tol`. Each solves one
-                `(n, n)` linear system per transport problem; zero disables
+                `(n, n)` linear system per transport problem. Zero disables
                 the phase.
 
         Raises:
@@ -175,11 +176,11 @@ class SinkhornDivergence(Divergence):
         r"""Compute the debiased Sinkhorn divergence of `p` from `q`.
 
         The three entropic transport costs the debiasing needs are solved
-        as one batched Sinkhorn problem rather than three sequential ones:
-        the marginal pairs $(p, q)$, $(p, p)$ and $(q, q)$ stack along a
-        new leading dimension against the shared ground cost, so the three
-        problems share one loop, one convergence tracker, and one third of
-        the periodic host reads.
+        as one batched Sinkhorn problem rather than three sequential ones.
+        The marginal pairs $(p, q)$, $(p, p)$ and $(q, q)$ are stacked along
+        a new leading dimension against the shared ground cost, so the
+        three problems share one loop and one convergence tracker, and the
+        solve makes a third as many periodic host reads.
 
         Args:
             p: Candidate distribution, a nonnegative tensor of shape
@@ -244,8 +245,8 @@ class SinkhornDivergence(Divergence):
         under which the plan's rows meet `p` exactly and its total mass is
         one, so the dual objective reduces to $\epsilon (\langle \phi, p
         \rangle + \langle \psi, q \rangle)$. A column with $q_j = 0$ is
-        outside the solve; its potential, which only its gradient needs, is
-        the $c$-transform $\psi_j = -\log \sum_i p_i e^{\phi_i -
+        outside the solve. Its potential is needed only for the gradient
+        and is the $c$-transform $\psi_j = -\log \sum_i p_i e^{\phi_i -
         C_{ij}/\epsilon}$.
 
         Args:

@@ -19,7 +19,8 @@ class MaxDivergence(Divergence):
 
     the Renyi divergence of order $\infty$ (van Erven and Harremoes 2014),
     also called the max-divergence (Dwork and Roth 2014). It is infinite
-    when `p` puts mass where `q` has none. Its ball of radius
+    when `p` puts mass where `q` has none, and the clamp described below
+    replaces that infinity by a large finite value. Its ball of radius
     $\log(1/\alpha)$ is exactly the set of distributions with likelihood
     ratio at most $1/\alpha$, which `optora.dro.phi_dro.CVaRAmbiguitySet`
     uses to express conditional value-at-risk as an ambiguity set.

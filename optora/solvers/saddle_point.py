@@ -28,7 +28,7 @@ class SaddlePointProblem:
         objective: Differentiable scalar-valued function
             `objective(primal_point, dual_point)`, minimized over its first
             argument and maximized over its second. It must depend on both
-            arguments through autograd; outside a `torch.func` transform the
+            arguments through autograd. Outside a `torch.func` transform the
             solver rejects an objective whose value is disconnected from
             either iterate rather than treating it as stationary in that
             variable.
@@ -37,10 +37,9 @@ class SaddlePointProblem:
         dual_initial_point: Starting point for the dual (maximizing)
             variable.
         dual_projection: Callable applied to the dual iterate after every
-            ascent step to keep it inside its feasible set, for example
-            projection onto the probability simplex or onto a DRO
-            ambiguity set. Defaults to the identity (unconstrained ascent)
-            when `None`.
+            ascent step to keep it inside its feasible set, for example the
+            Euclidean projection onto the probability simplex. Defaults to
+            the identity (unconstrained ascent) when `None`.
     """
 
     objective: Callable[[torch.Tensor, torch.Tensor], torch.Tensor]
@@ -75,7 +74,7 @@ class SaddlePointSolver(Solver[SaddlePointProblem, SaddlePointResult]):
 
     Solves $\min_x \max_y \mathrm{objective}(x, y)$ by alternating, at every
     iteration, a gradient descent step on the primal variable $x$ and a
-    gradient ascent step on the dual variable $y$:
+    gradient ascent step on the dual variable $y$,
 
     $$
     x \leftarrow x - \mathrm{primal\_step\_size} \cdot \nabla_x \mathrm{objective}(x, y)
@@ -87,18 +86,18 @@ class SaddlePointSolver(Solver[SaddlePointProblem, SaddlePointResult]):
     \big)
     $$
 
-    `dual_projection` keeps `y` feasible after each ascent step. This is
-    the generic minimax solve `optora.dro.minimax_solver` uses to train a
-    decision variable against a DRO ambiguity set: `x` is the decision
-    variable, `y` ranges over distributions inside the ambiguity set, and
-    `dual_projection` enforces that constraint (for example simplex
-    projection or an `AmbiguitySet`-specific projection).
+    `dual_projection` keeps `y` feasible after each ascent step. For a DRO
+    problem, `x` is the decision variable, `y` ranges over candidate
+    distributions, and `dual_projection` maps `y` back onto the feasible
+    set, for example the probability simplex. `optora.dro.MinimaxSolver`
+    does not use this solver. It replaces the ascent over `y` by the
+    ambiguity set's own worst-case solve and minimizes the result over `x`.
 
     The gradient-norm test is evaluated on the iterates' device and read
-    back to the host only every `check_interval` iterations; iterations
+    back to the host only every `check_interval` iterations. Iterations
     taken after convergence are frozen, so the solution does not depend on
     that interval. Keep `check_interval=1` when the objective is expensive,
-    for example when each iteration costs an `optora.dro` inner dual solve.
+    for example when each iteration costs an inner solve.
     See `optora.core.convergence.ConvergenceTracker`. The returned
     diagnostics stay on the device as well (see
     `optora.core.convergence.ConvergenceStatus`), so a solve nobody

@@ -40,58 +40,60 @@ class EntropicTransportDivergence(Divergence):
 
     the second form being the concave semi-dual over column potentials
     $g$. It is nonnegative and vanishes exactly at its centre $P^0$, not at
-    `p == q`: entropic smoothing moves the centre of the ball off the
-    reference. `optora.dro.SinkhornAmbiguitySet` bounds this quantity by
-    its radius.
+    `p == q`, because entropic smoothing moves the centre of the ball off
+    the reference. `optora.dro.SinkhornAmbiguitySet` bounds this quantity
+    by its radius.
 
-    The semi-dual is maximized in two phases, both stopping once the L1
-    column-marginal violation (the norm of the semi-dual's gradient) falls
-    below `tol`:
+    The semi-dual is maximized in two phases. Both stop once the L1
+    column-marginal violation, which is the norm of the semi-dual's
+    gradient, falls below `tol`.
 
     1. Sinkhorn scaling in the log domain, $O(n^2)$ per iteration. It
        converges linearly at a rate that degrades as $\max C/\epsilon$
        grows, and at a sharp kernel it stalls far from the maximum.
-    2. If Sinkhorn stops short, a Levenberg-Marquardt-damped Newton method
+    2. If Sinkhorn stops short, a Levenberg-Marquardt damped Newton method
        on the semi-dual with its exact Hessian (Brauer et al. 2017),
        $O(n^3)$ per iteration, warm-started from the Sinkhorn potentials.
-       A step is kept only if it increases the semi-dual, so no step can
-       move away from the maximum, and the damping falls on success so
-       the method turns into a pure Newton method near the maximum, where
-       it converges quadratically however sharp the kernel is.
+       A step is kept unless it lowers the semi-dual by more than the
+       rounding error of its evaluation. The damping falls after every
+       accepted step, so the method becomes a pure Newton method near the
+       maximum, where it converges quadratically however sharp the kernel
+       is.
 
     The value returned is $\epsilon$ times the semi-dual at the final
     potentials. Every dual point bounds the divergence from below, so an
-    inexact solve can only understate it, and near the maximum the
-    understatement is second order in the marginal violation, where the
-    transport plan's primal objective would be off to first order. The
-    potentials are held fixed under autograd, so by the envelope theorem
-    the gradient is exact once the solve has converged.
+    inexact solve can only understate it. Near the maximum the
+    understatement is second order in the marginal violation, whereas the
+    primal objective of the transport plan would be off to first order.
+    The potentials are held fixed under autograd, so by the envelope
+    theorem the gradient is exact once the solve has converged.
 
     Zero-mass entries of either marginal are excluded from the solve
-    exactly, never clamped: a row with $q_i = 0$ transports nothing, and a
-    column with $p_j = 0$ takes the potential $-\infty$, the semi-dual's
-    maximizer in that coordinate, which removes it from every row's
-    normalizer. The value is then that of the problem restricted to the two
-    supports, with no accuracy floor. The derivative with respect to the
-    mass of an empty column is $-\infty$, the slope of $t \log t$ at zero,
-    and is not representable; autograd reports zero for it.
+    exactly rather than clamped. A row with $q_i = 0$ transports nothing,
+    and a column with $p_j = 0$ takes the potential $-\infty$, the
+    semi-dual's maximizer in that coordinate, which removes it from every
+    row's normalizer. The value is then that of the problem restricted to
+    the two supports, with no accuracy floor. The derivative with respect
+    to the mass of an empty column is $-\infty$, the slope of $t \log t$
+    at zero. It is not representable, and autograd reports zero for it.
 
     Attributes:
         cost: Square ground cost matrix of shape `(n, n)`.
-        reference: Nonnegative reference measure $\nu$ of shape `(n,)`. Only
-            its normalization-free shape matters: $Q$ normalizes each row.
+        reference: Nonnegative reference measure $\nu$ of shape `(n,)`. It
+            matters only up to a positive scalar factor, because $Q$
+            normalizes each row.
         epsilon: Positive entropic regularization strength.
         max_iter: Maximum number of Sinkhorn scaling iterations.
         newton_max_iter: Maximum number of damped Newton iterations run
-            after Sinkhorn stops short of `tol`; zero disables the phase.
+            after Sinkhorn stops short of `tol`. Zero disables the phase.
         tol: Convergence tolerance on the L1 column-marginal violation,
             floored at $n$ times the machine epsilon of the working dtype,
             the rounding floor of the violation itself.
-        eps: Deprecated and unused; `None` unless passed explicitly.
+        eps: Deprecated and unused. It is `None` unless passed explicitly.
         check_interval: Sinkhorn iterations between host reads of the
-            convergence flag; the potentials freeze once converged. The
-            Newton phase, whose iterations are expensive, reads it after
-            every iteration.
+            convergence flag. The potentials freeze once converged. The
+            Newton phase, whose iterations are expensive, reads the flag
+            after every iteration.
     """
 
     cost: torch.Tensor
@@ -119,7 +121,7 @@ class EntropicTransportDivergence(Divergence):
             max_iter: Maximum number of Sinkhorn scaling iterations.
             newton_max_iter: Maximum number of damped Newton iterations
                 run after Sinkhorn stops short of `tol`. Each solves one
-                `(n, n)` linear system per batch element; zero disables
+                `(n, n)` linear system per batch element. Zero disables
                 the phase.
             tol: Convergence tolerance on the L1 column-marginal violation,
                 over the whole batched problem. It is floored at `n` times
@@ -127,7 +129,7 @@ class EntropicTransportDivergence(Divergence):
                 violation is rounding error.
             eps: Deprecated and ignored. Zero-mass marginal entries are
                 excluded from the solve exactly, so there is nothing left to
-                clamp; passing it emits a `DeprecationWarning`, and it will
+                clamp. Passing it emits a `DeprecationWarning`, and it will
                 be removed in a future minor release.
             check_interval: Sinkhorn iterations between host reads of the
                 convergence flag.
@@ -186,10 +188,10 @@ class EntropicTransportDivergence(Divergence):
     def log_kernel(self, dtype: torch.dtype) -> torch.Tensor:
         r"""Return the row-stochastic Gibbs kernel $\log Q$ in `dtype`.
 
-        $\log Q_{ij} = \log \nu_j - C_{ij}/\epsilon - \log \sum_k \nu_k
-        e^{-C_{ik}/\epsilon}$, normalized by `logsumexp` so that a large
-        cost over a small $\epsilon$ never underflows a whole row. Columns
-        with $\nu_j = 0$ are exactly `-inf`.
+        The kernel is $\log Q_{ij} = \log \nu_j - C_{ij}/\epsilon - \log
+        \sum_k \nu_k e^{-C_{ik}/\epsilon}$, normalized by `logsumexp` so
+        that a large cost over a small $\epsilon$ never underflows a whole
+        row. Columns with $\nu_j = 0$ are exactly `-inf`.
 
         Args:
             dtype: Floating-point dtype to compute in.

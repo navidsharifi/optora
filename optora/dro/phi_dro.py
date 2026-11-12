@@ -36,7 +36,7 @@ def kl_conjugate(scaled_shift: torch.Tensor) -> torch.Tensor:
     spike, and the resulting `inf` turns every gradient into `nan`. This
     returns instead the conjugate of the generator restricted to likelihood
     ratios $t \le T = e^c$, with $c$ a quarter of the dtype's logarithmic
-    range (about 22.2 in float32, 177.4 in float64):
+    range (about 22.2 in float32, 177.4 in float64),
 
     $$
     \sup_{0 \le t \le T} \big(s\,t - \phi(t)\big) =
@@ -50,7 +50,7 @@ def kl_conjugate(scaled_shift: torch.Tensor) -> torch.Tensor:
     and continuously differentiable, and its slope never exceeds $T$, so
     the dual objective, its gradients, and their squares (as accumulated by
     Adam and RMSprop) stay finite for any loss spike up to about $T$ times
-    $\eta$; at half the range the squared gradient of $\log \eta$ would
+    $\eta$. At half the range the squared gradient of $\log \eta$ would
     already overflow float32. The dual it defines is the exact dual of the
     KL ball intersected with the likelihood-ratio bound
     $q / \mathrm{nominal} \le T$, so it equals the KL dual whenever the
@@ -58,8 +58,7 @@ def kl_conjugate(scaled_shift: torch.Tensor) -> torch.Tensor:
     10^9$ in float32). Since a ratio $r$ on an event of nominal probability
     $p$ puts mass $r p \le 1$ on it, the bound can only bind where the
     worst case loads events of nominal probability below $1 / T$. Pass it
-    as
-    `phi_conjugate` to `PhiAmbiguitySet` or
+    as `phi_conjugate` to `PhiAmbiguitySet` or
     `optora.dro.minibatch.StochasticPhiDual` for the KL ball.
 
     Args:
@@ -81,8 +80,8 @@ def chi_square_conjugate(scaled_shift: torch.Tensor) -> torch.Tensor:
 
     $\phi^*(s) = \sup_{t \ge 0} \big(s\,t - \phi(t)\big)$. The unconstrained
     maximizer $t = s/2 + 1$ is nonnegative whenever $s \ge -2$, giving the
-    interior branch $s + s^2/4$; otherwise the constrained maximizer sits at
-    the boundary $t = 0$, giving the constant $-1$. The two branches agree
+    interior branch $s + s^2/4$. Otherwise the constrained maximizer sits
+    at the boundary $t = 0$, giving the constant $-1$. The two branches agree
     at $s = -2$, and both have zero derivative there, so $\phi^*$ is
     continuously differentiable everywhere on the real line. Pass it as
     `phi_conjugate` to `PhiAmbiguitySet` or
@@ -124,7 +123,7 @@ def cvar_conjugate(
     alpha=0.1)`, and pass it with `radius=0.0` to
     `optora.dro.minibatch.StochasticPhiDual` for minibatch CVaR training,
     or to `PhiAmbiguitySet` with a `dual_solver`, which solves the dual at
-    a zero radius rather than returning the nominal expectation: the
+    a zero radius rather than returning the nominal expectation. The
     indicator vanishes on the whole interval $[0, 1/\alpha]$, so its ball
     of radius zero is the full CVaR set.
 
@@ -178,21 +177,22 @@ class _PhiTilt(TiltedAmbiguitySet):
     shortfall, for a rate $a = 1/\eta \ge 0$ and a level $\mu$ that makes
     $q$ sum to one. Along the rate its divergence
     $\mathbb{E}_p[\phi(q / p)]$ grows from zero at $a = 0$ to the divergence
-    of the distribution concentrated on the highest-loss scenarios, which is
-    the derivative condition of the convex dual written with Fenchel's
+    of the distribution concentrated on the highest-loss scenarios.
+    Setting this divergence equal to the radius is the stationarity
+    condition of the convex dual in $\eta$, written with Fenchel's
     equality, so `TiltedAmbiguitySet` bisects the rate exactly as it does
     for KL and chi-square.
 
     The level has no closed form for a general generator. For each rate it
     solves $\mathbb{E}_p[(\phi^*)'(\mu - a\,\mathrm{gap})] = 1$, which is
-    nondecreasing in $\mu$. The root lies in $[\phi'(1), \bar\mu]$: at
+    nondecreasing in $\mu$. The root lies in $[\phi'(1), \bar\mu]$. At
     $\mu = \phi'(1)$ no ratio exceeds one, and $\bar\mu$ is the smaller of
     $\phi'(1/P)$, at which the highest-loss scenarios, of nominal mass $P$,
     carry the whole mass alone, and $\phi'(1) + a$, at which no ratio falls
     below one. It is searched as $v = \log(1 + \mu - \phi'(1))$, which
     resolves the level to relative precision whatever the bracket's width,
     with the batched multi-point search of the tilt itself. Derivatives of
-    $\phi$ and $\phi^*$ come from autograd. The search runs detached; where
+    $\phi$ and $\phi^*$ come from autograd. The search runs detached. Where
     derivatives are recorded, one Newton step on the normalization from the
     solved level attaches the level's exact derivative (implicit function
     theorem), which is what the base class's implicit solution needs.
@@ -370,8 +370,8 @@ class PhiAmbiguitySet(DualAmbiguitySet):
     $D_\phi(q \,\|\, \mathrm{nominal}) \le \mathrm{radius}$ for a general
     convex generator $\phi$ (see
     `optora.divergences.f_divergence.PhiDivergence`). The worst-case expected
-    loss over this set admits a convex dual (Ben-Tal et al. 2013; Duchi,
-    Glynn, and Namkoong 2021; Duchi and Namkoong 2021):
+    loss over this set admits the convex dual (Ben-Tal et al. 2013; Duchi,
+    Glynn, and Namkoong 2021; Duchi and Namkoong 2021)
 
     $$
     \sup_{q:\, D_\phi(q \,\|\, \mathrm{nominal}) \,\le\, \mathrm{radius}}
@@ -386,9 +386,9 @@ class PhiAmbiguitySet(DualAmbiguitySet):
     where $\phi^*$ is the convex (Legendre-Fenchel) conjugate of $\phi$
     restricted to its effective domain $t \ge 0$. This generalizes the
     `KLAmbiguitySet` dual to an arbitrary phi-divergence at the cost of a
-    second dual variable $\lambda$; setting $\phi(t) = t \log t - t + 1$
-    (whose conjugate is $\phi^*(s) = \exp(s) - 1$) recovers the KL-DRO dual
-    exactly.
+    second dual variable $\lambda$. Setting $\phi(t) = t \log t - t + 1$,
+    whose conjugate is $\phi^*(s) = \exp(s) - 1$, and minimizing over
+    $\lambda$ in closed form recovers the KL-DRO dual exactly.
 
     Without a `dual_solver`, the default, the worst case is solved exactly
     for any generator, as a bracketed tilt. By the KKT conditions the
@@ -403,25 +403,25 @@ class PhiAmbiguitySet(DualAmbiguitySet):
     second derivatives in `loss`, `nominal`, and `radius`. It needs only
     `divergence.phi` and `phi_conjugate`, differentiated with `torch.func`,
     so both must be differentiable functions of tensors. The nested
-    bisection makes it slower than the dedicated sets: prefer
+    bisection makes it slower than the dedicated sets, so prefer
     `KLAmbiguitySet`, `ChiSquareAmbiguitySet`, or `CVaRAmbiguitySet` for
     their generators.
 
     With a `dual_solver`, the convex dual above is minimized over
     $(\log(\eta), \lambda)$ by that solver instead, from a warm start (see
-    `optora.core.dro_base.DualAmbiguitySet`); its accuracy is then the
+    `optora.core.dro_base.DualAmbiguitySet`). Its accuracy is then the
     solver's, and a fixed-step `GradientDescent` is sensitive to its step
     size, to the support size, and to a radius near zero or saturation.
 
-    `phi_conjugate` must be finite everywhere on the real line (true for,
-    for example, `chi_square_conjugate` and `kl_conjugate`). A generator
+    `phi_conjugate` must be finite everywhere on the real line, as
+    `chi_square_conjugate` and `kl_conjugate` are. A generator
     whose conjugate has a hard finite feasibility boundary, such as total
     variation, is solved by its dedicated closed form,
     `TotalVariationAmbiguitySet`.
 
     The two paths treat a float radius of zero differently. The exact tilt
     returns `sum(nominal * loss)` without solving, which is right for any
-    generator it accepts: a differentiable conjugate means a strictly
+    generator it accepts. A differentiable conjugate means a strictly
     convex generator, whose divergence vanishes at the nominal alone. The
     dual path solves at every radius, a float zero included, because its
     weaker requirement admits a generator that vanishes on an interval,
@@ -441,7 +441,7 @@ class PhiAmbiguitySet(DualAmbiguitySet):
             `(log(eta), lam)`, or `None` for the exact bracketed tilt.
         initial_dual_point: Values of `(log(eta), lam)` the first dual solve
             starts from, in the units of the raw loss (`eta` and `lam` have
-            the units of `loss`); later solves warm-start from the previous
+            the units of `loss`). Later solves warm-start from the previous
             optimum (see `optora.core.dro_base.DualAmbiguitySet`).
     """
 
@@ -482,7 +482,7 @@ class PhiAmbiguitySet(DualAmbiguitySet):
                 optimum unless `reset_warm_start()` is called.
             initial_lam: Value of `lam` the first dual solve starts from, in
                 the units of the raw loss, warm-started on later calls
-                alongside `initial_log_eta`. Give both or neither: when
+                alongside `initial_log_eta`. Give both or neither. When
                 both are `None`, the default, the solve starts at `eta`
                 equal to the loss spread and `lam` equal to the minimum
                 loss, which is the same point whatever the scale or offset
@@ -605,7 +605,7 @@ class ChiSquareAmbiguitySet(TiltedAmbiguitySet):
     the phi-divergence generated by $\phi(t) = (t-1)^2$. Unlike
     `PhiAmbiguitySet`, `worst_case_expectation` is not computed by
     minimizing the general convex dual over $(\eta, \lambda)$, because the
-    chi-square maximizer is known in closed form up to a single scalar: the
+    chi-square maximizer is known in closed form up to a single scalar. The
     KKT conditions give
 
     $$
@@ -622,8 +622,8 @@ class ChiSquareAmbiguitySet(TiltedAmbiguitySet):
     bracketed bisection that runs it.
 
     In the interior regime where no scenario is truncated to $q_i = 0$, the
-    cut level drops below $\min \mathrm{loss}$ and the value collapses to
-    the well-known closed form (Duchi and Namkoong 2021):
+    cut level drops below $\min \mathrm{loss}$ and the value reduces to the
+    variance-penalty form (Duchi and Namkoong 2021)
 
     $$
     \sup_{q:\, D_{\chi^2}(q \,\|\, \mathrm{nominal}) \,\le\, \mathrm{radius}}
@@ -694,16 +694,15 @@ class ChiSquareAmbiguitySet(TiltedAmbiguitySet):
         saturated end of the path is reached without dividing by a
         vanishing depth.
 
-        Writing $Z = \mathbb{E}_{\mathrm{nominal}}[w]$, the divergence is
-        $\mathbb{E}_{\mathrm{nominal}}[(w - Z)^2] / Z^2$: substituting
+        Writing $Z = \mathbb{E}_{\mathrm{nominal}}[w]$ and substituting
         $q = \mathrm{nominal}\, w / Z$ into $\sum_i (q_i -
-        \mathrm{nominal}_i)^2 / \mathrm{nominal}_i$ and expanding about
-        $Z$ cancels the cross term, because $w$ has nominal mean $Z$ by
-        construction. Differencing the weights before squaring rather than
-        after is what keeps a vanishing radius accurate: both
-        $\mathbb{E}_{\mathrm{nominal}}[w^2]$ and $Z^2$ approach one as the
-        rate vanishes, and their difference would lose every significant
-        digit of an $O(a^2)$ answer.
+        \mathrm{nominal}_i)^2 / \mathrm{nominal}_i$ gives the divergence
+        $\mathbb{E}_{\mathrm{nominal}}[(w - Z)^2] / Z^2$. Differencing the
+        weights before squaring keeps a vanishing radius accurate. The
+        equal form $\mathbb{E}_{\mathrm{nominal}}[w^2] / Z^2 - 1$ subtracts
+        two numbers that both approach one as the rate vanishes, and the
+        difference would lose every significant digit of an $O(a^2)$
+        answer.
 
         Args:
             gap: Standardized shortfall below the maximum loss, of shape
@@ -783,27 +782,26 @@ class TotalVariationAmbiguitySet(AmbiguitySet):
         = \frac{1}{2} \sum_i |q_i - \mathrm{nominal}_i| \le \mathrm{radius}.
     $$
 
-    Unlike
-    `PhiAmbiguitySet`, `worst_case_expectation` is computed from a direct
-    closed form rather than the general convex dual, because total
-    variation's conjugate has a hard finite feasibility boundary that is
-    not well suited to unconstrained gradient-based dual optimization (see
-    `PhiAmbiguitySet`).
+    Unlike `PhiAmbiguitySet`, `worst_case_expectation` is computed from a
+    direct closed form rather than from a convex dual. The conjugate of the
+    total-variation generator is $+\infty$ for $s > 1/2$, and
+    `PhiAmbiguitySet` needs a conjugate that is finite on the whole real
+    line.
 
-    The worst-case expectation is instead the value of a linear program over
-    the simplex intersected with the total-variation ball, whose optimal
-    solution has a simple combinatorial structure (Ben-Tal et al. 2013):
-    starting from `nominal`, reallocate mass, in ascending order of loss,
-    from the lowest-loss scenarios to the single highest-loss scenario,
-    until the reallocated mass reaches `radius` (or every scenario but the
-    highest-loss one has been fully drained, whichever happens first). This
-    is implemented as a sort followed by a cumulative-sum sweep rather than
-    an iterative solve, so it is both exact and free of solver tuning.
+    The worst-case expectation is the value of a linear program over the
+    simplex intersected with the total-variation ball, and its optimal
+    solution has a simple combinatorial structure (Ben-Tal et al. 2013).
+    Starting from `nominal`, mass moves from the lowest-loss scenarios, in
+    ascending order of loss, to the single highest-loss scenario until the
+    moved mass reaches `radius` or every scenario but the highest-loss one
+    is fully drained, whichever happens first. This is implemented as a
+    sort followed by a cumulative-sum sweep rather than an iterative solve,
+    so it is exact and needs no solver tuning.
 
     At tied losses the linear program has many maximizers. The sort is
     stable, so ties are broken by support index as if a later index had a
-    marginally larger loss: tied low-loss scenarios are drained in index
-    order, and the reallocated mass goes to the last of the tied maxima.
+    marginally larger loss. Tied low-loss scenarios are drained in index
+    order, and the moved mass goes to the last of the tied maxima.
     The maximizer, and with it the gradient with respect to `loss`, is
     then the same on every device.
 
@@ -859,16 +857,16 @@ class TotalVariationAmbiguitySet(AmbiguitySet):
         Args:
             loss: Per-scenario loss values of shape `(..., n)`, one trailing
                 entry per element of `nominal`'s support. Leading dimensions
-                are a batch of independent loss vectors; the closed form is
+                are a batch of independent loss vectors. The closed form is
                 evaluated over the whole batch at once, with no solver and
                 no Python-level loop over batch elements.
 
         Returns:
-            A tensor of shape `(...)` holding the worst-case expected loss:
-            the exact `sum(nominal * loss)` when `radius` is zero (the
-            ambiguity set then contains only `nominal`), otherwise the
-            closed-form value of the mass-reallocation linear program
-            described in the class docstring.
+            A tensor of shape `(...)` holding the worst-case expected loss.
+            It is the exact `sum(nominal * loss)` when `radius` is zero,
+            since the ambiguity set then contains only `nominal`, and
+            otherwise the closed-form value of the mass-reallocation linear
+            program described in the class docstring.
 
         Raises:
             ValueError: If `loss`'s trailing dimension does not match
@@ -996,7 +994,7 @@ class CVaRAmbiguitySet(AmbiguitySet):
     The conditional value-at-risk of a loss at tail probability
     $\alpha \in (0, 1]$, the mean of its upper $\alpha$-tail, is the worst
     case over every distribution whose likelihood ratio to the nominal is
-    at most $1/\alpha$ (Artzner et al. 1999; Rockafellar and Uryasev 2002):
+    at most $1/\alpha$ (Artzner et al. 1999; Rockafellar and Uryasev 2002),
 
     $$
     \mathrm{CVaR}_\alpha(\mathrm{loss})
@@ -1010,16 +1008,17 @@ class CVaRAmbiguitySet(AmbiguitySet):
     case. It is also exactly the ball of radius $\log(1/\alpha)$ in the
     max-divergence $D_\infty(q \,\|\, \mathrm{nominal}) = \log \max_i
     q_i / \mathrm{nominal}_i$ (`optora.divergences.MaxDivergence`), and
-    that is the representation used here: `divergence` and `contains` stay
-    finite and meaningful, and `radius` $= \log(1/\alpha)$ indexes the set
-    like every other ambiguity set. $\alpha = 1$ gives the nominal
-    expectation and $\alpha \to 0$ the maximum loss on the nominal's
-    support.
+    that is the representation used here. With it `divergence` and
+    `contains` stay finite and meaningful, and `radius` $= \log(1/\alpha)$
+    indexes the set like every other ambiguity set. $\alpha = 1$ gives the
+    nominal expectation and $\alpha \to 0$ the maximum loss on the
+    nominal's support.
 
-    The maximizer fills the tail greedily: in descending order of loss,
+    The maximizer fills the tail greedily. In descending order of loss,
     each scenario receives its full nominal mass until the cumulative mass
     reaches $\alpha$, the scenario at the boundary receives the remainder,
-    and the result is divided by $\alpha$. It is computed as a sort
+    and the result is normalized by the filled mass, which equals $\alpha$
+    up to rounding. It is computed as a sort
     followed by a cumulative-sum sweep, as for
     `TotalVariationAmbiguitySet`, so it is exact, solver-free, and
     synchronization-free. The sort is stable, so tied losses are filled in
@@ -1054,7 +1053,7 @@ class CVaRAmbiguitySet(AmbiguitySet):
             alpha: Tail probability in `[0, 1]`. A tensor level is
                 registered as a buffer and broadcast against the batch
                 shape of `worst_case_expectation`'s `loss`, which turns a
-                sweep of levels into one vectorized evaluation; its entries
+                sweep of levels into one vectorized evaluation. Its entries
                 are checked only when `validate` is set. Zero is the limit
                 in which the worst case is the maximum loss on the
                 nominal's support.
@@ -1096,7 +1095,7 @@ class CVaRAmbiguitySet(AmbiguitySet):
         """Return `alpha` floored at the smallest normal number of `dtype`.
 
         The floor makes `alpha = 0` the limit of the greedy fill rather than
-        a division of zero by zero: the highest-loss scenario with positive
+        a division of zero by zero. The highest-loss scenario with positive
         nominal mass then receives the whole, tiny, tail mass, and the
         normalized maximizer is a point mass on it.
 
@@ -1119,15 +1118,15 @@ class CVaRAmbiguitySet(AmbiguitySet):
         Args:
             loss: Per-scenario loss values of shape `(..., n)`, one trailing
                 entry per element of `nominal`'s support. Leading dimensions
-                are a batch of independent loss vectors; the closed form is
+                are a batch of independent loss vectors. The closed form is
                 evaluated over the whole batch at once, with no solver and
                 no Python-level loop over batch elements.
 
         Returns:
             A tensor of shape `(...)` holding the upper `alpha`-tail mean of
-            `loss`: the exact `sum(nominal * loss)` when `alpha` is the
-            float one, otherwise the greedy tail fill described in the
-            class docstring. Its gradient with respect to `loss` is the
+            `loss`. It is the exact `sum(nominal * loss)` when `alpha` is
+            the float one, and otherwise the greedy tail fill described in
+            the class docstring. Its gradient with respect to `loss` is the
             maximizer, by Danskin's theorem.
 
         Raises:
@@ -1193,8 +1192,8 @@ class CVaRAmbiguitySet(AmbiguitySet):
         $\mathrm{nominal}_i$ is $c^\star + (\ell_i - c^\star)_+ / \alpha$,
         shifted along the all-ones direction, where it is not defined, so
         that $\sum_i \mathrm{nominal}_i \, \partial V / \partial
-        \mathrm{nominal}_i = V$, and the derivative with respect to
-        $\alpha$ is $-\mathbb{E}_{q^\star}[\ell - c^\star] / \alpha$. Both
+        \mathrm{nominal}_i = V$. The derivative with respect to $\alpha$
+        is $-\mathbb{E}_{q^\star}[\ell - c^\star] / \alpha$. Both
         divide by the filled mass rather than by $\alpha$, as the value
         does, and the value-at-risk term vanishes exactly on a point-mass
         tail, so a floored $\alpha = 0$ gives zero rather than an overflow.

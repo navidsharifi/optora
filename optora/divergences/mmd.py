@@ -42,8 +42,9 @@ class MMDDivergence(Divergence):
             gram: Symmetric positive semidefinite Gram matrix of shape
                 `(n, n)` of the kernel on the support points.
             validate: Whether to check that `gram` is finite, symmetric, and
-                positive semidefinite up to rounding. The check reads an
-                eigenvalue decomposition on the host, so it is opt-in.
+                positive semidefinite up to rounding. The check computes the
+                eigenvalues of `gram` and reads them on the host, so it is
+                opt-in.
 
         Raises:
             ValueError: If `gram` is not a square 2D tensor, or `validate` is

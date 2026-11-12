@@ -25,7 +25,7 @@ class Solver(ABC, Generic[ProblemT, ResultT]):
     every algorithm through one fixed set of arguments.
 
     Problem and result types are keyed to the *mathematical problem class*,
-    not to the algorithm: every solver of unconstrained differentiable
+    not to the algorithm. Every solver of unconstrained differentiable
     minimization consumes `MinimizationProblem` and returns
     `MinimizationResult`, so callers such as `optora.dro` ambiguity sets can
     depend on `Solver[MinimizationProblem, MinimizationResult]` and accept
@@ -51,8 +51,8 @@ class MinimizationProblem:
 
     Attributes:
         objective: Differentiable scalar-valued function of a single tensor
-            argument. It must depend on that argument through autograd;
-            solvers reject an objective whose value is disconnected from
+            argument. It must depend on that argument through autograd.
+            Solvers reject an objective whose value is disconnected from
             the point rather than treating it as stationary.
         initial_point: Starting point for the iteration. Passing a previous
             solve's `MinimizationResult.point` here warm-starts the solver
