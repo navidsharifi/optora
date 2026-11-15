@@ -5,7 +5,7 @@ from typing import cast
 
 import torch
 
-from optora.core.dro_base import AmbiguitySet
+from optora.core.dro_base import AmbiguitySet, _broadcast_batch_shapes
 from optora.divergences._entropic import warn_deprecated_eps
 from optora.divergences.wasserstein import SinkhornDivergence
 
@@ -180,7 +180,8 @@ class WassersteinAmbiguitySet(AmbiguitySet):
             float or a tensor of radii evaluated as one batch.
         cost: Square, nonnegative pairwise ground cost matrix between the
             shared support points of `nominal` and any candidate
-            distribution. Aliases `divergence.cost` and is not a separate
+            distribution, or a batch of such matrices, one per batch
+            element. Aliases `divergence.cost` and is not a separate
             buffer.
     """
 
@@ -203,7 +204,12 @@ class WassersteinAmbiguitySet(AmbiguitySet):
                 dimension.
             cost: Square, nonnegative pairwise ground cost matrix between
                 the shared support points of `nominal` and any candidate
-                distribution, shape `(n, n)` where `n = nominal.shape[-1]`.
+                distribution, of shape `(n, n)` where `n =
+                nominal.shape[-1]`. A batch of matrices of shape `(..., n,
+                n)` gives each batch element its own support, for example
+                one sample per replication of an experiment, and is
+                broadcast against the batch shapes of `nominal`, `radius`
+                and `worst_case_expectation`'s `loss`.
             radius: Nonnegative bound on the Wasserstein distance of any
                 distribution inside the ambiguity set from `nominal`. A
                 tensor radius is broadcast against the batch shape of
@@ -226,8 +232,10 @@ class WassersteinAmbiguitySet(AmbiguitySet):
 
         Raises:
             ValueError: If `radius` is a negative float, if `cost` is not a
-                square 2D tensor, if `cost`'s size does not match
-                `nominal`'s support size, or if `validate` is set and
+                square matrix or a batch of square matrices, if `cost`'s size
+                does not match `nominal`'s support size, if the batch shapes
+                of `cost` and `nominal` do not broadcast, or if `validate` is
+                set and
                 `cost` contains negative entries or `nominal` is not a
                 valid probability distribution.
         """
@@ -235,9 +243,11 @@ class WassersteinAmbiguitySet(AmbiguitySet):
         # AmbiguitySet reject it with its own message.
         if nominal.ndim > 0 and cost.shape[-1] != nominal.shape[-1]:
             raise ValueError(
-                "cost must have shape (n, n) matching nominal's support "
+                "cost must have shape (..., n, n) matching nominal's support "
                 f"size {nominal.shape[-1]}, got cost shape {tuple(cost.shape)}."
             )
+        if nominal.ndim > 0 and cost.ndim >= 2:
+            _broadcast_batch_shapes(nominal=nominal.shape[:-1], cost=cost.shape[:-2])
         if eps is not None:
             warn_deprecated_eps(stacklevel=2)
         super().__init__(
@@ -259,6 +269,24 @@ class WassersteinAmbiguitySet(AmbiguitySet):
         # `divergence` is declared as the base `Divergence` type, but this
         # class always constructs it as a `SinkhornDivergence` above.
         return cast(SinkhornDivergence, self.divergence).cost
+
+    def _batch_shape(self, loss: torch.Tensor) -> torch.Size:
+        """Validate a loss tensor and return the batch shape it induces.
+
+        Args:
+            loss: Per-scenario loss values of shape `(..., n)`.
+
+        Returns:
+            The batch shape of `AmbiguitySet._batch_shape`, further
+            broadcast against the batch shape of a batched `cost`.
+
+        Raises:
+            ValueError: If `loss` does not match `nominal` and `radius`, or
+                if its batch shape does not broadcast against `cost`'s.
+        """
+        return _broadcast_batch_shapes(
+            batch=super()._batch_shape(loss), cost=self.cost.shape[:-2]
+        )
 
     def _maximizing_columns(
         self, loss: torch.Tensor, gamma: torch.Tensor, prefer_costly: bool = False
@@ -472,8 +500,8 @@ class WassersteinAmbiguitySet(AmbiguitySet):
         Raises:
             ValueError: If `loss`'s trailing dimension does not match
                 `nominal`'s support size, its batch shape does not
-                broadcast against `nominal` and `radius`, or `validate` is
-                set and `loss` is not finite.
+                broadcast against `nominal`, `radius` and `cost`, or
+                `validate` is set and `loss` is not finite.
         """
         batch_shape, working = self._prepare_loss(loss)
         detached = working.detach()

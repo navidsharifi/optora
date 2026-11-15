@@ -27,6 +27,7 @@ from optora.dro.phi_dro import (
     chi_square_conjugate,
 )
 from optora.dro.sinkhorn_dro import SinkhornAmbiguitySet
+from optora.dro.wasserstein_dro import WassersteinAmbiguitySet
 from optora.solvers.gradient_descent import GradientDescent
 from tests.dro.specs import SetSpec, spec_parameters
 
@@ -132,6 +133,34 @@ def test_kl_batched_tilt_search(
     radius = torch.logspace(-6, 0, batch, dtype=dtype, device=device)
     ambiguity_set = KLAmbiguitySet((weights / weights.sum()).to(device), radius)
     loss = torch.randn(batch, support, generator=generator, dtype=dtype)
+    loss = loss.to(device).requires_grad_()
+
+    def gradient() -> torch.Tensor:
+        value = ambiguity_set.worst_case_expectation(loss).sum()
+        (grad,) = torch.autograd.grad(value, loss)
+        return grad
+
+    grad = guarded_benchmark(gradient, host_syncs=0)
+
+    assert grad.shape == loss.shape
+
+
+@pytest.mark.parametrize("device", DEVICES)
+def test_wasserstein_batched_cost_workload(
+    device: str, guarded_benchmark: Callable[..., Any]
+) -> None:
+    # The Mohajerin Esfahani and Kuhn (2018) reproduction draws its own sample
+    # in every one of 200 simulations, so each needs its own ground cost. One
+    # batched cost replaces a Python loop of one set per simulation.
+    batch, support, dimension = 64, 128, 10
+    generator = torch.Generator().manual_seed(0)
+    points = torch.randn(batch, support, dimension, generator=generator)
+    points = points.to(torch.float64)
+    cost = torch.cdist(points, points, p=1).to(device)
+    nominal = torch.full((support,), 1.0 / support, dtype=torch.float64, device=device)
+    radius = torch.logspace(-3, 0, batch, dtype=torch.float64, device=device)
+    ambiguity_set = WassersteinAmbiguitySet(nominal, cost, radius)
+    loss = torch.randn(batch, support, generator=generator, dtype=torch.float64)
     loss = loss.to(device).requires_grad_()
 
     def gradient() -> torch.Tensor:
