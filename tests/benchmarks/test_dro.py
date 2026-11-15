@@ -34,6 +34,17 @@ BATCH = 16
 SUPPORT = 256
 RADIUS = 0.1
 
+# The CUDA legs time the device the workload was reported on; CI has none.
+DEVICES = [
+    "cpu",
+    pytest.param(
+        "cuda",
+        marks=pytest.mark.skipif(
+            not torch.cuda.is_available(), reason="no CUDA device is available"
+        ),
+    ),
+]
+
 
 def _nominal(generator: torch.Generator) -> torch.Tensor:
     weights = torch.rand(SUPPORT, generator=generator) + 0.5
@@ -82,18 +93,7 @@ def test_worst_case_expectation_gradient(
     assert grad.shape == loss.shape
 
 
-@pytest.mark.parametrize(
-    "device",
-    [
-        "cpu",
-        pytest.param(
-            "cuda",
-            marks=pytest.mark.skipif(
-                not torch.cuda.is_available(), reason="no CUDA device is available"
-            ),
-        ),
-    ],
-)
+@pytest.mark.parametrize("device", DEVICES)
 @pytest.mark.parametrize("support", [100, 1000])
 def test_chi_square_reproduction_workload(
     support: int, device: str, guarded_benchmark: Callable[..., Any]
@@ -107,6 +107,31 @@ def test_chi_square_reproduction_workload(
     radius = torch.logspace(-4, 1, batch, dtype=torch.float64, device=device)
     ambiguity_set = ChiSquareAmbiguitySet((weights / weights.sum()).to(device), radius)
     loss = torch.randn(batch, support, generator=generator, dtype=torch.float64)
+    loss = loss.to(device).requires_grad_()
+
+    def gradient() -> torch.Tensor:
+        value = ambiguity_set.worst_case_expectation(loss).sum()
+        (grad,) = torch.autograd.grad(value, loss)
+        return grad
+
+    grad = guarded_benchmark(gradient, host_syncs=0)
+
+    assert grad.shape == loss.shape
+
+
+@pytest.mark.parametrize("dtype", [torch.float32, torch.float64])
+@pytest.mark.parametrize("device", DEVICES)
+def test_kl_batched_tilt_search(
+    device: str, dtype: torch.dtype, guarded_benchmark: Callable[..., Any]
+) -> None:
+    # Issue #109: 400 losses over 100 scenarios are 40000 entries per tilt,
+    # which the CPU bisects and a GPU searches 7 or 3 tilts per step.
+    batch, support = 400, 100
+    generator = torch.Generator().manual_seed(0)
+    weights = torch.rand(support, generator=generator, dtype=dtype) + 0.5
+    radius = torch.logspace(-6, 0, batch, dtype=dtype, device=device)
+    ambiguity_set = KLAmbiguitySet((weights / weights.sum()).to(device), radius)
+    loss = torch.randn(batch, support, generator=generator, dtype=dtype)
     loss = loss.to(device).requires_grad_()
 
     def gradient() -> torch.Tensor:

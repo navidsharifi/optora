@@ -41,36 +41,63 @@ def _bisection_steps(dtype: torch.dtype) -> int:
     return int(-math.log2(torch.finfo(dtype).eps))
 
 
-# Entries of one batched tilt evaluation below which a solve is bound by
-# per-kernel launch overhead rather than by arithmetic: up to this size,
-# evaluating several tilts per step in one batched call costs about as much
-# as evaluating one, and cuts the number of steps.
-_LAUNCH_BOUND_ENTRIES = 2**14
+# Bytes per operand of one batched tilt evaluation below which a solve is
+# bound by per-kernel launch overhead rather than by memory traffic or
+# arithmetic: up to this size, evaluating several tilts per step in one
+# batched call costs about as much as evaluating one, and cuts the number of
+# steps. A GPU launch costs far more than a CPU call relative to the work it
+# can absorb, so its budget is larger. Both budgets were measured on a
+# laptop CPU and an RTX 3050 laptop GPU (#109); the CPU one equals 2**14
+# float64 entries.
+_CPU_LAUNCH_BOUND_BYTES = 2**17
+_ACCELERATOR_LAUNCH_BOUND_BYTES = 2**21
 
 # Largest number of bits a search step resolves, 15 tilts per step.
 _MAX_SEARCH_BITS = 4
 
 
-def _search_bits(entries: int) -> int:
+def _launch_bound_entries(dtype: torch.dtype, device: torch.device) -> int:
+    """Return how many entries of `dtype` one launch-bound evaluation spans.
+
+    Args:
+        dtype: Working dtype of the tilt evaluation.
+        device: Device the evaluation runs on. Every device other than the
+            CPU is treated as an accelerator.
+
+    Returns:
+        The byte budget of `device` divided by the size of one entry.
+    """
+    budget = (
+        _CPU_LAUNCH_BOUND_BYTES
+        if device.type == "cpu"
+        else _ACCELERATOR_LAUNCH_BOUND_BYTES
+    )
+    return budget // dtype.itemsize
+
+
+def _search_bits(entries: int, dtype: torch.dtype, device: torch.device) -> int:
     """Return the bits of the tilt each search step resolves.
 
     A step that evaluates $2^b - 1$ evenly spaced tilts narrows the bracket
     by $2^b$, so it replaces $b$ bisection steps at $2^b - 1$ times the
     arithmetic per step. The largest $b$ whose batched evaluation stays
-    within `_LAUNCH_BOUND_ENTRIES` is chosen. Small problems, whose steps
+    within `_launch_bound_entries` is chosen. Small problems, whose steps
     are dominated by kernel launches, therefore take few wide steps, and
-    large ones bisect. The choice reads only shapes, so it never
-    synchronizes.
+    large ones bisect. The choice reads only shapes, the dtype and the
+    device, so it never synchronizes.
 
     Args:
         entries: Number of entries of one tilt evaluation, the batch size
             times the support size.
+        dtype: Working dtype of the tilt evaluation.
+        device: Device the evaluation runs on.
 
     Returns:
         The number of bits $b$, from one (bisection) to `_MAX_SEARCH_BITS`.
     """
+    limit = _launch_bound_entries(dtype, device)
     for bits in range(_MAX_SEARCH_BITS, 1, -1):
-        if (2**bits - 1) * entries <= _LAUNCH_BOUND_ENTRIES:
+        if (2**bits - 1) * entries <= limit:
             return bits
     return 1
 
@@ -764,7 +791,9 @@ class TiltedAmbiguitySet(AmbiguitySet):
       of device-side kernels with no host read of a convergence flag. A
       small problem, whose cost is kernel launches rather than arithmetic,
       evaluates up to 15 tilts per step in one batched call and so needs a
-      quarter of the steps (`_search_bits`). A large one bisects.
+      quarter of the steps (`_search_bits`). A large one bisects. What
+      counts as small depends on the device, since a GPU absorbs far more
+      work per kernel launch than a CPU.
     - **Feasibility by construction.** Each step keeps the endpoint that
       tested feasible, so the returned tilt always satisfies the radius
       constraint. The reported value is therefore a primal objective value
@@ -1107,7 +1136,7 @@ class TiltedAmbiguitySet(AmbiguitySet):
             elementwise reductions, so a saturated or degenerate element
             cannot disturb the rest of its batch.
         """
-        bits = _search_bits(self._tilt_entries(gap, batch_shape))
+        bits = _search_bits(self._tilt_entries(gap, batch_shape), gap.dtype, gap.device)
         points = 2**bits - 1
         steps = -(-_bisection_steps(gap.dtype) // bits)
         index = torch.arange(1, points + 1, dtype=gap.dtype, device=gap.device)

@@ -172,9 +172,13 @@ solve is a fixed sequence of device-side kernels with no convergence flag
 to read back and no tolerance to tune. A small problem, whose cost is
 dominated by kernel launches rather than arithmetic, tests up to 15 evenly
 spaced tilts per step in one batched call and so needs a quarter of the
-steps. A large problem bisects. Size here means the number of entries in
-one tilt evaluation, so a Sinkhorn set, whose tilt reweights all $n$ kernel
-rows, counts $n^2$ entries per batch element rather than $n$.
+steps. A large problem bisects. Size here means the bytes of one tilt
+evaluation, so a Sinkhorn set, whose tilt reweights all $n$ kernel rows,
+counts $n^2$ entries per batch element rather than $n$. A GPU kernel launch
+costs more than a CPU call relative to the work it can absorb, so the
+budget is 2 MiB on a GPU and 128 KiB on the CPU. On an RTX 3050, a batch of
+400 float32 losses over 100 scenarios then takes 8 steps of 7 tilts instead
+of 23 bisection steps.
 
 **Saturation needs no special case.** Once the radius reaches
 $-\log P^\star$ (KL) or $1/P^\star - 1$ (chi-square), where $P^\star$ is

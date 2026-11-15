@@ -264,7 +264,9 @@ class _PhiTilt(TiltedAmbiguitySet):
             base + fixed_rate,
         )
         width = torch.log1p(torch.clamp(ceiling - base, min=0.0))
-        bits = _search_bits(math.prod(fixed_rate.shape) * gap.shape[-1])
+        bits = _search_bits(
+            math.prod(fixed_rate.shape) * gap.shape[-1], gap.dtype, gap.device
+        )
         points = 2**bits - 1
         index = torch.arange(1, points + 1, dtype=gap.dtype, device=gap.device)
         index = index.reshape((points,) + (1,) * fixed_rate.ndim)
