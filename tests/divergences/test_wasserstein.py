@@ -360,3 +360,38 @@ def test_gradient_is_finite_through_zero_entries() -> None:
 
     assert p.grad is not None
     assert torch.all(torch.isfinite(p.grad))
+
+
+def test_batch_of_non_square_costs_raises_value_error() -> None:
+    with pytest.raises(ValueError):
+        SinkhornDivergence(cost=torch.zeros(4, 2, 3))
+
+
+def test_batched_cost_matches_one_divergence_per_cost() -> None:
+    generator = torch.Generator().manual_seed(0)
+    points = torch.randn(3, 6, 2, generator=generator, dtype=torch.float64)
+    cost = torch.cdist(points, points, p=1)
+    p = torch.rand(3, 6, generator=generator, dtype=torch.float64)
+    p = p / p.sum(dim=-1, keepdim=True)
+
+    value = SinkhornDivergence(cost=cost, max_iter=500)(p, Q)
+
+    assert value.shape == (3,)
+    expected = torch.stack(
+        [
+            SinkhornDivergence(cost=element_cost, max_iter=500)(row, Q)
+            for element_cost, row in zip(cost, p, strict=True)
+        ]
+    )
+    assert torch.allclose(value, expected, atol=1e-6)
+
+
+def test_batched_cost_broadcasts_against_unbatched_distributions() -> None:
+    cost = torch.stack((LINE_COST, 2.0 * LINE_COST))
+
+    value = SinkhornDivergence(cost=cost, max_iter=500)(P, Q)
+
+    assert value.shape == (2,)
+    assert torch.allclose(
+        value[0], SinkhornDivergence(cost=LINE_COST, max_iter=500)(P, Q), atol=1e-6
+    )

@@ -80,7 +80,9 @@ class SinkhornDivergence(Divergence):
 
     Attributes:
         cost: Square, nonnegative pairwise ground cost matrix between the
-            shared support points of `p` and `q`, shape `(n, n)`.
+            shared support points of `p` and `q`, of shape `(n, n)`, or a
+            batch of such matrices of shape `(..., n, n)` whose leading
+            dimensions broadcast against the batch of `p` and `q`.
         epsilon: Positive entropic regularization strength. Smaller values
             approximate the unregularized transport cost more closely and
             need more Sinkhorn iterations to converge.
@@ -114,7 +116,10 @@ class SinkhornDivergence(Divergence):
 
         Args:
             cost: Square, nonnegative pairwise ground cost matrix between
-                the shared support points of `p` and `q`, shape `(n, n)`.
+                the shared support points of `p` and `q`, of shape `(n, n)`,
+                or a batch of such matrices of shape `(..., n, n)`, one per
+                transport problem, broadcast against the batch of `p` and
+                `q`.
             epsilon: Positive entropic regularization strength.
             max_iter: Maximum number of Sinkhorn scaling iterations.
             tol: Convergence tolerance on the L1 marginal violation of the
@@ -140,15 +145,17 @@ class SinkhornDivergence(Divergence):
                 the phase.
 
         Raises:
-            ValueError: If `cost` is not a square 2D tensor, if `validate`
+            ValueError: If `cost` is not a square matrix or a batch of
+                square matrices, if `validate`
                 is set and `cost` contains negative entries, if `epsilon`,
                 `max_iter`, `tol`, or `check_interval` are not positive, or
                 if `newton_max_iter` is negative.
         """
         super().__init__()
-        if cost.ndim != 2 or cost.shape[0] != cost.shape[1]:
+        if cost.ndim < 2 or cost.shape[-1] != cost.shape[-2]:
             raise ValueError(
-                f"cost must be a square 2D tensor, got shape {tuple(cost.shape)}."
+                "cost must be a square matrix or a batch of square matrices, "
+                f"got shape {tuple(cost.shape)}."
             )
         if validate and bool(torch.amin(cost) < 0):
             raise ValueError("cost must be nonnegative.")
@@ -188,7 +195,8 @@ class SinkhornDivergence(Divergence):
                 `cost`.
             q: Reference distribution, a nonnegative tensor of shape
                 `(..., n)` whose last dimension sums to one and indexes
-                `cost`. Its batch shape must broadcast against `p`'s.
+                `cost`. Its batch shape must broadcast against `p`'s and
+                against the batch shape of `cost`.
 
         Returns:
             A tensor of shape `batch_shape` holding $S_\epsilon(p, q)$ over
@@ -200,23 +208,28 @@ class SinkhornDivergence(Divergence):
         Raises:
             ValueError: If the shape of `p` or `q` does not match `cost`.
         """
-        if p.shape[-1] != self.cost.shape[0]:
+        size = self.cost.shape[-1]
+        if p.shape[-1] != size:
             raise ValueError(
-                f"p must have shape (..., {self.cost.shape[0]}) to index "
-                f"cost, got {tuple(p.shape)}."
+                f"p must have shape (..., {size}) to index cost, got {tuple(p.shape)}."
             )
-        if q.shape[-1] != self.cost.shape[0]:
+        if q.shape[-1] != size:
             raise ValueError(
-                f"q must have shape (..., {self.cost.shape[0]}) to index "
-                f"cost, got {tuple(q.shape)}."
+                f"q must have shape (..., {size}) to index cost, got {tuple(q.shape)}."
             )
         result_dtype = torch.promote_types(p.dtype, q.dtype)
         dtype = working_dtype(p, q, self.cost)
         p, q = p.to(dtype), q.to(dtype)
         # Stacking the three marginal pairs into one batched problem needs
-        # `p` and `q` at a common shape; adding a zero of the other's shape
-        # broadcasts each to it.
-        p, q = p + torch.zeros_like(q), q + torch.zeros_like(p)
+        # `p` and `q` at a common shape, which includes the batch of a batched
+        # `cost`; adding zeros of the other shapes broadcasts each to it.
+        cost_batch = torch.zeros(
+            self.cost.shape[:-2] + (1,), dtype=dtype, device=p.device
+        )
+        p, q = (
+            p + torch.zeros_like(q) + cost_batch,
+            q + torch.zeros_like(p) + cost_batch,
+        )
         cost_pq, cost_pp, cost_qq = torch.unbind(
             self._entropic_transport_cost(
                 torch.stack((p, p, q)), torch.stack((q, p, q))

@@ -555,3 +555,115 @@ def test_is_an_ambiguity_set_instance() -> None:
     assert isinstance(
         WassersteinAmbiguitySet(nominal, cost=cost, radius=0.1), AmbiguitySet
     )
+
+
+# --- Batched ground costs ----------------------------------------------------
+
+
+def _batched_instance(
+    batch: int = 4, size: int = 7
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+    # One support per batch element, as in a replicated experiment where every
+    # replication draws its own sample.
+    generator = torch.Generator().manual_seed(0)
+    points = torch.randn(batch, size, 3, generator=generator, dtype=torch.float64)
+    cost = torch.cdist(points, points, p=1)
+    nominal = torch.rand(batch, size, generator=generator, dtype=torch.float64) + 0.1
+    nominal = nominal / nominal.sum(dim=-1, keepdim=True)
+    loss = torch.randn(batch, size, generator=generator, dtype=torch.float64)
+    radius = 0.05 + torch.rand(batch, generator=generator, dtype=torch.float64)
+    return nominal, cost, loss, radius
+
+
+def test_batched_cost_matches_one_set_per_batch_element() -> None:
+    nominal, cost, loss, radius = _batched_instance()
+    nominal = nominal.clone().requires_grad_(True)
+    radius = radius.clone().requires_grad_(True)
+    loss = loss.clone().requires_grad_(True)
+
+    value = WassersteinAmbiguitySet(nominal, cost, radius).worst_case_expectation(loss)
+    gradients = torch.autograd.grad(value.sum(), (loss, nominal, radius))
+
+    for element in range(cost.shape[0]):
+        element_nominal = nominal[element].detach().clone().requires_grad_(True)
+        element_radius = radius[element].detach().clone().requires_grad_(True)
+        element_loss = loss[element].detach().clone().requires_grad_(True)
+        expected = WassersteinAmbiguitySet(
+            element_nominal, cost[element], element_radius
+        ).worst_case_expectation(element_loss)
+        expected_gradients = torch.autograd.grad(
+            expected, (element_loss, element_nominal, element_radius)
+        )
+        assert torch.equal(value[element], expected)
+        for gradient, expected_gradient in zip(
+            gradients, expected_gradients, strict=True
+        ):
+            assert torch.equal(gradient[element], expected_gradient)
+
+
+def test_batched_cost_broadcasts_against_a_radius_sweep() -> None:
+    nominal, cost, loss, _ = _batched_instance()
+    radius = torch.tensor([[0.01], [0.1], [1.0]], dtype=torch.float64)
+
+    value = WassersteinAmbiguitySet(nominal, cost, radius).worst_case_expectation(loss)
+
+    assert value.shape == (3, cost.shape[0])
+    expected = WassersteinAmbiguitySet(
+        nominal[2], cost[2], radius=0.1
+    ).worst_case_expectation(loss[2])
+    assert torch.equal(value[1, 2], expected)
+
+
+def test_batched_cost_with_a_shared_nominal_and_loss() -> None:
+    nominal, cost, loss, _ = _batched_instance()
+
+    value = WassersteinAmbiguitySet(
+        nominal[0], cost, radius=0.2
+    ).worst_case_expectation(loss[0])
+
+    assert value.shape == (cost.shape[0],)
+    expected = WassersteinAmbiguitySet(
+        nominal[0], cost[3], radius=0.2
+    ).worst_case_expectation(loss[0])
+    assert torch.equal(value[3], expected)
+
+
+def test_cost_batch_that_does_not_broadcast_against_nominal_raises() -> None:
+    nominal, cost, _, _ = _batched_instance(batch=3)
+
+    with pytest.raises(ValueError, match="batch shapes do not broadcast"):
+        WassersteinAmbiguitySet(nominal, cost[:2], radius=0.1)
+
+
+def test_cost_batch_that_does_not_broadcast_against_loss_raises() -> None:
+    nominal, cost, loss, _ = _batched_instance(batch=3)
+    ambiguity_set = WassersteinAmbiguitySet(nominal[0], cost, radius=0.1)
+
+    with pytest.raises(ValueError, match="batch shapes do not broadcast"):
+        ambiguity_set.worst_case_expectation(loss[:2])
+
+
+def test_batch_of_non_square_costs_raises_value_error() -> None:
+    nominal = torch.tensor([0.5, 0.5])
+
+    with pytest.raises(ValueError):
+        WassersteinAmbiguitySet(nominal, cost=torch.zeros(3, 2, 3), radius=0.1)
+
+
+def test_batched_cost_solve_does_not_synchronize_with_the_host(
+    host_sync_counter: Callable[[], Any],
+) -> None:
+    nominal, cost, loss, radius = _batched_instance()
+    ambiguity_set = WassersteinAmbiguitySet(nominal, cost, radius)
+
+    with host_sync_counter() as syncs:
+        ambiguity_set.worst_case_expectation(loss)
+
+    assert len(syncs) == 0
+
+
+def test_contains_accepts_a_batched_cost() -> None:
+    nominal, cost, _, radius = _batched_instance()
+    ambiguity_set = WassersteinAmbiguitySet(nominal, cost, radius)
+
+    assert torch.all(ambiguity_set.contains(nominal))
