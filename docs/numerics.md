@@ -71,7 +71,7 @@ fractions of its saturation radius.
 
     - **Mass far below $\varepsilon$.** When the worst case concentrates on
       scenarios with tiny nominal mass, for example $10^{-20}$ in float32,
-      the tilt $t$ lies near the upper end of its bisection bracket. The
+      the tilt $t$ lies near the upper end of its bracket $[0, 1)$. The
       tilt rate is then resolved only to a relative
       $\varepsilon / (1 - t)$. KL and $\chi^2$ errors grow to about
       $10^{-4}$ relative (tested at $2048\,\varepsilon$ in
