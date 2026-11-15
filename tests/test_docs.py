@@ -6,6 +6,7 @@ import pytest
 
 from tools.docs import (
     GENERATED_NOTICE,
+    MOVED_TUTORIALS,
     ExampleDoc,
     ModuleDoc,
     discover_examples,
@@ -15,6 +16,7 @@ from tools.docs import (
     module_symbols,
     outdated_documentation,
     render_examples_navigation,
+    render_tutorial_redirects,
     strip_order_prefix,
 )
 
@@ -336,6 +338,80 @@ def test_generate_documentation_requires_the_examples_navigation_block(
 
     with pytest.raises(RuntimeError, match="EXAMPLES nav block"):
         generate_documentation(tmp_path)
+
+
+def write_tutorial_pages(root: Path) -> None:
+    """Write one placeholder page per moved tutorial under `root/docs/tutorials`."""
+    tutorials = root / "docs" / "tutorials"
+    tutorials.mkdir(parents=True)
+    for name in MOVED_TUTORIALS:
+        (tutorials / f"{name}.md").write_text(f"# {name}\n", encoding="utf-8")
+
+
+def test_generate_documentation_writes_tutorial_redirects(tmp_path: Path) -> None:
+    make_site(tmp_path)
+    write_tutorial_pages(tmp_path)
+
+    outputs = generate_documentation(tmp_path)
+
+    redirects = sorted((tmp_path / "docs" / "examples").glob("*/index.html"))
+    assert [path.parent.name for path in redirects] == sorted(MOVED_TUTORIALS)
+    assert set(redirects) <= set(outputs)
+    page = tmp_path / "docs" / "examples" / "kl_dro_radius_sweep" / "index.html"
+    text = page.read_text(encoding="utf-8")
+    assert text.startswith(f"{GENERATED_NOTICE}\n<!doctype html>\n")
+    target = "../../tutorials/kl_dro_radius_sweep/"
+    assert f'<meta http-equiv="refresh" content="0; url={target}">' in text
+    assert f'location.replace("{target}" + location.search + location.hash)' in text
+    assert f'<link rel="canonical" href="{target}">' in text
+    assert f'<a href="{target}">' in text
+    assert outdated_documentation(tmp_path) == []
+
+
+def test_generate_documentation_skips_redirects_without_tutorials(
+    tmp_path: Path,
+) -> None:
+    make_site(tmp_path)
+
+    generate_documentation(tmp_path)
+
+    assert not list(tmp_path.rglob("*.html"))
+
+
+def test_render_tutorial_redirects_requires_every_target(tmp_path: Path) -> None:
+    write_tutorial_pages(tmp_path)
+    (tmp_path / "docs" / "tutorials" / "kl_dro_radius_sweep.md").unlink()
+
+    with pytest.raises(FileNotFoundError, match="kl_dro_radius_sweep"):
+        render_tutorial_redirects(tmp_path / "docs")
+
+
+def test_generate_documentation_removes_only_stale_generated_redirects(
+    tmp_path: Path,
+) -> None:
+    make_site(tmp_path)
+    examples_root = tmp_path / "docs" / "examples"
+    stale = examples_root / "renamed_tutorial" / "index.html"
+    stale.parent.mkdir(parents=True)
+    stale.write_text(f"{GENERATED_NOTICE}\n<!doctype html>\n", encoding="utf-8")
+    handwritten = examples_root / "widget.html"
+    handwritten.write_text("<!doctype html>\n", encoding="utf-8")
+
+    assert stale in outdated_documentation(tmp_path)
+
+    generate_documentation(tmp_path)
+
+    assert not stale.exists()
+    assert handwritten.exists()
+
+
+def test_tutorial_redirects_do_not_shadow_example_pages() -> None:
+    examples_root = ROOT / "docs" / "examples"
+    for name in MOVED_TUTORIALS:
+        assert not (examples_root / f"{name}.md").exists()
+        assert [path.name for path in (examples_root / name).iterdir()] == [
+            "index.html"
+        ]
 
 
 def test_repository_documentation_is_up_to_date() -> None:
