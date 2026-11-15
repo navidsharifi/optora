@@ -11,11 +11,11 @@ from torch import nn
 from optora.core.convergence import ConvergenceStatus
 from optora.core.divergence_base import Divergence
 from optora.core.dro_base import (
-    _LAUNCH_BOUND_ENTRIES,
     AmbiguitySet,
     DualAmbiguitySet,
     TiltedAmbiguitySet,
     _bisection_steps,
+    _launch_bound_entries,
     _search_bits,
 )
 from optora.core.solver_base import (
@@ -389,24 +389,57 @@ class _ScheduledTiltAmbiguitySet(TiltedAmbiguitySet):
         return distribution, self.schedule(tilt)
 
 
+CPU = torch.device("cpu")
+
+# Entries of a float64 CPU evaluation that still count as launch-bound.
+LAUNCH_BOUND_ENTRIES = _launch_bound_entries(torch.float64, CPU)
+
+requires_cuda = pytest.mark.skipif(
+    not torch.cuda.is_available(), reason="no CUDA device is available"
+)
+
+
 def _solve(
-    ambiguity_set: TiltedAmbiguitySet, batch_shape: tuple[int, ...], dtype: torch.dtype
+    ambiguity_set: TiltedAmbiguitySet,
+    batch_shape: tuple[int, ...],
+    dtype: torch.dtype,
+    device: str = "cpu",
 ) -> torch.Tensor:
-    gap = torch.zeros(batch_shape + (ambiguity_set.nominal.shape[-1],), dtype=dtype)
+    gap = torch.zeros(
+        batch_shape + (ambiguity_set.nominal.shape[-1],), dtype=dtype, device=device
+    )
     return ambiguity_set._solve_tilt(gap, torch.Size(batch_shape))
 
 
-def test_search_widens_its_steps_only_while_launch_bound() -> None:
-    assert _search_bits(1) == 4
-    assert _search_bits(_LAUNCH_BOUND_ENTRIES // 15) == 4
-    assert _search_bits(_LAUNCH_BOUND_ENTRIES // 15 + 1) == 3
-    assert _search_bits(_LAUNCH_BOUND_ENTRIES // 3) == 2
-    assert _search_bits(_LAUNCH_BOUND_ENTRIES // 3 + 1) == 1
-    assert _search_bits(10**9) == 1
+@pytest.mark.parametrize("dtype", [torch.float32, torch.float64])
+@pytest.mark.parametrize("device", ["cpu", "cuda"])
+def test_search_widens_its_steps_only_while_launch_bound(
+    dtype: torch.dtype, device: str
+) -> None:
+    # Only the device's type is read, so this runs without a GPU.
+    where = torch.device(device)
+    limit = _launch_bound_entries(dtype, where)
+
+    assert _search_bits(1, dtype, where) == 4
+    assert _search_bits(limit // 15, dtype, where) == 4
+    assert _search_bits(limit // 15 + 1, dtype, where) == 3
+    assert _search_bits(limit // 3, dtype, where) == 2
+    assert _search_bits(limit // 3 + 1, dtype, where) == 1
+    assert _search_bits(10**9, dtype, where) == 1
+
+
+def test_launch_bound_budget_is_a_byte_count_larger_on_an_accelerator() -> None:
+    # The CPU budget keeps the 2**14 float64 entries it was measured at, and
+    # a float32 entry takes half the bytes. A GPU absorbs 16 times more.
+    assert LAUNCH_BOUND_ENTRIES == 2**14
+    assert _launch_bound_entries(torch.float32, CPU) == 2**15
+    for dtype in (torch.float32, torch.float64):
+        accelerator = _launch_bound_entries(dtype, torch.device("cuda"))
+        assert accelerator == 16 * _launch_bound_entries(dtype, CPU)
 
 
 @pytest.mark.parametrize("dtype", [torch.float32, torch.float64])
-@pytest.mark.parametrize("batch", [(), (3,), (_LAUNCH_BOUND_ENTRIES // 2,)])
+@pytest.mark.parametrize("batch", [(), (3,), (LAUNCH_BOUND_ENTRIES // 2,)])
 def test_search_resolves_the_tilt_to_the_dtype_precision(
     dtype: torch.dtype, batch: tuple[int, ...]
 ) -> None:
@@ -426,7 +459,7 @@ def test_search_resolves_the_tilt_to_the_dtype_precision(
 
 @pytest.mark.parametrize("dtype", [torch.float32, torch.float64])
 @pytest.mark.parametrize(
-    ("batch", "bits"), [((), 4), ((_LAUNCH_BOUND_ENTRIES // 2,), 1)]
+    ("batch", "bits"), [((), 4), ((LAUNCH_BOUND_ENTRIES // 2,), 1)]
 )
 def test_search_takes_a_fixed_number_of_steps(
     dtype: torch.dtype, batch: tuple[int, ...], bits: int
@@ -437,6 +470,23 @@ def test_search_takes_a_fixed_number_of_steps(
     _solve(ambiguity_set, batch, dtype)
 
     assert ambiguity_set.evaluations == math.ceil(_bisection_steps(dtype) / bits)
+
+
+@requires_cuda
+@pytest.mark.parametrize(("dtype", "bits"), [(torch.float32, 3), (torch.float64, 2)])
+def test_search_on_a_gpu_takes_wider_steps_than_on_the_cpu(
+    dtype: torch.dtype, bits: int
+) -> None:
+    # 20000 two-scenario losses are 40000 entries, the size of a batch of
+    # 400 losses over 100 scenarios. The CPU bisects them, a GPU does not.
+    nominal = torch.tensor([0.5, 0.5], dtype=dtype, device="cuda")
+    ambiguity_set = _ScheduledTiltAmbiguitySet(nominal, 0.3, lambda tilt: tilt)
+
+    tilt = _solve(ambiguity_set, (20000,), dtype, "cuda")
+
+    assert ambiguity_set.evaluations == math.ceil(_bisection_steps(dtype) / bits)
+    assert bool(torch.all(tilt <= 0.3))
+    assert bool(torch.all(0.3 - tilt <= 2.0 ** -_bisection_steps(dtype)))
 
 
 def test_search_keeps_a_tested_feasible_tilt_where_feasibility_is_not_monotone() -> (
