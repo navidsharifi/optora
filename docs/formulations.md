@@ -148,7 +148,10 @@ of the nominal that starts at the nominal itself. Along the tilt, the
 divergence $D(q_t \,\|\, \mathrm{nominal})$ increases monotonically up to
 the divergence of the distribution concentrated on the highest-loss
 scenarios. Choosing the tilt is therefore a monotone scalar root-finding
-problem, which optora solves by bisection.
+problem, which optora solves by bisection. The chi-square root also has a
+closed form, given with `ChiSquareAmbiguitySet` further down, which that
+set uses in place of the bisection. The bracket, saturation and gradients
+described here apply to it unchanged.
 
 **The bracket is valid by construction.** The tilt is parameterized by
 $t \in [0,1)$ and mapped to the unbounded natural parameter by
@@ -264,12 +267,21 @@ $$
 q^\star \propto \mathrm{nominal} \cdot (\mathrm{loss} - c)_+ ,
 $$
 
-which the bracketed bisection above pins exactly. When no scenario is
-truncated, this reproduces the familiar closed form
+When no scenario is truncated, this reproduces the familiar closed form
 $\mathbb{E}_{\mathrm{nominal}}[\ell] + \sqrt{\mathrm{radius} \cdot
-\mathrm{Var}_{\mathrm{nominal}}(\ell)}$ (Duchi and Namkoong, 2021). Unlike
-that formula, the bisection stays correct once scenarios are truncated to
-$q_i = 0$.
+\mathrm{Var}_{\mathrm{nominal}}(\ell)}$ (Duchi and Namkoong, 2021). Once
+scenarios are truncated to $q_i = 0$, the same formula holds on the
+scenarios that keep positive weight, with the mass left out entering the
+radius. So the cut level needs no bisection. Optora sorts the scenarios by
+loss, finds the truncated ones by comparing the divergence at each
+breakpoint $c = \ell_{(j)}$ with the radius, and then solves a quadratic
+for $c$. The breakpoint divergences come from cumulative sums of
+nonnegative terms, so they keep full precision, and the whole solve is one
+sort plus a fixed number of vectorized operations. On a GPU this costs a
+small fraction of the 52 float64 bisection steps it replaces, which are
+bound by kernel launches rather than arithmetic. The root is exact up to
+rounding, so the divergence of the maximizer equals the radius to the
+precision of evaluating it, instead of being tested feasible step by step.
 
 The conjugate of the total-variation generator is infinite above a finite
 threshold, so neither path of `PhiAmbiguitySet` applies.

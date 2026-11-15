@@ -67,6 +67,38 @@ above. `python -m tools.docs generate` then writes the page, this overview
 and the sidebar entry, and `python -m tools.docs check` fails in CI until
 they are regenerated.
 """
+MOVED_TUTORIALS = (
+    "calibrated_ambiguity_radius",
+    "convergence_diagnostics",
+    "cvar_from_phi_divergence",
+    "distributionally_robust_regret",
+    "group_dro_training",
+    "kl_dro_radius_sweep",
+    "minibatch_dro_training",
+    "robust_decision_across_ambiguity_sets",
+    "sinkhorn_relaxation_of_wasserstein_dro",
+    "subpopulation_shift_training",
+    "wasserstein_lipschitz_equivalence",
+    "worst_case_distribution_shift",
+)
+"""Tutorial pages that were served under `/examples/<name>/` until they moved."""
+REDIRECT_PAGE = """\
+{notice}
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Redirecting</title>
+<meta name="robots" content="noindex">
+<link rel="canonical" href="{target}">
+<script>location.replace("{target}" + location.search + location.hash);</script>
+<meta http-equiv="refresh" content="0; url={target}">
+</head>
+<body>
+<p>This page has moved to <a href="{target}">{target}</a>.</p>
+</body>
+</html>
+"""
 
 
 @dataclass(frozen=True, slots=True)
@@ -363,6 +395,26 @@ def render_examples_navigation(examples: list[ExampleDoc]) -> str:
     return "\n".join(lines)
 
 
+def render_tutorial_redirects(docs_root: Path) -> dict[Path, str]:
+    """Render one redirect page per tutorial that moved out of `/examples/`.
+
+    Zensical has no redirect map, so each old URL `/examples/<name>/` gets an
+    `index.html` that Zensical copies verbatim. The page forwards to
+    `/tutorials/<name>/` and keeps the query string and fragment.
+
+    Raises:
+        FileNotFoundError: If a redirect target page does not exist.
+    """
+    pages: dict[Path, str] = {}
+    for name in MOVED_TUTORIALS:
+        if not (docs_root / "tutorials" / f"{name}.md").is_file():
+            raise FileNotFoundError(f"redirect target tutorials/{name}.md is missing")
+        pages[docs_root / "examples" / name / "index.html"] = REDIRECT_PAGE.format(
+            notice=GENERATED_NOTICE, target=f"../../tutorials/{name}/"
+        )
+    return pages
+
+
 def replace_navigation(
     config: str, pattern: re.Pattern[str], navigation: str, name: str
 ) -> str:
@@ -377,10 +429,11 @@ def write_if_changed(path: Path, content: str) -> None:
     """Write generated content only when it differs from the existing file."""
     path.parent.mkdir(parents=True, exist_ok=True)
     if not path.exists() or path.read_text(encoding="utf-8") != content:
-        path.write_text(content, encoding="utf-8")
+        path.write_text(content, encoding="utf-8", newline="\n")
 
 
 GENERATED_ROOTS = (Path("docs", "api"), Path("docs", "examples"))
+GENERATED_SUFFIXES = frozenset({".md", ".html"})
 
 
 def stale_generated_pages(root: Path, expected: set[Path]) -> list[Path]:
@@ -388,8 +441,9 @@ def stale_generated_pages(root: Path, expected: set[Path]) -> list[Path]:
     return sorted(
         path
         for generated_root in GENERATED_ROOTS
-        for path in (root / generated_root).rglob("*.md")
-        if path not in expected
+        for path in (root / generated_root).rglob("*")
+        if path.suffix in GENERATED_SUFFIXES
+        and path not in expected
         and path.read_text(encoding="utf-8").startswith(GENERATED_NOTICE)
     )
 
@@ -398,7 +452,8 @@ def render_documentation(root: Path) -> dict[Path, str]:
     """Render every generator-owned file, including Zensical navigation.
 
     The API reference is generated from `optora/`. The examples section is
-    generated from `examples/` when that folder exists.
+    generated from `examples/` when that folder exists, and the redirects of
+    the moved tutorials when `docs/tutorials/` exists.
     """
     modules = discover_modules(root / "optora")
     api_root = root / "docs" / "api"
@@ -433,12 +488,15 @@ def render_documentation(root: Path) -> dict[Path, str]:
             "EXAMPLES",
         )
 
+    if (root / "docs" / "tutorials").is_dir():
+        pages.update(render_tutorial_redirects(root / "docs"))
+
     pages[config_path] = config
     return pages
 
 
 def generate_documentation(root: Path) -> list[Path]:
-    """Generate the API reference, the example pages and their navigation."""
+    """Generate the API reference, the example pages, redirects and navigation."""
     pages = render_documentation(root)
     for path in stale_generated_pages(root, set(pages)):
         path.unlink()

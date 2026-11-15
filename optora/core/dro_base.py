@@ -776,6 +776,9 @@ class TiltedAmbiguitySet(AmbiguitySet):
       the bracket, and $q_t$ *is* that distribution, so the value is
       exactly $\max \mathrm{loss}$.
 
+    A subclass whose root has a closed form overrides `_solve_tilt` and
+    keeps the rest, as `optora.dro.ChiSquareAmbiguitySet` does.
+
     The tilt is computed on the loss standardized to unit spread,
     $(\max \ell - \ell) / (\max \ell - \min \ell)$. An ambiguity set does
     not depend on `loss`, so a positive affine rescaling of the loss leaves

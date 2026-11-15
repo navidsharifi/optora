@@ -618,8 +618,7 @@ class ChiSquareAmbiguitySet(TiltedAmbiguitySet):
     rises, from $0$ as $c \to -\infty$ to $1/P^\star - 1$ as $c \to \max
     \mathrm{loss}$, where $P^\star$ is the nominal mass on the highest-loss
     scenarios, so the radius constraint pins $c$ by one monotone scalar
-    root solve. See `optora.core.dro_base.TiltedAmbiguitySet` for the
-    bracketed bisection that runs it.
+    root solve.
 
     In the interior regime where no scenario is truncated to $q_i = 0$, the
     cut level drops below $\min \mathrm{loss}$ and the value reduces to the
@@ -632,8 +631,17 @@ class ChiSquareAmbiguitySet(TiltedAmbiguitySet):
         + \sqrt{\mathrm{radius} \cdot \mathrm{Var}_{\mathrm{nominal}}(\mathrm{loss})}.
     $$
 
-    The bisection reproduces that regime without special-casing it, and
-    keeps working in the truncated regime the closed form does not cover.
+    The truncated regime has the same form on the scenarios that keep
+    positive weight, so the root is found exactly rather than by the
+    bisection of `optora.core.dro_base.TiltedAmbiguitySet`. Sorting the
+    scenarios by loss identifies which of them are truncated, and the cut
+    level then solves a quadratic (see `_solve_tilt`). The solve costs one
+    sort and a fixed number of vectorized operations whatever the dtype,
+    which matters on a GPU, where the 52 float64 bisection steps are bound
+    by kernel launches rather than by arithmetic. The root is exact up to
+    rounding. Where the bisection returns a tilt that tested feasible, the
+    divergence of this maximizer matches the radius to the precision of
+    evaluating it.
 
     Attributes:
         nominal: Reference distribution the ambiguity set is centered on.
@@ -723,6 +731,121 @@ class ChiSquareAmbiguitySet(TiltedAmbiguitySet):
             torch.sum(nominal * deviation**2, dim=-1, keepdim=True) / normalizer**2
         ).squeeze(-1)
         return distribution, torch.clamp(divergence, min=0.0)
+
+    def _solve_tilt(self, gap: torch.Tensor, batch_shape: torch.Size) -> torch.Tensor:
+        r"""Solve the radius constraint for the tilt exactly, by sorting the gaps.
+
+        In terms of the cut depth $c = 1/\beta$, which the tilt maps to by
+        $t = 1/(1 + c)$, the unnormalized weight is $u_i = (c -
+        \mathrm{gap}_i)_+$. Let $S$ be the nominal mass of the scenarios
+        with $\mathrm{gap}_i < c$, $T = 1 - S$ the mass of the rest,
+        $A = \sum_i \mathrm{nominal}_i u_i$, and
+
+        $$
+        W = \sum_{i < j} \mathrm{nominal}_i \, \mathrm{nominal}_j
+            (\mathrm{gap}_i - \mathrm{gap}_j)^2
+        $$
+
+        over the scenarios with $\mathrm{gap}_i < c$. The divergence of the
+        tilt is then $D(c) = (T + W / A^2) / S$. It decreases in $c$, so
+        with the gaps sorted in increasing order, counting the breakpoints
+        $c = \mathrm{gap}_{(j)}$, $j \ge 2$, at which $D$ still exceeds the
+        radius $\rho$ locates the last scenario with positive weight at the
+        solution. On that segment $S$, $T$ and $W$ are fixed, and
+        $D(c) = \rho$ solves to
+
+        $$
+        c = \bar g + \frac{1}{S} \sqrt{\frac{W}{\rho S - T}},
+        $$
+
+        where $\bar g$ is the mean gap of those scenarios. With every
+        scenario weighted, $S = 1$ and $T = 0$, this is the variance form of
+        the class docstring. With only the highest-loss scenarios weighted,
+        $W = 0$ and $c = 0$, which is the saturated end of the path.
+
+        Updated one breakpoint at a time, $S$, $T$, $A$, $W$ and the second
+        moment $\sum_i \mathrm{nominal}_i u_i^2$ are cumulative sums of
+        nonnegative terms, so none of them loses precision to cancellation.
+        The root is clamped to its segment against rounding, and the tilt
+        to the top of the bisection's grid, $1 - \varepsilon$. A last
+        evaluation of the divergence at the rounded tilt steps it one ulp
+        down if it tests infeasible, which matters only near the top of the
+        path, where $1 - t$ resolves the cut depth to an absolute
+        $\varepsilon$. Nothing is read back to the host.
+
+        Args:
+            gap: Standardized shortfall below the maximum loss, of shape
+                `(..., n)`.
+            batch_shape: Batch shape of the loss being evaluated, as
+                returned by `AmbiguitySet._batch_shape`.
+
+        Returns:
+            The tilt of shape `batch_shape` whose distribution has
+            divergence `radius`, or the top of the path if every tilt is
+            feasible.
+        """
+        nominal = self._constant_nominal.to(gap.dtype)
+        shape = _broadcast_batch_shapes(gap=gap.shape, nominal=nominal.shape)
+        sorted_gap, order = torch.sort(gap.expand(shape), dim=-1, stable=True)
+        mass = torch.gather(nominal.expand(shape), -1, order)
+        zero = torch.zeros_like(mass[..., :1])
+
+        head_mass = torch.cumsum(mass, dim=-1)
+        suffix_mass = torch.flip(torch.cumsum(torch.flip(mass, (-1,)), dim=-1), (-1,))
+        tail_mass = torch.cat([suffix_mass[..., 1:], zero], dim=-1)
+        # Entry j of `first`, `second` and `within` holds A, the second
+        # moment of u, and W over the scenarios up to j at the cut depth
+        # c = sorted_gap[j + 1], built from the previous breakpoint.
+        step = torch.diff(sorted_gap, dim=-1)
+        first = torch.cumsum(head_mass[..., :-1] * step, dim=-1)
+        previous_first = torch.cat([zero, first[..., :-1]], dim=-1)
+        second = torch.cumsum(
+            step * (2.0 * previous_first + step * head_mass[..., :-1]), dim=-1
+        )
+        within = torch.cumsum(mass * torch.cat([zero, second], dim=-1), dim=-1)
+        ratio = torch.sqrt(within[..., :-1]) / first
+        breakpoint_divergence = torch.where(
+            first > 0.0,
+            (tail_mass[..., :-1] + ratio * ratio) / head_mass[..., :-1],
+            torch.inf,
+        )
+
+        radius = self.radius
+        if isinstance(radius, torch.Tensor):
+            radius = radius.detach().to(gap.dtype)
+            exceeded = breakpoint_divergence > radius.unsqueeze(-1)
+        else:
+            exceeded = breakpoint_divergence > radius
+        support_size = shape[-1]
+        last = torch.sum(exceeded, dim=-1, keepdim=True).expand(*batch_shape, 1)
+
+        def at_last(values: torch.Tensor) -> torch.Tensor:
+            expanded = values.expand(*batch_shape, support_size)
+            return torch.gather(expanded, -1, last).squeeze(-1)
+
+        infinity = torch.full_like(zero, torch.inf)
+        upper_gap = torch.cat([sorted_gap[..., 1:], infinity], dim=-1)
+        weighted_mass = at_last(head_mass)
+        mean_gap = at_last(torch.cumsum(mass * sorted_gap, dim=-1)) / weighted_mass
+        spread = at_last(within)
+        slack = torch.clamp(radius * weighted_mass - at_last(tail_mass), min=0.0)
+        offset = torch.where(
+            spread > 0.0, torch.sqrt(spread / slack) / weighted_mass, 0.0
+        )
+        depth = torch.minimum(
+            torch.maximum(mean_gap + offset, at_last(sorted_gap)), at_last(upper_gap)
+        )
+        tilt = torch.clamp(
+            torch.reciprocal(1.0 + depth), max=1.0 - torch.finfo(gap.dtype).eps
+        )
+        # Near the top of the path 1 - tilt holds the cut depth to an
+        # absolute eps only, so one ulp of the tilt can move the divergence
+        # by several percent. The rounded root is within half an ulp of the
+        # exact one there, so the larger feasible tilt of it and its
+        # neighbour below is the largest representable feasible tilt.
+        below = torch.nextafter(tilt, torch.zeros_like(tilt))
+        _, divergence = self._tilted_distribution(gap, tilt)
+        return torch.where(divergence <= self.radius, tilt, below)
 
     def _standardized_sensitivities(
         self,

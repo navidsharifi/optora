@@ -1,6 +1,7 @@
 """Performance guard for the ambiguity sets and the minimax solve in `optora.dro`.
 
-Workloads are batched float32 losses, the shape a training step produces.
+Workloads are batched float32 losses, the shape a training step produces,
+except for the float64 chi-square case taken from a paper reproduction.
 Every exact set runs a trip count fixed by the dtype, so its forward and
 backward passes must issue zero host synchronizations, and so must the
 minibatch estimators built on them and the online group-DRO step; the
@@ -12,6 +13,7 @@ import functools
 from collections.abc import Callable
 from typing import Any
 
+import pytest
 import torch
 
 from optora.divergences.f_divergence import PhiDivergence
@@ -19,7 +21,11 @@ from optora.dro.group_dro import OnlineGroupDRO, group_losses
 from optora.dro.kl_dro import KLAmbiguitySet
 from optora.dro.minibatch import MultilevelMonteCarloEstimator, StochasticPhiDual
 from optora.dro.minimax_solver import MinimaxProblem, MinimaxSolver
-from optora.dro.phi_dro import PhiAmbiguitySet, chi_square_conjugate
+from optora.dro.phi_dro import (
+    ChiSquareAmbiguitySet,
+    PhiAmbiguitySet,
+    chi_square_conjugate,
+)
 from optora.dro.sinkhorn_dro import SinkhornAmbiguitySet
 from optora.solvers.gradient_descent import GradientDescent
 from tests.dro.specs import SetSpec, spec_parameters
@@ -65,6 +71,43 @@ def test_worst_case_expectation_gradient(
     generator = torch.Generator().manual_seed(0)
     ambiguity_set = spec.build(_nominal(generator), _line_cost(), RADIUS)
     loss = _batched_loss(generator).requires_grad_()
+
+    def gradient() -> torch.Tensor:
+        value = ambiguity_set.worst_case_expectation(loss).sum()
+        (grad,) = torch.autograd.grad(value, loss)
+        return grad
+
+    grad = guarded_benchmark(gradient, host_syncs=0)
+
+    assert grad.shape == loss.shape
+
+
+@pytest.mark.parametrize(
+    "device",
+    [
+        "cpu",
+        pytest.param(
+            "cuda",
+            marks=pytest.mark.skipif(
+                not torch.cuda.is_available(), reason="no CUDA device is available"
+            ),
+        ),
+    ],
+)
+@pytest.mark.parametrize("support", [100, 1000])
+def test_chi_square_reproduction_workload(
+    support: int, device: str, guarded_benchmark: Callable[..., Any]
+) -> None:
+    # Issue #108: the Duchi and Namkoong (2019) reproduction evaluates 400
+    # float64 losses with one radius each, forward and backward. The 52
+    # bisection steps this replaced were bound by kernel launches on a GPU.
+    batch = 400
+    generator = torch.Generator().manual_seed(0)
+    weights = torch.rand(support, generator=generator, dtype=torch.float64) + 0.5
+    radius = torch.logspace(-4, 1, batch, dtype=torch.float64, device=device)
+    ambiguity_set = ChiSquareAmbiguitySet((weights / weights.sum()).to(device), radius)
+    loss = torch.randn(batch, support, generator=generator, dtype=torch.float64)
+    loss = loss.to(device).requires_grad_()
 
     def gradient() -> torch.Tensor:
         value = ambiguity_set.worst_case_expectation(loss).sum()

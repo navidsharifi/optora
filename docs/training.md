@@ -78,9 +78,10 @@ inner problem. The identity has the following practical consequences.
 
     ---
 
-    The identity holds *at* the maximizer. `KLAmbiguitySet` and
-    `ChiSquareAmbiguitySet` bisect to the precision of the dtype on every
-    call, and so does `PhiAmbiguitySet` without a `dual_solver`. With a
+    The identity holds *at* the maximizer. `KLAmbiguitySet` bisects to the
+    precision of the dtype on every call, and so does `PhiAmbiguitySet`
+    without a `dual_solver`. `ChiSquareAmbiguitySet` solves for its
+    maximizer exactly. With a
     `dual_solver` and a loose `tol`, the inexact maximizer biases the
     outer gradient, so tighten the tolerance before suspecting the outer
     optimizer.
@@ -448,8 +449,8 @@ centred on the group proportions.
 
 | Topic | Guidance |
 | --- | --- |
-| Inner cost | `KLAmbiguitySet` and `ChiSquareAmbiguitySet` locate the worst case by a bisection whose trip count is fixed by the dtype. Every step therefore has the same cost, and there is no tolerance to tune and no warm start to manage. |
-| Batched losses | Pass a batched loss of shape `(..., n)`. The inner problems decouple across the leading dimensions and are bisected jointly in one call. For minibatches drawn from a population, see [Minibatches from a population](#minibatches-from-a-population). |
+| Inner cost | `KLAmbiguitySet` locates the worst case by a bisection whose trip count is fixed by the dtype, and `ChiSquareAmbiguitySet` by one sort and a closed-form root. Every step therefore has the same cost, and there is no tolerance to tune and no warm start to manage. |
+| Batched losses | Pass a batched loss of shape `(..., n)`. The inner problems decouple across the leading dimensions and are solved jointly in one call. For minibatches drawn from a population, see [Minibatches from a population](#minibatches-from-a-population). |
 | Device and dtype | `ambiguity_set.to(device)` moves `nominal` and every cached buffer. The returned value is on the device of `loss` and has the promoted dtype of `loss` and `nominal`. Half-precision inputs, including those produced under `torch.autocast`, are solved in float32, and the result is rounded once. See [Numerical behaviour](numerics.md). |
 | Debugging | `validate=True` checks `nominal` and a tensor `radius` for invalid values at construction, and checks every `loss` for non-finite values at each call. The per-call check costs one host synchronization. |
 | Differentiable inputs | These are `loss`, `nominal` and a tensor `radius` (`alpha` for CVaR), as described in [Gradients with respect to `nominal` and `radius`](#gradients-with-respect-to-nominal-and-radius). The extra derivatives are computed only when `nominal` or the radius requires grad. |

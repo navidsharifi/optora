@@ -426,8 +426,9 @@ def test_repeated_calls_warm_start_from_the_previous_dual_optimum() -> None:
 
 
 def test_repeated_chi_square_calls_are_deterministic() -> None:
-    # The chi-square set is bisected rather than dual-solved, so it keeps no
-    # warm start and a repeat solve must reproduce the first one exactly.
+    # The chi-square set is solved in closed form rather than dual-solved,
+    # so it keeps no warm start and a repeat solve must reproduce the first
+    # one exactly.
     nominal = torch.tensor([0.25, 0.5, 0.25], dtype=torch.float64)
     base = torch.tensor([0.0, 1.0, 2.0], dtype=torch.float64)
     losses = [base * (1.0 + 0.05 * step) for step in range(3)]
@@ -636,6 +637,115 @@ def test_chi_square_returned_distribution_stays_inside_the_radius(
     assert differentiable.grad is not None
     divergence = ambiguity_set.divergence(differentiable.grad, nominal)
     assert float(divergence) <= feasibility_bound(radius, nominal.numel())
+
+
+def _chi_square_values(
+    nominal: torch.Tensor, loss: torch.Tensor, radius: torch.Tensor
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Return the worst case and its gradient with respect to `loss`."""
+    differentiable = loss.clone().requires_grad_(True)
+    value = ChiSquareAmbiguitySet(nominal, radius).worst_case_expectation(
+        differentiable
+    )
+    (gradient,) = torch.autograd.grad(value.sum(), differentiable)
+    return value.detach(), gradient
+
+
+@pytest.mark.parametrize(
+    ("dtype", "tolerance"), [(torch.float64, 1e-12), (torch.float32, 2e-5)]
+)
+@pytest.mark.parametrize("pattern", ["continuous", "tied", "zero_mass"])
+def test_chi_square_closed_form_root_matches_the_bisection(
+    monkeypatch: pytest.MonkeyPatch,
+    dtype: torch.dtype,
+    tolerance: float,
+    pattern: str,
+) -> None:
+    # Issue #108. The sorted closed form replaces the generic tilt
+    # bisection, so both must reach the same worst case and maximizer on
+    # every regime from a vanishing radius to past saturation.
+    generator = torch.Generator().manual_seed(0)
+    support, batch = 60, 48
+    weights = torch.rand(support, generator=generator, dtype=torch.float64) + 0.1
+    if pattern == "zero_mass":
+        weights[::4] = 0.0
+    nominal = (weights / weights.sum()).to(dtype)
+    loss = torch.randn(batch, support, generator=generator, dtype=torch.float64)
+    if pattern == "tied":
+        loss = torch.round(2.0 * loss)
+    loss = loss.to(dtype)
+    radius = torch.logspace(-10, 3, batch, dtype=dtype)
+
+    value, gradient = _chi_square_values(nominal, loss, radius)
+    monkeypatch.setattr(
+        ChiSquareAmbiguitySet, "_solve_tilt", TiltedAmbiguitySet._solve_tilt
+    )
+    bisected_value, bisected_gradient = _chi_square_values(nominal, loss, radius)
+
+    scale = loss.abs().amax(dim=-1)
+    assert torch.all((value - bisected_value).abs() <= tolerance * scale)
+    assert torch.allclose(gradient, bisected_gradient, atol=50 * tolerance)
+
+
+def test_chi_square_near_tied_maxima_keep_the_maximizer_feasible() -> None:
+    # Near saturation `1 - tilt` holds the cut depth only to an absolute eps,
+    # and here the next scenarios sit 1e-11 below the maximum, so one ulp of
+    # the tilt moves the divergence by several percent. The rounded root
+    # must then step to the feasible side, as the bisection would.
+    support = 20
+    nominal = torch.full((support,), 0.95 / (support - 1), dtype=torch.float64)
+    nominal[0] = 0.05
+    loss = torch.linspace(0.0, 2.0, support, dtype=torch.float64)
+    loss[0] = 3.0
+    loss[1:9] = 3.0 - 1e-11
+    saturation = 1.0 / 0.05 - 1.0
+    ambiguity_set = ChiSquareAmbiguitySet(nominal, radius=0.5 * saturation)
+    differentiable = loss.clone().requires_grad_(True)
+
+    ambiguity_set.worst_case_expectation(differentiable).backward()
+
+    assert differentiable.grad is not None
+    divergence = float(ambiguity_set.divergence(differentiable.grad, nominal))
+    assert divergence <= 0.5 * saturation
+    assert divergence >= 0.5 * saturation * (1.0 - 0.1)
+
+
+def test_chi_square_tensor_radius_handles_zero_and_infinity() -> None:
+    nominal = torch.tensor([0.1, 0.2, 0.3, 0.4], dtype=torch.float64)
+    loss = torch.tensor([0.0, 1.0, 2.0, 5.0], dtype=torch.float64)
+    radius = torch.tensor([0.0, math.inf], dtype=torch.float64)
+
+    value, gradient = _chi_square_values(nominal, loss.expand(2, -1), radius)
+
+    assert torch.allclose(value[0], torch.sum(nominal * loss), rtol=0.0, atol=1e-15)
+    assert float(value[1]) == 5.0
+    assert torch.equal(gradient[0], nominal)
+    assert torch.equal(gradient[1], torch.tensor([0.0, 0.0, 0.0, 1.0]).double())
+
+
+def test_chi_square_single_scenario_returns_its_loss() -> None:
+    nominal = torch.ones(3, 1, dtype=torch.float64)
+    loss = torch.tensor([[-1.0], [0.0], [2.5]], dtype=torch.float64)
+
+    value = ChiSquareAmbiguitySet(nominal, radius=0.3).worst_case_expectation(loss)
+
+    assert torch.equal(value, loss.squeeze(-1))
+
+
+def test_chi_square_shared_loss_broadcasts_against_batched_radii() -> None:
+    nominal = torch.tensor([0.1, 0.2, 0.3, 0.4], dtype=torch.float64)
+    loss = torch.tensor([0.0, 1.0, 2.0, 5.0], dtype=torch.float64)
+    radii = torch.tensor([1e-6, 0.2, 1.0, 1.4, 2.0], dtype=torch.float64)
+
+    batched = ChiSquareAmbiguitySet(nominal, radii).worst_case_expectation(loss)
+
+    expected = torch.stack(
+        [
+            ChiSquareAmbiguitySet(nominal, float(radius)).worst_case_expectation(loss)
+            for radius in radii
+        ]
+    )
+    assert torch.allclose(batched, expected, rtol=0.0, atol=1e-15)
 
 
 # --- TotalVariationAmbiguitySet --------------------------------------------
