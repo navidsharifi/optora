@@ -85,6 +85,11 @@ Convergence diagnostics and helper functions live in `optora.core`.
   `tutorials` extra (`pip install -e ".[tutorials]"`).
 - **Short examples, one component each**, runnable on a plain
   `pip install optora`: [`examples/`](examples/).
+- **Paper reproductions:** published DRO experiments rerun with the
+  released package, each claim compared with a tolerance fixed before the
+  run, in
+  [`optora-reproductions`](https://github.com/navidsharifi/optora-reproductions)
+  ([Colab notebook](https://colab.research.google.com/github/navidsharifi/optora-reproductions/blob/main/notebooks/reproductions.ipynb)).
 - **API reference:** built with Zensical from source docstrings, see
   [`docs/`](docs/index.md).
 - **Benchmarks:** latency, scaling, batched throughput, host

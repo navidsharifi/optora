@@ -101,6 +101,7 @@ nav = [
       { "Wasserstein and Sinkhorn balls" = "examples/ambiguity_sets/wasserstein_and_sinkhorn_balls.md" },
       { "MMD ball" = "examples/ambiguity_sets/mmd_ball.md" },
       { "Choosing the radius" = "examples/ambiguity_sets/radius_calibration.md" },
+      { "Batched ground costs" = "examples/ambiguity_sets/batched_ground_costs.md" },
     ] },
     { "Solvers" = [
       { "Gradient descent" = "examples/solvers/gradient_descent.md" },
@@ -112,6 +113,7 @@ nav = [
       { "Minibatch estimators" = "examples/training/minibatch_estimators.md" },
       { "Group DRO" = "examples/training/group_dro.md" },
     ] },
+    { "Paper reproductions" = "examples/reproductions.md" },
   ] },
   # END GENERATED EXAMPLES NAVIGATION
   # BEGIN GENERATED API NAVIGATION

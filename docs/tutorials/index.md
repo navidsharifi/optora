@@ -15,7 +15,11 @@ replays the sweep or the training run frame by frame.
 
 A tutorial combines several parts of the library to answer one question
 and explains the result in prose. For a short script that shows a single
-component and nothing else, see the [Examples](../examples/index.md).
+component and nothing else, see the [Examples](../examples/index.md). The
+tutorials test what a formulation predicts on synthetic problems. For
+reruns of experiments from published papers, each compared with a
+tolerance fixed in advance, see the
+[Paper reproductions](../examples/reproductions.md).
 
 ## Running them
 

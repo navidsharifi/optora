@@ -39,6 +39,7 @@ python examples/01_divergences/01_phi_divergences.py
 | [Wasserstein and Sinkhorn balls](ambiguity_sets/wasserstein_and_sinkhorn_balls.md) | Solve the worst case over a type-1 `WassersteinAmbiguitySet`, where the adversary moves mass along a ground cost instead of reweighting it, and check the closed form for a Lipschitz loss. Then solve the entropic relaxation `SinkhornAmbiguitySet` and watch it approach the exact value as the entropic strength shrinks. |
 | [MMD ball](ambiguity_sets/mmd_ball.md) | Solve the worst case over an `MMDAmbiguitySet` built from a Gaussian kernel. A KL ball can only reweight the scenarios the nominal already contains. The MMD ball can also move probability onto a scenario the nominal gives no mass, at a price set by the kernel. |
 | [Choosing the radius](ambiguity_sets/radius_calibration.md) | Turn a sample size and a confidence level into a radius with `chi_square_radius`, and check that the worst case over the resulting `ChiSquareAmbiguitySet` is the upper end of the normal confidence interval for the mean. |
+| [Batched ground costs](ambiguity_sets/batched_ground_costs.md) | Solve the Wasserstein worst case of several datasets in one call. Each dataset has its own support points, so each needs its own ground cost, and `WassersteinAmbiguitySet` takes them stacked as one tensor of shape `(..., n, n)`. The batched values are checked against one set per dataset and against the closed form for a Lipschitz loss, and a batch of radii is then solved for every dataset at once. |
 
 ## Solvers
 
@@ -56,10 +57,22 @@ python examples/01_divergences/01_phi_divergences.py
 | [Minibatch estimators](training/minibatch_estimators.md) | The worst case of a minibatch is a biased estimate of the worst case of the full dataset. Measure that bias for the plug-in estimate, remove most of it with `MultilevelMonteCarloEstimator`, and recover the full-batch value from minibatches alone with `StochasticPhiDual`. |
 | [Group DRO](training/group_dro.md) | Average the per-sample losses within each group with `group_losses`, and train on the worst group in two ways: exactly on the full batch with `CVaRAmbiguitySet(alpha=0)`, whose worst case is the largest group loss, and on minibatches with the exponentiated-gradient adversary `OnlineGroupDRO`. |
 
+## Paper reproductions
+
+The examples above check Optora against closed forms. The
+[optora-reproductions](https://github.com/navidsharifi/optora-reproductions)
+repository checks it against published experiments. Each reproduction
+installs the released package from PyPI, uses the public API only, and
+fixes its tolerances before the full run.
+[Paper reproductions](reproductions.md) lists the papers, what each
+run found and what it changed in the library, and one
+[Colab notebook](https://colab.research.google.com/github/navidsharifi/optora-reproductions/blob/main/notebooks/reproductions.ipynb)
+holds every report with its recorded results.
+
 ## Adding an example
 
 Put a numbered script into a numbered group folder, for example
-`examples/02_ambiguity_sets/06_new_ball.py`. The first line of its module
+`examples/02_ambiguity_sets/07_new_ball.py`. The first line of its module
 docstring is the title, and the paragraph after it is the summary shown
 above. `python -m tools.docs generate` then writes the page, this overview
 and the sidebar entry, and `python -m tools.docs check` fails in CI until

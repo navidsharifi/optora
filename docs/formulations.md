@@ -12,8 +12,11 @@ kept short and code-first on purpose, so the derivations live here. The
 [Tutorials](tutorials/index.md) walk through the runnable scripts under
 `tutorials/` in the repository, which exercise this math end to end with
 plots, and the [Examples](examples/index.md) show each component on its
-own in a short script. Every figure on this page is rendered from the library when the
-site is built.
+own in a short script. The
+[paper reproductions](examples/reproductions.md) rerun published
+experiments with the chi-square, total-variation and Wasserstein sets.
+Every figure on this page is rendered from the library when the site is
+built.
 
 ## Why distributionally robust optimization
 
@@ -361,6 +364,12 @@ a closed-form bracket and reaches the exact minimizer in a fixed number of
 steps set by the dtype. It uses a `SinkhornDivergence` internally only as
 an approximate `contains(...)` membership check. The worst-case
 expectation itself is solved exactly, without the entropic approximation.
+
+The ground cost may carry leading batch dimensions, with shape
+`(..., n, n)`. Each batch element then has its own cost matrix, so
+datasets with different support points are solved in one call. The
+example [Batched ground costs](examples/ambiguity_sets/batched_ground_costs.md)
+checks this against one set per dataset.
 
 <figure class="figure" markdown="span">
   ![Mass transport along a line and the piecewise-linear Wasserstein dual as the radius grows](assets/figures/wasserstein-dual-light.gif#only-light){ loading=lazy }
