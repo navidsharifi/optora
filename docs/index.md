@@ -34,7 +34,7 @@ decision against them.
 </div>
 
 <!-- optora-version-start -->
-Latest release: `v0.2.0`
+Latest release: `v0.3.0`
 <!-- optora-version-end -->
 
 ## Overview
