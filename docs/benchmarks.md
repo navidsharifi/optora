@@ -18,7 +18,9 @@ software that produced them.
     with the support size and the batch size and where host
     synchronizations occur, not the peak throughput of a device. To
     measure your own machine, including a GPU, see
-    [Reproducing](#reproducing).
+    [Reproducing](#reproducing). The
+    [paper reproductions](examples/reproductions.md) record the run times
+    of complete experiments, two of them on a laptop GPU.
 
 --8<-- "docs/assets/figures/benchmarks-highlights.md"
 
@@ -30,8 +32,11 @@ The chart times one call of `worst_case_expectation` on a batch of float32
 loss vectors, the shape one training step produces. It shows the forward
 pass alone and together with the backward pass, which returns the
 worst-case distribution. The KL, $\chi^2$, total variation, CVaR,
-Wasserstein and Sinkhorn sets run a fixed sequence of kernels whose length
-is set by the dtype. MMD runs an interior-point method to a duality gap of
+Wasserstein and Sinkhorn sets run a fixed sequence of kernels. Its length
+is known before the solve starts, from the dtype, the shape of the problem
+and the device, as
+[Mathematical formulations](formulations.md#tilt-solved-sets-and-the-bracketed-scalar-search)
+explains. MMD runs an interior-point method to a duality gap of
 $10^{-10}$, and the general $\varphi$ set runs an injected fixed-step dual
 solver for its full iteration budget.
 
@@ -106,8 +111,8 @@ Python value. The host then waits until the device has finished all queued
 work. The table above counts the conversions of a tensor to a Python `bool`,
 `int` or `float`, which is how such a read happens in a solver loop. The
 KL, $\chi^2$, total variation, CVaR, Wasserstein and Sinkhorn sets perform
-none, forward or backward, because their trip count is fixed by the dtype
-rather than by a convergence flag. The MMD interior-point method and the
+none, forward or backward, because their trip count is fixed by the dtype,
+the shape and the device rather than by a convergence flag. The MMD interior-point method and the
 general $\varphi$ dual check convergence every `check_interval` iterations,
 and each check is one synchronization. The test suite asserts these counts
 as exact budgets on every platform in CI, so a change that adds a

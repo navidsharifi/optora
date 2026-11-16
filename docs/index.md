@@ -229,6 +229,17 @@ is drawn by hand, and no rendered figure is committed to the repository.
 
     [:octicons-arrow-right-24: Numerical behaviour](numerics.md)
 
+-   :material-book-check-outline:{ .lg .middle } __Checked against published papers__
+
+    ---
+
+    A separate repository reruns experiments from published DRO papers
+    with the released package. Every claim is compared with a tolerance
+    fixed before the run, and a claim that falls outside it is reported
+    with its cause.
+
+    [:octicons-arrow-right-24: Paper reproductions](examples/reproductions.md)
+
 </div>
 
 ## Install
@@ -267,7 +278,13 @@ robust_decision = MinimaxSolver(solver=outer_solver).solve(problem).point
 
 To train an `nn.Module` instead, call `worst_case_expectation` on the
 per-sample loss and step any `torch.optim` optimizer, as the
-[training guide](training.md) shows.
+[training guide](training.md) shows. The [Examples](examples/index.md)
+show each component in a short script, the
+[Tutorials](tutorials/index.md) combine them in longer experiments, and
+the [paper reproductions](examples/reproductions.md) rerun published
+results, with one
+[Colab notebook](https://colab.research.google.com/github/navidsharifi/optora-reproductions/blob/main/notebooks/reproductions.ipynb)
+that holds every report.
 
 ## Imports
 

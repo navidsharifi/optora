@@ -57,11 +57,27 @@ combine several components and discuss the results, see the
 python examples/01_divergences/01_phi_divergences.py
 ```
 """
+REPRODUCTIONS_TITLE = "Paper reproductions"
+REPRODUCTIONS_PAGE = "reproductions.md"
+"""Hand-written page under `docs/examples/`, linked after the example groups."""
+EXAMPLES_OVERVIEW_REPRODUCTIONS = f"""\
+## {REPRODUCTIONS_TITLE}
+
+The examples above check Optora against closed forms. The
+[optora-reproductions](https://github.com/navidsharifi/optora-reproductions)
+repository checks it against published experiments. Each reproduction
+installs the released package from PyPI, uses the public API only, and
+fixes its tolerances before the full run.
+[{REPRODUCTIONS_TITLE}]({REPRODUCTIONS_PAGE}) lists the papers, what each
+run found and what it changed in the library, and one
+[Colab notebook](https://colab.research.google.com/github/navidsharifi/optora-reproductions/blob/main/notebooks/reproductions.ipynb)
+holds every report with its recorded results.
+"""
 EXAMPLES_OVERVIEW_OUTRO = """\
 ## Adding an example
 
 Put a numbered script into a numbered group folder, for example
-`examples/02_ambiguity_sets/06_new_ball.py`. The first line of its module
+`examples/02_ambiguity_sets/07_new_ball.py`. The first line of its module
 docstring is the title, and the paragraph after it is the summary shown
 above. `python -m tools.docs generate` then writes the page, this overview
 and the sidebar entry, and `python -m tools.docs check` fails in CI until
@@ -349,7 +365,11 @@ def render_example_page(example: ExampleDoc) -> str:
 
 
 def render_examples_overview(examples: list[ExampleDoc]) -> str:
-    """Render the examples landing page with one table per group."""
+    """Render the examples landing page with one table per group.
+
+    The tables are followed by a pointer to the hand-written page on the
+    paper reproductions.
+    """
     lines = [
         "---",
         "icon: lucide/code",
@@ -375,12 +395,15 @@ def render_examples_overview(examples: list[ExampleDoc]) -> str:
             path = example.relative_path.as_posix()
             lines.append(f"| [{example.title}]({path}) | {summary} |")
         lines.append("")
-    lines.append(EXAMPLES_OVERVIEW_OUTRO)
+    lines.extend([EXAMPLES_OVERVIEW_REPRODUCTIONS, EXAMPLES_OVERVIEW_OUTRO])
     return "\n".join(lines)
 
 
 def render_examples_navigation(examples: list[ExampleDoc]) -> str:
-    """Render the Zensical navigation of the examples, grouped by folder."""
+    """Render the Zensical navigation of the examples, grouped by folder.
+
+    The hand-written page on the paper reproductions closes the section.
+    """
     lines = ["  # BEGIN GENERATED EXAMPLES NAVIGATION", '  { "Examples" = [']
     lines.append('    { "Overview" = "examples/index.md" },')
     for group_members in group_examples(examples).values():
@@ -391,6 +414,10 @@ def render_examples_navigation(examples: list[ExampleDoc]) -> str:
                 f"      {{ {json.dumps(example.title)} = {json.dumps(path)} }},"
             )
         lines.append("    ] },")
+    reproductions = f"examples/{REPRODUCTIONS_PAGE}"
+    lines.append(
+        f"    {{ {json.dumps(REPRODUCTIONS_TITLE)} = {json.dumps(reproductions)} }},"
+    )
     lines.extend(["  ] },", "  # END GENERATED EXAMPLES NAVIGATION"])
     return "\n".join(lines)
 

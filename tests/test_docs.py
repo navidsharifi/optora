@@ -7,6 +7,8 @@ import pytest
 from tools.docs import (
     GENERATED_NOTICE,
     MOVED_TUTORIALS,
+    REPRODUCTIONS_PAGE,
+    REPRODUCTIONS_TITLE,
     ExampleDoc,
     ModuleDoc,
     discover_examples,
@@ -280,6 +282,41 @@ def test_render_examples_navigation_escapes_titles() -> None:
     assert '{ "Say \\"hi\\"" = "examples/a/b.md" },' in navigation
     assert navigation.startswith("  # BEGIN GENERATED EXAMPLES NAVIGATION")
     assert navigation.endswith("  # END GENERATED EXAMPLES NAVIGATION")
+
+
+def test_render_examples_navigation_closes_with_the_reproductions_page() -> None:
+    example = ExampleDoc(
+        script="examples/01_a/01_b.py", group="a", name="b", title="B", summary=""
+    )
+
+    entries = render_examples_navigation([example]).splitlines()
+
+    assert entries[-3] == (
+        f'    {{ "{REPRODUCTIONS_TITLE}" = "examples/{REPRODUCTIONS_PAGE}" }},'
+    )
+    assert entries[-4] == "    ] },"
+
+
+def test_examples_overview_links_the_reproductions_page(tmp_path: Path) -> None:
+    make_site(tmp_path)
+    write_example(tmp_path, "01_sets", "01_kl.py", "KL ball.\n\nSolves it.\n")
+
+    generate_documentation(tmp_path)
+
+    overview = (tmp_path / "docs" / "examples" / "index.md").read_text(encoding="utf-8")
+    section = overview.index(f"## {REPRODUCTIONS_TITLE}")
+    assert overview.index("## Sets") < section < overview.index("## Adding an example")
+    assert f"[{REPRODUCTIONS_TITLE}]({REPRODUCTIONS_PAGE})" in overview
+
+
+def test_reproductions_page_is_handwritten_and_survives_generation() -> None:
+    page = ROOT / "docs" / "examples" / REPRODUCTIONS_PAGE
+
+    text = page.read_text(encoding="utf-8")
+
+    assert text.startswith(f"# {REPRODUCTIONS_TITLE}\n")
+    assert GENERATED_NOTICE not in text
+    assert page not in outdated_documentation(ROOT)
 
 
 def test_generate_documentation_writes_example_pages_and_navigation(
