@@ -14,6 +14,7 @@ from optora.dro.mmd_dro import MMDAmbiguitySet
 from optora.dro.phi_dro import (
     ChiSquareAmbiguitySet,
     CVaRAmbiguitySet,
+    PenalizedChiSquareDRO,
     PhiAmbiguitySet,
     TotalVariationAmbiguitySet,
     chi_square_conjugate,
@@ -38,6 +39,7 @@ __all__ = [
     "MultilevelMonteCarloEstimator",
     "StochasticPhiDual",
     "OnlineGroupDRO",
+    "PenalizedChiSquareDRO",
     "chi_square_conjugate",
     "cvar_conjugate",
     "kl_conjugate",

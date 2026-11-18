@@ -4,9 +4,9 @@ Workloads are batched float32 losses, the shape a training step produces,
 except for the float64 chi-square case taken from a paper reproduction.
 Every exact set runs a trip count fixed by the dtype, so its forward and
 backward passes must issue zero host synchronizations, and so must the
-minibatch estimators built on them and the online group-DRO step; the
-general `PhiAmbiguitySet` dual and the nested minimax solve pay one per
-convergence checkpoint.
+minibatch estimators built on them, the penalized chi-square objective, and
+the online group-DRO step; the general `PhiAmbiguitySet` dual and the
+nested minimax solve pay one per convergence checkpoint.
 """
 
 import functools
@@ -23,6 +23,7 @@ from optora.dro.minibatch import MultilevelMonteCarloEstimator, StochasticPhiDua
 from optora.dro.minimax_solver import MinimaxProblem, MinimaxSolver
 from optora.dro.phi_dro import (
     ChiSquareAmbiguitySet,
+    PenalizedChiSquareDRO,
     PhiAmbiguitySet,
     chi_square_conjugate,
 )
@@ -275,6 +276,26 @@ def test_multilevel_estimate_gradient(guarded_benchmark: Callable[..., Any]) -> 
 
     def gradient() -> torch.Tensor:
         (grad,) = torch.autograd.grad(estimator(loss).sum(), loss)
+        return grad
+
+    grad = guarded_benchmark(gradient, host_syncs=0)
+
+    assert grad.shape == loss.shape
+
+
+@pytest.mark.parametrize("device", DEVICES)
+def test_penalized_chi_square_gradient(
+    device: str, guarded_benchmark: Callable[..., Any]
+) -> None:
+    # The penalized chi-square objective of Levy et al. (2020) over a sweep of
+    # penalties, forward and backward: one sort, no host reads.
+    generator = torch.Generator().manual_seed(0)
+    penalty = torch.logspace(-2, 1, BATCH, device=device)
+    objective = PenalizedChiSquareDRO(_nominal(generator).to(device), penalty)
+    loss = _batched_loss(generator).to(device).requires_grad_()
+
+    def gradient() -> torch.Tensor:
+        (grad,) = torch.autograd.grad(objective(loss).sum(), loss)
         return grad
 
     grad = guarded_benchmark(gradient, host_syncs=0)

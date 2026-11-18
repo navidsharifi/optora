@@ -29,6 +29,11 @@ They remain independent implementations — SciPy `brentq` and an active-set
 scan over NumPy arrays, against a bracketed torch bisection — and the
 per-set modules add fine-grid cross-checks against the convex duals, which
 the primal path never touches.
+
+`PenalizedChiSquareDRO` is checked against two references that share
+nothing with its sorted solve or with each other, the primal quadratic
+program solved by Clarabel and the one-dimensional dual minimized by a
+bounded Brent search.
 """
 
 import math
@@ -41,14 +46,17 @@ from optora.dro.kl_dro import KLAmbiguitySet
 from optora.dro.phi_dro import (
     ChiSquareAmbiguitySet,
     CVaRAmbiguitySet,
+    PenalizedChiSquareDRO,
     TotalVariationAmbiguitySet,
 )
 from optora.dro.wasserstein_dro import WassersteinAmbiguitySet
+from tests.dro.duality import penalized_chi_square_dual_minimum
 from tests.dro.instances import INSTANCES, Instance
 from tests.dro.oracles import (
     chi_square_worst_case,
     cvar_worst_case,
     kl_worst_case,
+    penalized_chi_square_value,
     total_variation_worst_case,
     wasserstein_worst_case,
 )
@@ -487,3 +495,106 @@ def test_a_vanishing_radius_matches_the_oracles(
     chi_square_excess = chi_square_reference - nominal_expectation
     assert abs(float(kl) - kl_reference) <= 1e-6 * kl_excess
     assert abs(float(chi_square) - chi_square_reference) <= 1e-6 * chi_square_excess
+
+
+# --- Penalized chi-square objective ----------------------------------------
+
+# Penalties from far below the loss spread, where the value is close to the
+# maximum loss, to far above it, where it is close to the nominal mean.
+PENALTIES = (1e-6, 1e-3, 0.05, 0.3, 1.0, 4.0, 1e2, 1e5)
+
+# Interior-point tolerance of the Clarabel quadratic program, relative to the
+# loss spread.
+QUADRATIC_PROGRAM_TOLERANCE = 1e-8
+
+
+def _loss_spread(instance: Instance) -> float:
+    """Return the loss spread on the positive support of the nominal."""
+    support = instance.nominal_array > 0.0
+    loss = instance.loss_array[support]
+    return float(loss.max() - loss.min())
+
+
+@pytest.mark.parametrize("instance", INSTANCES, ids=INSTANCE_IDS)
+@pytest.mark.parametrize("penalty", PENALTIES)
+def test_penalized_chi_square_matches_the_primal_quadratic_program(
+    instance: Instance, penalty: float
+) -> None:
+    nominal, loss, _ = instance.tensors()
+
+    result = PenalizedChiSquareDRO(nominal, penalty)(loss)
+
+    reference = penalized_chi_square_value(
+        instance.nominal_array, instance.loss_array, penalty
+    )
+    tolerance = QUADRATIC_PROGRAM_TOLERANCE * max(1.0, _loss_spread(instance))
+    assert abs(float(result) - reference) <= tolerance
+
+
+@pytest.mark.parametrize("instance", INSTANCES, ids=INSTANCE_IDS)
+@pytest.mark.parametrize("penalty", PENALTIES)
+def test_penalized_chi_square_matches_the_minimized_dual(
+    instance: Instance, penalty: float
+) -> None:
+    nominal, loss, _ = instance.tensors()
+
+    result = PenalizedChiSquareDRO(nominal, penalty)(loss)
+
+    reference = penalized_chi_square_dual_minimum(
+        instance.nominal_array, instance.loss_array, penalty
+    )
+    assert abs(float(result) - reference) <= ORACLE_TOLERANCE * max(
+        1.0, _loss_spread(instance)
+    )
+
+
+@pytest.mark.parametrize("instance", INSTANCES, ids=INSTANCE_IDS)
+@pytest.mark.parametrize("penalty", PENALTIES)
+def test_penalized_chi_square_references_agree(
+    instance: Instance, penalty: float
+) -> None:
+    primal = penalized_chi_square_value(
+        instance.nominal_array, instance.loss_array, penalty
+    )
+    dual = penalized_chi_square_dual_minimum(
+        instance.nominal_array, instance.loss_array, penalty
+    )
+
+    assert abs(primal - dual) <= QUADRATIC_PROGRAM_TOLERANCE * max(
+        1.0, _loss_spread(instance)
+    )
+
+
+@pytest.mark.parametrize("seed", range(20))
+def test_penalized_chi_square_matches_the_references_on_random_problems(
+    seed: int,
+) -> None:
+    generator = np.random.default_rng(seed)
+    size = int(generator.integers(2, 60))
+    nominal_array = generator.dirichlet(np.full(size, 0.7))
+    nominal_array[generator.random(size) < 0.1] = 0.0
+    nominal_array[0] += 1e-3
+    nominal_array /= nominal_array.sum()
+    scale = 10.0 ** generator.uniform(-3.0, 3.0)
+    loss_array = 10.0 * generator.normal() + scale * generator.normal(size=size)
+    penalty = scale * 10.0 ** generator.uniform(-4.0, 4.0)
+
+    result = PenalizedChiSquareDRO(
+        torch.tensor(nominal_array, dtype=torch.float64), penalty
+    )(torch.tensor(loss_array, dtype=torch.float64))
+
+    tolerance = QUADRATIC_PROGRAM_TOLERANCE * max(1.0, abs(float(result)), scale)
+    assert (
+        abs(
+            float(result)
+            - penalized_chi_square_value(nominal_array, loss_array, penalty)
+        )
+        <= tolerance
+    )
+    assert (
+        abs(
+            float(result)
+            - penalized_chi_square_dual_minimum(nominal_array, loss_array, penalty)
+        )
+        <= tolerance
+    )

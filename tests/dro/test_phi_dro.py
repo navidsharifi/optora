@@ -1,7 +1,8 @@
 """Tests for the phi-divergence ambiguity sets in `optora.dro.phi_dro`.
 
 Covers `PhiAmbiguitySet`, `ChiSquareAmbiguitySet`,
-`TotalVariationAmbiguitySet`, and `CVaRAmbiguitySet`.
+`TotalVariationAmbiguitySet`, `CVaRAmbiguitySet`, and
+`PenalizedChiSquareDRO`.
 """
 
 import functools
@@ -9,6 +10,7 @@ import math
 
 import pytest
 import torch
+from scipy.optimize import minimize_scalar
 
 from optora.core.convergence import ConvergenceStatus
 from optora.core.dro_base import AmbiguitySet, TiltedAmbiguitySet
@@ -23,6 +25,7 @@ from optora.dro.kl_dro import KLAmbiguitySet
 from optora.dro.phi_dro import (
     ChiSquareAmbiguitySet,
     CVaRAmbiguitySet,
+    PenalizedChiSquareDRO,
     PhiAmbiguitySet,
     TotalVariationAmbiguitySet,
     chi_square_conjugate,
@@ -1156,3 +1159,316 @@ def test_kl_conjugate_stays_finite_and_continuously_differentiable(
         slope, torch.full_like(slope, math.exp(limit)), rtol=2e-3, atol=0.0
     )
     assert torch.all(value[1:] >= value[:-1])
+
+
+# --- PenalizedChiSquareDRO --------------------------------------------------
+
+PENALTIES = (1e-6, 1e-2, 0.3, 1.0, 10.0, 1e4)
+
+# Instances whose losses are not all equal on the nominal's support.
+PENALIZED_INSTANCES = tuple(
+    instance for instance in INSTANCES if instance.name != "single_point"
+)
+
+
+def _penalized_maximizer(
+    objective: PenalizedChiSquareDRO, loss: torch.Tensor
+) -> torch.Tensor:
+    """Return the gradient of the penalized value at `loss`, its maximizer."""
+    differentiable = loss.clone().requires_grad_(True)
+    (gradient,) = torch.autograd.grad(objective(differentiable), differentiable)
+    return gradient
+
+
+def _untruncated_penalty(nominal: torch.Tensor, loss: torch.Tensor) -> float:
+    r"""Return the smallest penalty at which no scenario is truncated.
+
+    The cut level $\mathbb{E}_p[\ell] - 2\lambda$ lies below every loss once
+    $2\lambda \ge \mathbb{E}_p[\ell] - \min \ell$.
+    """
+    return 0.5 * float(nominal @ loss - loss.min())
+
+
+@pytest.mark.parametrize("instance", PENALIZED_INSTANCES, ids=lambda i: i.name)
+@pytest.mark.parametrize("multiple", [1.0, 1.5, 10.0, 1e6])
+def test_penalized_chi_square_is_the_variance_penalty_without_truncation(
+    instance: Instance, multiple: float
+) -> None:
+    nominal, loss, _ = instance.tensors()
+    support = nominal > 0.0
+    nominal, loss = nominal[support], loss[support]
+    penalty = multiple * _untruncated_penalty(nominal, loss)
+    mean = nominal @ loss
+    variance = nominal @ (loss - mean) ** 2
+
+    value = PenalizedChiSquareDRO(nominal, penalty)(loss)
+
+    torch.testing.assert_close(
+        value, mean + variance / (4.0 * penalty), rtol=1e-14, atol=1e-14
+    )
+
+
+@pytest.mark.parametrize("instance", PENALIZED_INSTANCES, ids=lambda i: i.name)
+def test_penalized_chi_square_tends_to_the_maximum_on_the_support(
+    instance: Instance,
+) -> None:
+    nominal, loss, _ = instance.tensors()
+    maximum = float(loss[nominal > 0.0].max())
+    penalties = torch.tensor([1e-2, 1e-4, 1e-6, 1e-9], dtype=torch.float64)
+
+    values = PenalizedChiSquareDRO(nominal, penalties)(loss)
+
+    assert torch.all(values <= maximum)
+    gaps = maximum - values
+    assert torch.all(gaps[1:] <= gaps[:-1])
+    assert float(gaps[-1]) <= 1e-8
+
+
+@pytest.mark.parametrize("instance", PENALIZED_INSTANCES, ids=lambda i: i.name)
+def test_penalized_chi_square_tends_to_the_nominal_expectation(
+    instance: Instance,
+) -> None:
+    # Weak duality at the untruncated cut level E[loss] - 2 penalty bounds
+    # the value by the variance penalty, which vanishes as the penalty grows.
+    nominal, loss, _ = instance.tensors()
+    mean = nominal @ loss
+    variance = nominal @ (loss - mean) ** 2
+    penalties = torch.tensor([1e-2, 1.0, 1e2, 1e4, 1e8, 1e12], dtype=torch.float64)
+
+    values = PenalizedChiSquareDRO(nominal, penalties)(loss)
+
+    assert torch.all(values >= mean)
+    assert torch.all(values[1:] <= values[:-1])
+    assert torch.all(values - mean <= variance / (4.0 * penalties) + 1e-13)
+
+
+@pytest.mark.parametrize("instance", PENALIZED_INSTANCES, ids=lambda i: i.name)
+@pytest.mark.parametrize("penalty", PENALTIES)
+def test_penalized_chi_square_maximizer_attains_the_value(
+    instance: Instance, penalty: float
+) -> None:
+    nominal, loss, _ = instance.tensors()
+    objective = PenalizedChiSquareDRO(nominal, penalty)
+
+    maximizer = _penalized_maximizer(objective, loss)
+    on_support = nominal > 0.0
+    deviation = maximizer[on_support] - nominal[on_support]
+    divergence = torch.sum(deviation**2 / nominal[on_support])
+
+    assert float(maximizer.min()) >= 0.0
+    assert float(maximizer.sum()) == pytest.approx(1.0, abs=1e-14)
+    assert torch.all(maximizer[~on_support] == 0.0)
+    torch.testing.assert_close(
+        maximizer @ loss - penalty * divergence,
+        objective(loss),
+        rtol=1e-12,
+        atol=1e-12,
+    )
+
+
+@pytest.mark.parametrize("instance", PENALIZED_INSTANCES, ids=lambda i: i.name)
+@pytest.mark.parametrize("penalty", PENALTIES)
+def test_penalized_chi_square_maximizer_is_the_truncated_linear_tilt(
+    instance: Instance, penalty: float
+) -> None:
+    # The level c is read off the maximizer's support independently of the
+    # solve: on the scenarios with positive weight, q_i / p_i is
+    # (loss_i - c) / (2 penalty).
+    nominal, loss, _ = instance.tensors()
+
+    maximizer = _penalized_maximizer(PenalizedChiSquareDRO(nominal, penalty), loss)
+
+    active = maximizer > 0.0
+    levels = loss[active] - 2.0 * penalty * maximizer[active] / nominal[active]
+    level = levels.mean()
+    torch.testing.assert_close(
+        levels, torch.full_like(levels, float(level)), rtol=1e-9, atol=1e-9
+    )
+    on_support = nominal > 0.0
+    assert torch.all(loss[on_support & ~active] <= level + 1e-9)
+
+
+@pytest.mark.parametrize("scale", [1e-6, 1e-3, 1.0, 1e3, 1e6])
+@pytest.mark.parametrize("offset", [0.0, -1e8, 1e8])
+def test_penalized_chi_square_is_affine_equivariant(
+    scale: float, offset: float
+) -> None:
+    # The value of (a loss + b, a penalty) is a times that of (loss, penalty)
+    # plus b, so a large offset or a tiny spread keeps the precision of the
+    # spread.
+    nominal, loss, _ = INSTANCES[0].tensors()
+    reference = PenalizedChiSquareDRO(nominal, 0.4)(loss)
+
+    value = PenalizedChiSquareDRO(nominal, 0.4 * scale)(offset + scale * loss)
+
+    tolerance = 1e-12 * scale + 8.0 * math.ulp(offset)
+    assert abs(float(value) - (offset + scale * float(reference))) <= tolerance
+
+
+def test_penalized_chi_square_single_scenario_returns_its_loss() -> None:
+    nominal = torch.tensor([1.0], dtype=torch.float64)
+
+    value = PenalizedChiSquareDRO(nominal, 0.5)(
+        torch.tensor([2.5], dtype=torch.float64)
+    )
+
+    assert float(value) == 2.5
+
+
+def test_penalized_chi_square_constant_loss_returns_it() -> None:
+    nominal, _, _ = INSTANCES[0].tensors()
+    loss = torch.full_like(nominal, -3.25)
+
+    value = PenalizedChiSquareDRO(nominal, 1e-3)(loss)
+
+    assert float(value) == -3.25
+
+
+def test_penalized_chi_square_ignores_the_loss_of_a_zero_mass_scenario() -> None:
+    nominal = torch.tensor([0.0, 0.3, 0.3, 0.4], dtype=torch.float64)
+    loss = torch.tensor([9.0, 1.0, 2.0, 5.0], dtype=torch.float64)
+    restricted = PenalizedChiSquareDRO(nominal[1:], 0.7)(loss[1:])
+
+    for entry in (-1e6, 9.0, 1e6):
+        loss[0] = entry
+        assert float(PenalizedChiSquareDRO(nominal, 0.7)(loss)) == pytest.approx(
+            float(restricted), rel=1e-15, abs=1e-15
+        )
+
+
+@pytest.mark.parametrize("radius", [1e-3, 0.1, 0.5, 1.2])
+def test_penalized_chi_square_dualizes_the_constrained_worst_case(
+    radius: float,
+) -> None:
+    # Lagrangian duality: the constrained worst case is the infimum over the
+    # penalty of radius * penalty plus the penalized value.
+    nominal, loss, _ = INSTANCES[0].tensors()
+
+    def lagrangian(log_penalty: float) -> float:
+        penalty = math.exp(log_penalty)
+        return radius * penalty + float(PenalizedChiSquareDRO(nominal, penalty)(loss))
+
+    solution = minimize_scalar(
+        lagrangian, bounds=(-30.0, 30.0), method="bounded", options={"xatol": 1e-12}
+    )
+
+    constrained = ChiSquareAmbiguitySet(nominal, radius).worst_case_expectation(loss)
+    assert float(solution.fun) == pytest.approx(float(constrained), rel=1e-10)
+
+
+def test_penalized_chi_square_splits_tied_maxima_in_proportion_to_nominal() -> None:
+    # The objective is strongly concave in q, so tied maxima share the
+    # weight in proportion to their nominal mass.
+    nominal = torch.tensor([0.1, 0.2, 0.3, 0.4], dtype=torch.float64)
+    loss = torch.tensor([0.0, 1.0, 5.0, 5.0], dtype=torch.float64)
+
+    maximizer = _penalized_maximizer(PenalizedChiSquareDRO(nominal, 1e-3), loss)
+
+    torch.testing.assert_close(
+        maximizer, torch.tensor([0.0, 0.0, 3.0 / 7.0, 4.0 / 7.0], dtype=torch.float64)
+    )
+
+
+def test_penalized_chi_square_uses_levy_et_al_scaling_by_half() -> None:
+    # Levy et al. (2020) penalize (1/2) sum_i (q_i - p_i)^2 / p_i with their
+    # regularization reg, which is penalty = reg / 2 here. Untruncated, their
+    # value is E[loss] + Var(loss) / (2 reg).
+    nominal = torch.full((5,), 0.2, dtype=torch.float64)
+    loss = torch.tensor([1.0, 1.5, 2.0, 2.5, 3.0], dtype=torch.float64)
+    reg = 4.0
+
+    value = PenalizedChiSquareDRO(nominal, reg / 2.0)(loss)
+
+    variance = float(torch.var(loss, correction=0))
+    assert float(value) == pytest.approx(2.0 + variance / (2.0 * reg), rel=1e-15)
+
+
+def test_penalized_chi_square_is_a_module_but_not_an_ambiguity_set() -> None:
+    nominal, _, _ = INSTANCES[0].tensors()
+    penalty = torch.tensor([0.1, 1.0], dtype=torch.float64)
+
+    objective = PenalizedChiSquareDRO(nominal, penalty)
+
+    assert isinstance(objective, torch.nn.Module)
+    assert not isinstance(objective, AmbiguitySet)
+    assert set(objective.state_dict()) == {"nominal", "penalty"}
+    assert objective.nominal is nominal
+    assert objective.penalty is penalty
+
+
+@pytest.mark.parametrize("penalty", [0.0, -1.0, math.nan, math.inf])
+def test_penalized_chi_square_rejects_a_float_penalty_that_is_not_positive(
+    penalty: float,
+) -> None:
+    nominal, _, _ = INSTANCES[0].tensors()
+
+    with pytest.raises(ValueError, match="penalty must be positive and finite"):
+        PenalizedChiSquareDRO(nominal, penalty)
+
+
+@pytest.mark.parametrize("entry", [0.0, -1.0, math.nan, math.inf])
+def test_penalized_chi_square_validate_rejects_a_bad_tensor_penalty(
+    entry: float,
+) -> None:
+    nominal, _, _ = INSTANCES[0].tensors()
+    penalty = torch.tensor([0.5, entry], dtype=torch.float64)
+
+    with pytest.raises(ValueError, match="penalty must be positive"):
+        PenalizedChiSquareDRO(nominal, penalty, validate=True)
+
+
+def test_penalized_chi_square_accepts_an_unchecked_tensor_penalty() -> None:
+    # Without validation the entries are never read, and the solve still
+    # stays inside the support for a nonpositive penalty.
+    nominal, loss, _ = INSTANCES[0].tensors()
+    penalty = torch.tensor([0.5, 0.0, -1.0], dtype=torch.float64)
+
+    value = PenalizedChiSquareDRO(nominal, penalty)(loss)
+
+    assert value.shape == (3,)
+    assert torch.isfinite(value[0])
+
+
+def test_penalized_chi_square_validate_rejects_an_invalid_nominal() -> None:
+    with pytest.raises(ValueError, match="nominal must sum to one"):
+        PenalizedChiSquareDRO(
+            torch.tensor([0.5, 0.6], dtype=torch.float64), 1.0, validate=True
+        )
+
+
+def test_penalized_chi_square_validate_rejects_a_non_finite_loss() -> None:
+    nominal, loss, _ = INSTANCES[0].tensors()
+    loss[1] = math.inf
+
+    with pytest.raises(ValueError, match="loss must be finite"):
+        PenalizedChiSquareDRO(nominal, 1.0, validate=True)(loss)
+
+
+def test_penalized_chi_square_rejects_a_scalar_nominal() -> None:
+    with pytest.raises(ValueError, match="scalar tensor"):
+        PenalizedChiSquareDRO(torch.tensor(1.0), 1.0)
+
+
+def test_penalized_chi_square_rejects_an_invalid_eps() -> None:
+    nominal, _, _ = INSTANCES[0].tensors()
+
+    with pytest.raises(ValueError, match="eps"):
+        PenalizedChiSquareDRO(nominal, 1.0, eps=0.0)
+
+
+@pytest.mark.parametrize("shape", [(), (3,), (2, 5)], ids=str)
+def test_penalized_chi_square_rejects_a_mismatched_loss_shape(
+    shape: tuple[int, ...],
+) -> None:
+    nominal, _, _ = INSTANCES[0].tensors()
+
+    with pytest.raises(ValueError, match="loss must have shape"):
+        PenalizedChiSquareDRO(nominal, 1.0)(torch.zeros(shape, dtype=torch.float64))
+
+
+def test_penalized_chi_square_rejects_a_penalty_batch_that_does_not_broadcast() -> None:
+    nominal, loss, _ = INSTANCES[0].tensors()
+    objective = PenalizedChiSquareDRO(nominal, torch.ones(3, dtype=torch.float64))
+
+    with pytest.raises(ValueError, match="batch shapes do not broadcast"):
+        objective(loss.expand(2, -1))

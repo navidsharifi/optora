@@ -19,6 +19,7 @@ from optora.dro.mmd_dro import MMDAmbiguitySet
 from optora.dro.phi_dro import (
     ChiSquareAmbiguitySet,
     CVaRAmbiguitySet,
+    PenalizedChiSquareDRO,
     PhiAmbiguitySet,
     TotalVariationAmbiguitySet,
 )
@@ -438,3 +439,169 @@ def test_cpu_autocast_does_not_change_the_worst_case(spec: SetSpec) -> None:
 
     assert value.dtype == torch.float32
     assert torch.equal(value, expected)
+
+
+# --- PenalizedChiSquareDRO ---------------------------------------------------
+
+PENALTY = 0.3
+
+
+def _penalized(dtype: torch.dtype) -> PenalizedChiSquareDRO:
+    # A tensor penalty exercises the buffers; its entries are dyadic so every
+    # dtype holds exactly the same penalties.
+    return PenalizedChiSquareDRO(
+        _nominal(dtype), torch.tensor([0.125, 0.5, 4.0], dtype=dtype)
+    )
+
+
+def test_penalized_chi_square_preserves_the_input_dtype(dtype: torch.dtype) -> None:
+    loss = torch.tensor(LOSS, dtype=dtype)
+
+    value = _penalized(dtype)(loss)
+
+    assert value.dtype == dtype
+    assert value.device == loss.device
+
+
+def test_penalized_chi_square_half_precision_is_the_float32_value_rounded(
+    half_dtype: torch.dtype,
+) -> None:
+    loss = torch.tensor(LOSS, dtype=half_dtype)
+
+    value = _penalized(half_dtype)(loss)
+
+    expected = _penalized(torch.float32)(loss.float())
+    assert value.dtype == half_dtype
+    assert torch.equal(value, expected.to(half_dtype))
+
+
+def test_penalized_chi_square_a_half_precision_loss_on_float32_returns_float32(
+    half_dtype: torch.dtype,
+) -> None:
+    loss = torch.tensor(LOSS, dtype=half_dtype)
+
+    value = _penalized(torch.float32)(loss)
+
+    assert value.dtype == torch.float32
+    assert torch.equal(value, _penalized(torch.float32)(loss.float()))
+
+
+def test_penalized_chi_square_gradients_follow_the_parameter_dtypes(
+    half_dtype: torch.dtype,
+) -> None:
+    nominal = _nominal(half_dtype).requires_grad_(True)
+    penalty = torch.tensor(PENALTY, dtype=half_dtype, requires_grad=True)
+    loss = torch.tensor(LOSS, dtype=half_dtype, requires_grad=True)
+
+    value = PenalizedChiSquareDRO(nominal, penalty)(loss)
+    gradients = torch.autograd.grad(value, (loss, nominal, penalty))
+
+    assert [gradient.dtype for gradient in gradients] == [half_dtype] * 3
+
+
+@pytest.mark.parametrize("seed", range(40))
+def test_penalized_chi_square_float32_matches_float64_on_random_problems(
+    seed: int,
+) -> None:
+    nominal, loss, _, radius = _random_problem(seed)
+    spread = float(torch.amax(loss) - torch.amin(loss))
+    penalty = max(spread, 1e-3) * radius
+
+    value = PenalizedChiSquareDRO(nominal, penalty)(loss)
+
+    expected = float(PenalizedChiSquareDRO(nominal.double(), penalty)(loss.double()))
+    tolerance = (
+        FLOAT32_TOLERANCE_EPS
+        * torch.finfo(torch.float32).eps
+        * max(abs(expected), spread, math.ulp(0.0))
+    )
+    assert value.dtype == torch.float32
+    assert abs(float(value) - expected) <= tolerance
+
+
+@requires_cuda
+def test_penalized_chi_square_buffers_follow_the_module_to_cuda(
+    dtype: torch.dtype,
+) -> None:
+    objective = _penalized(dtype).to(torch.device("cuda"))
+
+    names = dict(objective.named_buffers())
+    assert set(names) == {"nominal", "penalty"}
+    for name, buffer in names.items():
+        assert buffer.device.type == "cuda", name
+        assert buffer.dtype == dtype, name
+
+
+@requires_cuda
+def test_penalized_chi_square_cuda_matches_cpu(dtype: torch.dtype) -> None:
+    generator = torch.Generator().manual_seed(0)
+    nominal = torch.rand(64, generator=generator, dtype=dtype) + 0.1
+    nominal = nominal / nominal.sum()
+    loss = torch.randn(8, 1, 64, generator=generator, dtype=dtype)
+    penalty = torch.logspace(-3, 2, 6, dtype=dtype)
+    cpu = PenalizedChiSquareDRO(nominal, penalty)
+    cuda = PenalizedChiSquareDRO(nominal, penalty).to("cuda")
+    cpu_loss = loss.clone().requires_grad_(True)
+    cuda_loss = loss.to("cuda").requires_grad_(True)
+
+    cpu_value = cpu(cpu_loss)
+    cuda_value = cuda(cuda_loss)
+    (cpu_gradient,) = torch.autograd.grad(cpu_value.sum(), cpu_loss)
+    (cuda_gradient,) = torch.autograd.grad(cuda_value.sum(), cuda_loss)
+
+    tolerance = 1e-5 if dtype == torch.float32 else 1e-12
+    assert cuda_value.device.type == "cuda"
+    torch.testing.assert_close(
+        cuda_value.cpu(), cpu_value, rtol=tolerance, atol=tolerance
+    )
+    torch.testing.assert_close(
+        cuda_gradient.cpu(), cpu_gradient, rtol=tolerance, atol=tolerance
+    )
+
+
+@requires_cuda
+def test_penalized_chi_square_forward_and_backward_capture_in_a_cuda_graph(
+    dtype: torch.dtype,
+) -> None:
+    # Capturing raises on any host synchronization, so a successful capture
+    # and replay shows the forward and backward passes stay on the device.
+    device = torch.device("cuda")
+    generator = torch.Generator().manual_seed(0)
+    nominal = (torch.rand(32, generator=generator, dtype=dtype) + 0.1).to(device)
+    nominal = nominal / nominal.sum()
+    penalty = torch.logspace(-2, 1, 4, dtype=dtype, device=device)
+    objective = PenalizedChiSquareDRO(nominal, penalty)
+    static_loss = torch.randn(16, 1, 32, dtype=dtype, device=device)
+
+    def step() -> tuple[torch.Tensor, torch.Tensor]:
+        loss = static_loss.requires_grad_(True)
+        value = objective(loss)
+        (gradient,) = torch.autograd.grad(value.sum(), loss)
+        return value, gradient
+
+    side = torch.cuda.Stream()
+    side.wait_stream(torch.cuda.current_stream())
+    with torch.cuda.stream(side):
+        for _ in range(3):
+            step()
+    torch.cuda.current_stream().wait_stream(side)
+    graph = torch.cuda.CUDAGraph()
+    with torch.cuda.graph(graph):
+        static_value, static_gradient = step()
+
+    for seed in range(3):
+        fresh = torch.randn(
+            16,
+            1,
+            32,
+            generator=torch.Generator().manual_seed(seed),
+            dtype=dtype,
+        ).to(device)
+        with torch.no_grad():
+            static_loss.copy_(fresh)
+        graph.replay()
+        reference = fresh.clone().requires_grad_(True)
+        expected_value = objective(reference)
+        (expected_gradient,) = torch.autograd.grad(expected_value.sum(), reference)
+        torch.testing.assert_close(static_value, expected_value)
+        torch.testing.assert_close(static_gradient, expected_gradient)

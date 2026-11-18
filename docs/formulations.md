@@ -341,6 +341,80 @@ the value is the maximum loss on the support of the nominal.
   approaches the maximum loss.</figcaption>
 </figure>
 
+### `PenalizedChiSquareDRO`
+
+Levy, Carmon, Duchi, and Sidford (2020, Eq. 4) also study a penalized form
+of chi-square DRO, in which the divergence is subtracted from the objective
+instead of being bounded,
+
+$$
+V(\mathrm{loss})
+= \sup_{q \in \Delta_n} \; \mathbb{E}_q[\mathrm{loss}]
+    - \lambda \, D_{\chi^2}(q \,\|\, \mathrm{nominal}),
+\qquad \lambda > 0 .
+$$
+
+This value is not a worst case over a fixed ball, so
+`PenalizedChiSquareDRO` is a module of its own and not an `AmbiguitySet`.
+Calling it returns $V$, and `penalty` is $\lambda$. Levy et al. write the
+divergence with the generator $\frac{1}{2}(t - 1)^2$, which is half of
+`ChiSquareDivergence`, so their penalty $\lambda_{\mathrm{Levy}}$ is
+`penalty` $= \lambda_{\mathrm{Levy}} / 2$ here.
+
+The penalized value is the Lagrangian relaxation of the constrained one.
+For a radius $\rho > 0$, Lagrangian duality gives
+$\sup_{q:\, D_{\chi^2}(q \,\|\, p) \le \rho} \mathbb{E}_q[\ell] =
+\inf_{\lambda \ge 0} \lambda \rho + V_\lambda(\ell)$
+(Boyd and Vandenberghe, 2004, Section 5.2). The penalized problem itself
+has the one-dimensional dual (Ben-Tal and Teboulle, 2007)
+
+$$
+V(\mathrm{loss})
+= \inf_{c \in \mathbb{R}} \; c + \lambda
+    + \frac{1}{4\lambda} \, \mathbb{E}_{\mathrm{nominal}}\big[(\mathrm{loss} - c)_+^2\big],
+$$
+
+whose minimizer $c^\star$ solves
+$\mathbb{E}_{\mathrm{nominal}}[(\mathrm{loss} - c^\star)_+] = 2\lambda$. The
+maximizer is the same truncated linear tilt as for `ChiSquareAmbiguitySet`,
+
+$$
+q^\star_i = \mathrm{nominal}_i \, \frac{(\mathrm{loss}_i - c^\star)_+}{2\lambda} .
+$$
+
+When no scenario is truncated, $c^\star = \mathbb{E}_{\mathrm{nominal}}[\ell]
+- 2\lambda$, and substituting it into the dual gives
+
+$$
+V(\mathrm{loss})
+= \mathbb{E}_{\mathrm{nominal}}[\ell]
+    + \frac{\mathrm{Var}_{\mathrm{nominal}}(\ell)}{4\lambda} .
+$$
+
+Gotoh, Kim, and Lim (2018) show that a smooth phi-divergence penalty acts
+like a variance penalty to leading order. For chi-square the identity is
+exact as long as no scenario is truncated, and minimizing
+$\lambda \rho + \mathbb{E}[\ell] + \mathrm{Var}(\ell) / (4\lambda)$ over
+$\lambda$ recovers the constrained value
+$\mathbb{E}[\ell] + \sqrt{\rho \, \mathrm{Var}(\ell)}$ of the previous
+section. As $\lambda \to \infty$ the value tends to the nominal mean, and as
+$\lambda \to 0$ it tends to the largest loss on the support of the nominal.
+
+The normalization condition is piecewise linear in the cut level, so the
+solve sorts the scenarios by loss and reads the truncated ones off
+cumulative sums of nonnegative terms, as for the constrained set. With that
+active set held fixed, the cut level is an explicit function of the loss,
+the nominal, and $\lambda$, and the value is evaluated as the dual objective
+in ordinary differentiable operations. Autograd then returns exact
+derivatives of every order. The first derivatives are the maximizer
+$q^\star$ in the loss (Danskin's theorem), and $-D_{\chi^2}(q^\star \,\|\,
+\mathrm{nominal})$ in $\lambda$ (the envelope theorem). Nothing in the
+forward or backward pass reads a value back to the host, so both can be
+captured in a CUDA graph. On minibatches the plug-in value is biased in the
+same way as a plug-in worst case, and `MultilevelMonteCarloEstimator`
+accepts a factory that returns this module, which is how Levy et al.
+estimate its gradient.
+
 ### `WassersteinAmbiguitySet`
 
 The Wasserstein ball, for candidates on the same finite support as the

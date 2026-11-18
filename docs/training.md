@@ -297,7 +297,10 @@ remedies.
     set built from a nominal alone. It reduces the bias to that of a
     single solve on $n_0 2^L$ samples, at an expected batch size of
     $n_0 L / (1 - 2^{-L})$ (Blanchet and Glynn 2015; Levy et al. 2020).
-    The batch size is drawn at every step.
+    The batch size is drawn at every step. The factory may also return the
+    penalized objective `PenalizedChiSquareDRO`, for example
+    `functools.partial(PenalizedChiSquareDRO, penalty=0.5)`, which is the
+    other chi-square objective Levy et al. estimate this way.
 
     ```python
     import functools
