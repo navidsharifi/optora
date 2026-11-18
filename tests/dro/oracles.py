@@ -34,6 +34,10 @@ Three families of reference are used:
 - A second-order cone program (`mmd_worst_case`) solved by Clarabel's
   interior-point method, an implementation independent of optora's.
 
+`penalized_chi_square_value` solves the primal of
+`optora.dro.PenalizedChiSquareDRO`, which subtracts a divergence penalty
+instead of bounding it, as a quadratic program, also with Clarabel.
+
 Each reference handles the saturated regime, where the radius is large
 enough that the ambiguity set contains a distribution supported entirely
 on the highest-loss scenarios and the worst case is simply `max(loss)`,
@@ -566,3 +570,71 @@ def mmd_worst_case(nominal: Array, gram: Array, loss: Array, radius: float) -> f
     if str(solution.status) not in {"Solved", "AlmostSolved"}:
         raise RuntimeError(f"Clarabel failed: {solution.status}")
     return low + spread * float(-solution.obj_val)
+
+
+def penalized_chi_square_value(nominal: Array, loss: Array, penalty: float) -> float:
+    r"""Solve the penalized chi-square objective as a quadratic program with Clarabel.
+
+    Expanding $\sum_i (q_i - p_i)^2 / p_i = \sum_i q_i^2 / p_i - 1$ on the
+    simplex turns
+
+    $$
+    \max_q \; \mathrm{loss}^\top q
+        - \lambda \sum_i \frac{(q_i - p_i)^2}{p_i}
+    \quad \text{s.t.} \quad
+    \mathbf{1}^\top q = 1, \; q \ge 0
+    $$
+
+    into the minimization of $\lambda \sum_i q_i^2 / p_i -
+    \mathrm{loss}^\top q$ over the simplex, solved on the positive support
+    of $p$, where the divergence is finite. Clarabel's tolerances are
+    absolute, so the program is solved on the loss standardized to unit
+    spread with the penalty in the same units, and mapped back, using that
+    the value of $(a \ell + b, a \lambda)$ is $a$ times that of
+    $(\ell, \lambda)$ plus $b$ for $a > 0$.
+
+    Args:
+        nominal: Reference distribution of shape `(n,)`.
+        loss: Per-scenario losses of shape `(n,)`.
+        penalty: Positive penalty on the chi-square divergence.
+
+    Returns:
+        The penalized value.
+
+    Raises:
+        RuntimeError: If Clarabel does not reach an optimal or nearly
+            optimal solution.
+    """
+    nominal, loss = _positive_support(_as_float64(nominal), _as_float64(loss))
+    support_size = loss.shape[0]
+    low = float(loss.min())
+    spread = float(loss.max()) - low
+    if spread == 0.0:
+        return low
+    standardized = (loss - low) / spread
+    scaled_penalty = penalty / spread
+    constraints = sparse.vstack(
+        [
+            sparse.csc_matrix(np.ones((1, support_size))),
+            -sparse.identity(support_size, format="csc"),
+        ]
+    ).tocsc()
+    bounds = np.concatenate([[1.0], np.zeros(support_size)])
+    cones = [clarabel.ZeroConeT(1), clarabel.NonnegativeConeT(support_size)]
+    settings = clarabel.DefaultSettings()
+    settings.verbose = False
+    settings.tol_gap_abs = 1e-12
+    settings.tol_gap_rel = 1e-12
+    settings.tol_feas = 1e-12
+    solver = clarabel.DefaultSolver(
+        sparse.diags(2.0 * scaled_penalty / nominal, format="csc"),
+        -standardized,
+        constraints,
+        bounds,
+        cones,
+        settings,
+    )
+    solution = solver.solve()
+    if str(solution.status) not in {"Solved", "AlmostSolved"}:
+        raise RuntimeError(f"Clarabel failed: {solution.status}")
+    return low + spread * (scaled_penalty - float(solution.obj_val))

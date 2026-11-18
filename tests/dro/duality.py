@@ -222,6 +222,71 @@ def chi_square_dual_minimum(nominal: Array, loss: Array, radius: float) -> float
     )
 
 
+def penalized_chi_square_dual(
+    nominal: Array, loss: Array, penalty: float, level: float
+) -> float:
+    r"""Evaluate the dual of the penalized chi-square objective at a cut level.
+
+    For the penalty $\lambda > 0$ and the generator $\phi(t) = (t - 1)^2$,
+    whose conjugate on $t \ge 0$ is $\phi^*(s) = \frac{1}{4}(s + 2)_+^2 - 1$,
+    the dual $\eta + \lambda\,\mathbb{E}_p[\phi^*((\ell - \eta) / \lambda)]$
+    reads, with $c = \eta - 2\lambda$,
+
+    $$
+    c + \lambda + \frac{1}{4\lambda}\, \mathbb{E}_p\big[(\ell - c)_+^2\big].
+    $$
+
+    Args:
+        nominal: Reference distribution of shape `(n,)`.
+        loss: Per-scenario losses of shape `(n,)`.
+        penalty: Positive penalty on the chi-square divergence.
+        level: Real cut level $c$.
+
+    Returns:
+        The dual objective, an upper bound on the penalized value.
+    """
+    nominal, loss = _positive_support(nominal, loss)
+    surplus = np.maximum(loss - level, 0.0)
+    return float(level + penalty + nominal @ surplus**2 / (4.0 * penalty))
+
+
+def penalized_chi_square_dual_minimum(
+    nominal: Array, loss: Array, penalty: float
+) -> float:
+    r"""Minimize `penalized_chi_square_dual` over the cut level.
+
+    The dual is convex in the cut level, and its minimizer lies between
+    $\min \ell - 2\lambda$ and $\max \ell$ on the support, since the
+    derivative $1 - \mathbb{E}_p[(\ell - c)_+] / (2\lambda)$ is nonpositive at
+    the lower end and one at the upper end. A bounded Brent search over that
+    bracket is therefore exact up to its tolerance.
+
+    Args:
+        nominal: Reference distribution of shape `(n,)`.
+        loss: Per-scenario losses of shape `(n,)`.
+        penalty: Positive penalty on the chi-square divergence.
+
+    Returns:
+        The dual minimum, equal to the penalized value by strong duality.
+    """
+    positive_nominal, positive_loss = _positive_support(nominal, loss)
+    maximum = float(positive_loss.max())
+    lower = float(positive_loss.min()) - 2.0 * penalty
+
+    def dual(level: float) -> float:
+        return penalized_chi_square_dual(
+            positive_nominal, positive_loss, penalty, level
+        )
+
+    solution = minimize_scalar(
+        dual,
+        bounds=(lower, maximum),
+        method="bounded",
+        options={"xatol": _SEARCH_TOLERANCE * (maximum - lower)},
+    )
+    return min(float(solution.fun), dual(lower), dual(maximum))
+
+
 def cressie_read_generator(ratio: Array, power: float) -> Array:
     r"""Evaluate the Cressie-Read generator of order $k > 1$.
 

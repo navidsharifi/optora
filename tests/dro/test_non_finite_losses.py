@@ -13,7 +13,11 @@ import torch
 
 from optora.core.dro_base import AmbiguitySet
 from optora.divergences.f_divergence import ChiSquareDivergence
-from optora.dro.phi_dro import PhiAmbiguitySet, chi_square_conjugate
+from optora.dro.phi_dro import (
+    PenalizedChiSquareDRO,
+    PhiAmbiguitySet,
+    chi_square_conjugate,
+)
 from optora.dro.sinkhorn_dro import SinkhornAmbiguitySet
 from optora.solvers.gradient_descent import GradientDescent
 from tests.dro.instances import INSTANCES
@@ -100,3 +104,56 @@ def test_a_nan_on_a_zero_mass_scenario_still_propagates(spec: SetSpec) -> None:
     value = spec.build(nominal, cost, 0.3).worst_case_expectation(loss)
 
     assert torch.isnan(value)
+
+
+# `PenalizedChiSquareDRO` is not an ambiguity set but follows the same policy.
+
+
+@pytest.mark.parametrize("entry", sorted(NON_FINITE_VALUES))
+@pytest.mark.parametrize("position", POSITIONS)
+@pytest.mark.parametrize("penalty", [1e-3, 0.3, 30.0])
+def test_a_non_finite_loss_never_yields_a_finite_penalized_value(
+    entry: str, position: int, penalty: float
+) -> None:
+    loss = _with_entry(position, NON_FINITE_VALUES[entry])
+
+    value = PenalizedChiSquareDRO(NOMINAL, penalty)(loss)
+
+    assert torch.isnan(value)
+
+
+@pytest.mark.parametrize("entry", sorted(NON_FINITE_VALUES))
+def test_a_non_finite_row_leaves_the_rest_of_the_penalized_batch_unchanged(
+    entry: str,
+) -> None:
+    objective = PenalizedChiSquareDRO(NOMINAL, 0.3)
+    loss = torch.stack((LOSS, _with_entry(3, NON_FINITE_VALUES[entry]), 2.0 * LOSS))
+
+    value = objective(loss)
+
+    assert torch.equal(value[0], objective(LOSS))
+    assert torch.isnan(value[1])
+    assert torch.equal(value[2], objective(2.0 * LOSS))
+
+
+@pytest.mark.parametrize("entry", sorted(NON_FINITE_VALUES))
+def test_a_non_finite_loss_on_a_zero_mass_scenario_still_propagates_penalized(
+    entry: str,
+) -> None:
+    nominal, loss, _ = INSTANCES[3].tensors()
+    loss[0] = NON_FINITE_VALUES[entry]
+
+    value = PenalizedChiSquareDRO(nominal, 0.3)(loss)
+
+    assert torch.isnan(value)
+
+
+def test_a_non_finite_row_leaves_the_rest_of_the_penalized_gradient_finite() -> None:
+    loss = torch.stack((LOSS, _with_entry(3, math.nan))).requires_grad_(True)
+
+    (gradient,) = torch.autograd.grad(
+        PenalizedChiSquareDRO(NOMINAL, 0.3)(loss)[0], loss
+    )
+
+    assert torch.all(torch.isfinite(gradient))
+    assert torch.all(gradient[1] == 0.0)

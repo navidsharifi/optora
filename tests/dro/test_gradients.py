@@ -27,19 +27,26 @@ attaining the worst case, which is what makes it a subgradient at a kink.
 first and second derivatives are exact once the inner dual solve has
 converged, the second through the implicit-function term built from the
 dual Hessian, and they agree under `torch.func` transforms.
+
+`PenalizedChiSquareDRO` is not an ambiguity set and is checked last, in its
+loss, nominal, and penalty jointly, against `gradcheck`, `gradgradcheck`,
+central differences of the NumPy dual, and the closed-form Hessian on its
+active set.
 """
 
 from collections.abc import Callable
 from dataclasses import dataclass
 
+import numpy as np
 import pytest
 import torch
 from torch.autograd import gradcheck, gradgradcheck
 
 from optora.divergences import PhiDivergence
 from optora.dro.kl_dro import KLAmbiguitySet
-from optora.dro.phi_dro import PhiAmbiguitySet
+from optora.dro.phi_dro import PenalizedChiSquareDRO, PhiAmbiguitySet
 from optora.solvers import GradientDescent
+from tests.dro.duality import penalized_chi_square_dual_minimum
 from tests.dro.instances import INSTANCES, Instance
 from tests.dro.specs import (
     SPECS,
@@ -595,3 +602,203 @@ def test_phi_set_keeps_no_warm_start_from_inside_a_transform() -> None:
     torch.func.grad(ambiguity_set.worst_case_expectation)(loss)
 
     assert ambiguity_set._dual_warm_start is None
+
+
+# --- PenalizedChiSquareDRO ---------------------------------------------------
+#
+# The penalized value is computed in plain differentiable operations with
+# only its active set held fixed, so every derivative below comes from
+# autograd itself rather than from a custom backward rule. The references
+# are central differences of the NumPy dual in `tests.dro.duality`.
+
+# Penalties at which GENERIC truncates most scenarios, a few, and none.
+PENALTIES = (0.05, 0.3, 4.0)
+
+REFERENCE_STEP = 1e-6
+REFERENCE_TOLERANCE = 1e-6
+
+
+def penalized_value(
+    logits: torch.Tensor, penalty: torch.Tensor, loss: torch.Tensor
+) -> torch.Tensor:
+    """Return the penalized value at the nominal `softmax(logits)`."""
+    return PenalizedChiSquareDRO(torch.softmax(logits, dim=-1), penalty)(loss)
+
+
+def penalized_inputs(instance: Instance, penalty: float) -> tuple[torch.Tensor, ...]:
+    """Return leaf `(logits, penalty, loss)` at `instance` and `penalty`."""
+    nominal, loss, _ = instance.tensors()
+    return (
+        torch.log(nominal).requires_grad_(True),
+        torch.tensor(penalty, dtype=torch.float64, requires_grad=True),
+        loss.requires_grad_(True),
+    )
+
+
+PENALIZED_INSTANCES = (_INSTANCES["asymmetric"], _INSTANCES["wide_spread"], GENERIC)
+penalized_instance_parameters = pytest.mark.parametrize(
+    "instance",
+    PENALIZED_INSTANCES,
+    ids=[instance.name for instance in PENALIZED_INSTANCES],
+)
+
+
+@penalized_instance_parameters
+@pytest.mark.parametrize("penalty", PENALTIES)
+def test_penalized_chi_square_first_and_second_derivatives_match_finite_differences(
+    instance: Instance, penalty: float
+) -> None:
+    function = penalized_value
+    inputs = penalized_inputs(instance, penalty)
+
+    assert gradcheck(function, inputs, **GRADCHECK_TOLERANCES)
+    assert gradgradcheck(function, inputs, **GRADCHECK_TOLERANCES)
+
+
+@penalized_instance_parameters
+@pytest.mark.parametrize("penalty", PENALTIES)
+def test_penalized_chi_square_gradients_match_the_reference_dual(
+    instance: Instance, penalty: float
+) -> None:
+    nominal, loss, _ = instance.tensors()
+    nominal.requires_grad_(True)
+    loss.requires_grad_(True)
+    penalty_tensor = torch.tensor(penalty, dtype=torch.float64, requires_grad=True)
+    value = PenalizedChiSquareDRO(nominal, penalty_tensor)(loss)
+    loss_gradient, nominal_gradient, penalty_gradient = torch.autograd.grad(
+        value, (loss, nominal, penalty_tensor)
+    )
+    nominal_array, loss_array = instance.nominal_array, instance.loss_array
+
+    def central(shifted: Callable[[float], float]) -> float:
+        return (shifted(REFERENCE_STEP) - shifted(-REFERENCE_STEP)) / (
+            2.0 * REFERENCE_STEP
+        )
+
+    assert float(penalty_gradient) == pytest.approx(
+        central(
+            lambda step: penalized_chi_square_dual_minimum(
+                nominal_array, loss_array, penalty + step
+            )
+        ),
+        abs=REFERENCE_TOLERANCE,
+    )
+    size = len(instance.nominal)
+    for index in range(size):
+        unit = np.eye(size)[index]
+        assert float(loss_gradient[index]) == pytest.approx(
+            central(
+                lambda step, unit=unit: penalized_chi_square_dual_minimum(
+                    nominal_array, loss_array + step * unit, penalty
+                )
+            ),
+            abs=REFERENCE_TOLERANCE,
+        )
+    for index in range(1, size):
+        direction = np.eye(size)[index] - np.eye(size)[0]
+        assert float(nominal_gradient @ torch.tensor(direction)) == pytest.approx(
+            central(
+                lambda step, direction=direction: penalized_chi_square_dual_minimum(
+                    nominal_array + step * direction, loss_array, penalty
+                )
+            ),
+            abs=REFERENCE_TOLERANCE,
+        )
+
+
+@penalized_instance_parameters
+@pytest.mark.parametrize("penalty", PENALTIES)
+def test_penalized_chi_square_penalty_derivative_is_minus_the_divergence(
+    instance: Instance, penalty: float
+) -> None:
+    nominal, loss, _ = instance.tensors()
+    loss.requires_grad_(True)
+    penalty_tensor = torch.tensor(penalty, dtype=torch.float64, requires_grad=True)
+    value = PenalizedChiSquareDRO(nominal, penalty_tensor)(loss)
+    maximizer, penalty_gradient = torch.autograd.grad(value, (loss, penalty_tensor))
+
+    divergence = torch.sum((maximizer - nominal) ** 2 / nominal)
+
+    torch.testing.assert_close(penalty_gradient, -divergence, rtol=1e-12, atol=1e-14)
+
+
+@penalized_instance_parameters
+@pytest.mark.parametrize("penalty", PENALTIES)
+def test_penalized_chi_square_hessian_is_the_active_set_covariance(
+    instance: Instance, penalty: float
+) -> None:
+    # On the active set A, q = p (loss - c) / (2 penalty) with c moving so
+    # that q keeps unit mass, which makes the Hessian in the loss
+    # (diag(p_A) - p_A p_A^T / P_A) / (2 penalty): symmetric, positive
+    # semidefinite, and zero along the all-ones direction.
+    nominal, loss, _ = instance.tensors()
+    objective = PenalizedChiSquareDRO(nominal, penalty)
+    active = gradient(objective, loss) > 0.0
+    weights = torch.where(active, nominal, 0.0)
+
+    hessian = torch.autograd.functional.hessian(objective, loss)
+
+    expected = (torch.diag(weights) - torch.outer(weights, weights) / weights.sum()) / (
+        2.0 * penalty
+    )
+    torch.testing.assert_close(hessian, expected, rtol=1e-12, atol=1e-12)
+    assert torch.linalg.eigvalsh(hessian).min() >= -1e-12
+    torch.testing.assert_close(
+        hessian @ torch.ones_like(loss), torch.zeros_like(loss), rtol=0.0, atol=1e-12
+    )
+
+
+def test_penalized_chi_square_torch_func_transforms_match_autograd() -> None:
+    function = penalized_value
+    inputs = tuple(tensor.detach() for tensor in penalized_inputs(GENERIC, 0.3))
+
+    expected = torch.autograd.functional.hessian(function, inputs)
+    reverse = torch.func.hessian(function, argnums=(0, 1, 2))(*inputs)
+    forward = torch.func.jacfwd(
+        torch.func.jacrev(function, argnums=(0, 1, 2)), argnums=(0, 1, 2)
+    )(*inputs)
+
+    for row in range(3):
+        for column in range(3):
+            torch.testing.assert_close(
+                reverse[row][column], expected[row][column], rtol=1e-12, atol=1e-12
+            )
+            torch.testing.assert_close(
+                forward[row][column], expected[row][column], rtol=1e-12, atol=1e-12
+            )
+
+
+def test_penalized_chi_square_torch_func_vmap_matches_a_batched_call() -> None:
+    nominal, loss, _ = GENERIC.tensors()
+    objective = PenalizedChiSquareDRO(nominal, 0.3)
+    batch = torch.stack([loss, loss.flip(-1), -loss])
+
+    torch.testing.assert_close(
+        torch.func.vmap(objective)(batch), objective(batch), rtol=0.0, atol=1e-14
+    )
+    torch.testing.assert_close(
+        torch.func.vmap(torch.func.grad(objective))(batch),
+        torch.stack([gradient(objective, row) for row in batch]),
+        rtol=0.0,
+        atol=1e-14,
+    )
+
+
+def test_penalized_chi_square_gradient_is_continuous_where_a_scenario_enters() -> None:
+    # Raising the lowest loss of GENERIC moves it into the active set at the
+    # cut level. The value is continuously differentiable there, so the
+    # gradients just before and just after agree.
+    nominal, loss, _ = GENERIC.tensors()
+    objective = PenalizedChiSquareDRO(nominal, 0.3)
+    entering = int(torch.argmin(loss))
+    maximizer = gradient(objective, loss)
+    active = maximizer > 0.0
+    level = float(torch.mean(loss[active] - 0.6 * maximizer[active] / nominal[active]))
+
+    def at(entry: float) -> torch.Tensor:
+        shifted = loss.clone()
+        shifted[entering] = entry
+        return gradient(objective, shifted)
+
+    assert not bool(active[entering])
+    torch.testing.assert_close(at(level - 1e-9), at(level + 1e-9), rtol=0.0, atol=1e-8)

@@ -1,9 +1,10 @@
-"""Phi-divergence-constrained ambiguity sets (phi-DRO)."""
+"""Phi-divergence ambiguity sets (phi-DRO) and the penalized chi-square objective."""
 
 import math
 from collections.abc import Callable
 
 import torch
+from torch import nn
 
 from optora.core._transforms import transforms_active
 from optora.core.dro_base import (
@@ -13,7 +14,10 @@ from optora.core.dro_base import (
     _bisection_steps,
     _broadcast_batch_shapes,
     _search_bits,
+    _validate_loss,
+    _validate_nominal,
 )
+from optora.core.precision import working_dtype
 from optora.core.solver_base import (
     MinimizationProblem,
     MinimizationResult,
@@ -503,18 +507,18 @@ class PhiAmbiguitySet(DualAmbiguitySet):
             raise ValueError(
                 "initial_log_eta and initial_lam must be given together or not at all."
             )
+        # Filled on the device rather than copied from a host list, so that
+        # building the set does not block CUDA-graph capture.
+        initial_dual_point = torch.zeros(2, dtype=nominal.dtype, device=nominal.device)
+        if initial_log_eta is not None and initial_lam is not None:
+            initial_dual_point[0] = initial_log_eta
+            initial_dual_point[1] = initial_lam
         super().__init__(
             nominal=nominal,
             divergence=divergence,
             radius=radius,
             dual_solver=dual_solver,
-            initial_dual_point=torch.tensor(
-                [0.0, 0.0]
-                if initial_log_eta is None
-                else [initial_log_eta, initial_lam],
-                dtype=nominal.dtype,
-                device=nominal.device,
-            ),
+            initial_dual_point=initial_dual_point,
             initial_in_raw_units=initial_log_eta is not None,
             validate=validate,
         )
@@ -895,6 +899,325 @@ class ChiSquareAmbiguitySet(TiltedAmbiguitySet):
         excess = (nominal_mean(depth) - depth) * (weight / normalizer + 1.0)
         nominal_gradient = 0.5 * (excess - nominal_mean(excess))
         return nominal_gradient, (normalizer / (2.0 * rate)).squeeze(-1)
+
+
+def _validate_penalty(penalty: torch.Tensor) -> None:
+    """Check that every entry of a tensor penalty is positive and finite.
+
+    Both bounds are read back as one boolean, written as `not (inside)` so
+    that a `nan` entry, which compares false against everything, fails the
+    check.
+
+    Args:
+        penalty: Candidate tensor of penalty parameters.
+
+    Raises:
+        ValueError: If `penalty` holds an entry that is not positive, an
+            infinite entry, or a `nan`.
+    """
+    if penalty.numel() == 0:
+        return
+    inside = (torch.amin(penalty) > 0.0) & (torch.amax(penalty) < math.inf)
+    if not bool(inside):
+        raise ValueError("penalty must be positive, finite, and not nan.")
+
+
+class PenalizedChiSquareDRO(nn.Module):
+    r"""Penalized chi-square DRO objective (Levy, Carmon, Duchi, and Sidford 2020).
+
+    Replaces the radius constraint of `ChiSquareAmbiguitySet` by a penalty
+    on the chi-square divergence from the nominal distribution $p$,
+
+    $$
+    V(\ell) = \sup_{q \in \Delta_n} \; \mathbb{E}_q[\ell]
+        - \lambda \, D_{\chi^2}(q \,\|\, p),
+    \qquad
+    D_{\chi^2}(q \,\|\, p) = \sum_i \frac{(q_i - p_i)^2}{p_i},
+    $$
+
+    where $\lambda > 0$ is `penalty` and $\Delta_n$ is the probability
+    simplex. This is Eq. (4) of Levy et al. (2020). They define the
+    divergence with the generator $\frac{1}{2}(t - 1)^2$, half of
+    `ChiSquareDivergence`, so their penalty $\lambda_{\mathrm{Levy}}$
+    corresponds to `penalty` $= \lambda_{\mathrm{Levy}} / 2$. The same
+    conversion applies to the `reg` argument of `RobustLoss(size=inf,
+    reg=...)` in their code.
+
+    $V$ is not the worst-case expectation over a fixed set of distributions,
+    so this class is not an `AmbiguitySet`. Calling the module returns $V$,
+    as calling `OnlineGroupDRO` or `StochasticPhiDual` returns their
+    objectives. `optora.dro.MultilevelMonteCarloEstimator` accepts it in
+    place of an ambiguity set.
+
+    By convex duality (Ben-Tal and Teboulle 2007), with the multiplier
+    $\eta$ of the constraint $\sum_i q_i = 1$ and the conjugate
+    $\phi^*(s) = \frac{1}{4}(s + 2)_+^2 - 1$ of $\phi(t) = (t - 1)^2$
+    restricted to $t \ge 0$,
+
+    $$
+    V(\ell) = \inf_{\eta \in \mathbb{R}} \; \eta
+        + \lambda \, \mathbb{E}_p\!\left[\phi^*\!\left(
+            \frac{\ell - \eta}{\lambda}\right)\right]
+    = \inf_{c \in \mathbb{R}} \; c + \lambda
+        + \frac{1}{4\lambda} \, \mathbb{E}_p\big[(\ell - c)_+^2\big],
+    $$
+
+    with $c = \eta - 2\lambda$. The maximizer is the truncated linear tilt
+
+    $$
+    q^\star_i = p_i \, \frac{(\ell_i - c^\star)_+}{2\lambda},
+    \qquad
+    \mathbb{E}_p\big[(\ell - c^\star)_+\big] = 2\lambda,
+    $$
+
+    the same shape as the maximizer of `ChiSquareAmbiguitySet`. While no
+    scenario is truncated, that is while $\ell_i \ge \mathbb{E}_p[\ell] -
+    2\lambda$ on the support of $p$, the cut level is $c^\star =
+    \mathbb{E}_p[\ell] - 2\lambda$ and
+
+    $$
+    V(\ell) = \mathbb{E}_p[\ell] + \frac{\mathrm{Var}_p(\ell)}{4\lambda}.
+    $$
+
+    For a general smooth generator a divergence penalty is a variance
+    penalty to leading order (Gotoh, Kim, and Lim 2018), and for chi-square
+    the expansion is exact in this regime. $V$ tends to
+    $\mathbb{E}_p[\ell]$ as $\lambda \to \infty$ and to the largest loss on
+    the support of $p$ as $\lambda \to 0$.
+
+    The normalization condition is piecewise linear and increasing in the
+    cut depth below the largest loss, so sorting the scenarios by loss
+    locates the truncated ones exactly, as in `ChiSquareAmbiguitySet`. The
+    solve is one sort and a fixed number of vectorized operations, and
+    nothing is read back to the host, so the forward and backward passes
+    can be captured in a CUDA graph.
+
+    Let $A$ be the set of scenarios with positive weight, $P_A$ and $T_A$
+    the nominal masses inside and outside $A$, and
+    $S_A = \sum_{i \in A} p_i (\max \ell - \ell_i)$. Once $A$ is known, the
+    multiplier $\eta^\star = \max \ell - (2\lambda T_A + S_A) / P_A$ is an
+    explicit smooth function of $(\ell, p, \lambda)$. The value is computed
+    as the dual objective at that multiplier in plain differentiable
+    operations, with only $A$ held fixed. $A$ is locally constant away from
+    the points where a scenario enters or leaves it, so autograd returns
+    exact derivatives of every order, `torch.func` transforms included. The
+    first derivatives are $\partial V / \partial \ell = q^\star$ by
+    Danskin's theorem, and $\partial V / \partial \lambda =
+    -D_{\chi^2}(q^\star \,\|\, p)$ and $\partial V / \partial p_i =
+    \lambda \, \phi^*((\ell_i - \eta^\star) / \lambda)$ by the envelope
+    theorem. Only the derivative with respect to `nominal` along directions
+    that keep it summing to one is defined. The objective in $q$ is
+    strongly concave, so the maximizer is unique and $V$ is continuously
+    differentiable in $\ell$ everywhere, tied losses included.
+
+    The largest loss on the support of $p$ is subtracted before solving.
+    This leaves the maximizer unchanged, since $V(\ell + a) = V(\ell) + a$,
+    and keeps the precision of a small loss spread around a large offset.
+    A scenario with zero nominal mass gets zero weight whatever its loss.
+
+    Attributes:
+        nominal: Reference distribution, a nonnegative tensor that sums to
+            one along its last dimension.
+        divergence: `ChiSquareDivergence` instance, for evaluating
+            $D_{\chi^2}(q \,\|\, p)$ of a candidate distribution.
+        penalty: Positive penalty $\lambda$ on the divergence, in the units
+            of the loss, either a float or a tensor of penalties evaluated
+            as one batch.
+        validate: Whether the value checks that synchronize with the device
+            run.
+    """
+
+    nominal: torch.Tensor
+    penalty: float | torch.Tensor
+
+    def __init__(
+        self,
+        nominal: torch.Tensor,
+        penalty: float | torch.Tensor,
+        eps: float = 1e-12,
+        validate: bool = False,
+    ) -> None:
+        """Initialize the penalized chi-square objective.
+
+        Args:
+            nominal: Reference distribution of shape `(..., n)`, a
+                nonnegative tensor that sums to one along its last
+                dimension. Leading dimensions are a batch of nominals.
+            penalty: Positive penalty on the chi-square divergence, in the
+                units of the loss. A tensor penalty is registered as a
+                buffer and broadcast against the batch shape of the loss,
+                which evaluates a sweep of penalties in one call. Its
+                entries are checked only when `validate` is set. A float
+                penalty must be positive and finite. Zero and infinity are
+                the limits in which the value is the largest loss and the
+                nominal expectation, which `CVaRAmbiguitySet(nominal, 0.0)`
+                and `torch.sum(nominal * loss, -1)` compute directly.
+            eps: Small positive constant used to clamp `nominal` away from
+                zero before dividing, passed through to `divergence`.
+            validate: Whether to run the value checks that synchronize with
+                the device. They check that `nominal` is a probability
+                distribution, that a tensor `penalty` is positive and
+                finite, and, on every call, that the loss is finite. The
+                shape and float checks are metadata-only and always run.
+
+        Raises:
+            ValueError: If `nominal` is a scalar tensor, a float `penalty`
+                is not positive and finite, `eps` is not positive, or
+                `validate` is set and `nominal` or a tensor `penalty` fails
+                its check.
+        """
+        super().__init__()
+        if nominal.ndim == 0:
+            raise ValueError(
+                "nominal must have shape (..., n) with a trailing support "
+                "dimension, got a scalar tensor."
+            )
+        if validate:
+            _validate_nominal(nominal)
+        self.register_buffer("nominal", nominal)
+        self.divergence = ChiSquareDivergence(eps=eps)
+        self.validate = validate
+        if isinstance(penalty, torch.Tensor):
+            if validate:
+                _validate_penalty(penalty)
+            self.register_buffer("penalty", penalty)
+        else:
+            if not 0.0 < penalty < math.inf:
+                raise ValueError(f"penalty must be positive and finite, got {penalty}.")
+            self.penalty = penalty
+
+    def forward(self, loss: torch.Tensor) -> torch.Tensor:
+        """Evaluate the penalized chi-square objective.
+
+        Args:
+            loss: Per-scenario losses of shape `(..., n)`, one trailing
+                entry per element of `nominal`'s support. Leading
+                dimensions are a batch, broadcast against those of
+                `nominal` and against `penalty`'s shape.
+
+        Returns:
+            The penalized value of shape `(...)`, the broadcast batch shape,
+            computed in `optora.core.working_dtype(loss, nominal)` and
+            returned in `torch.promote_types(loss.dtype, nominal.dtype)`. A
+            batch element whose loss holds a `nan` or infinite entry is
+            `nan`.
+
+        Raises:
+            ValueError: If `loss`'s trailing dimension does not match
+                `nominal`'s support size, its batch shape does not
+                broadcast against `nominal` and `penalty`, or `validate` is
+                set and `loss` is not finite.
+        """
+        nominal = self.nominal
+        if loss.ndim == 0 or loss.shape[-1] != nominal.shape[-1]:
+            raise ValueError(
+                "loss must have shape (..., n) matching nominal's support size "
+                f"{nominal.shape[-1]}, got {tuple(loss.shape)}."
+            )
+        penalty = self.penalty
+        penalty_shape = (
+            penalty.shape if isinstance(penalty, torch.Tensor) else torch.Size()
+        )
+        batch_shape = _broadcast_batch_shapes(
+            loss=loss.shape[:-1], nominal=nominal.shape[:-1], penalty=penalty_shape
+        )
+        if self.validate:
+            _validate_loss(loss)
+        dtype = working_dtype(loss, nominal)
+        working = loss.to(dtype)
+        weights = nominal.to(dtype)
+        if isinstance(penalty, torch.Tensor):
+            penalty = penalty.to(dtype)
+        scale = penalty.unsqueeze(-1) if isinstance(penalty, torch.Tensor) else penalty
+
+        detached = working.detach()
+        max_loss = torch.amax(
+            torch.where(weights.detach() > 0.0, detached, -torch.inf),
+            dim=-1,
+            keepdim=True,
+        )
+        gap = max_loss - working
+        depth = self._cut_depth(gap.detach(), weights.detach(), penalty, batch_shape)
+        active = gap.detach() < depth.unsqueeze(-1)
+
+        inside = torch.sum(torch.where(active, weights, 0.0), dim=-1)
+        outside = torch.sum(torch.where(active, 0.0, weights), dim=-1)
+        shortfall = torch.sum(torch.where(active, weights * gap, 0.0), dim=-1)
+        # `level` is max(loss) - eta, the multiplier measured down from the
+        # maximum. Writing it with the outside mass rather than as
+        # (2 penalty + shortfall) / inside - 2 penalty keeps a large penalty
+        # from cancelling against itself.
+        level = (2.0 * penalty * outside + shortfall) / inside
+        excess = torch.where(active, level.unsqueeze(-1) - gap, 0.0)
+        conjugate = torch.where(
+            active, excess + excess * excess / (4.0 * scale), -scale
+        )
+        value = max_loss.squeeze(-1) - level + torch.sum(weights * conjugate, dim=-1)
+        value = torch.where(torch.isfinite(working).all(dim=-1), value, torch.nan)
+        return value.expand(batch_shape).to(
+            torch.promote_types(loss.dtype, nominal.dtype)
+        )
+
+    @staticmethod
+    def _cut_depth(
+        gap: torch.Tensor,
+        weights: torch.Tensor,
+        penalty: float | torch.Tensor,
+        batch_shape: torch.Size,
+    ) -> torch.Tensor:
+        r"""Solve $\mathbb{E}_p[(d - \mathrm{gap})_+] = 2\lambda$ for the cut depth $d$.
+
+        With the gaps sorted in increasing order, the left side at the
+        breakpoint $d = \mathrm{gap}_{(j)}$ is the cumulative sum of
+        $P_{m} (\mathrm{gap}_{(m+1)} - \mathrm{gap}_{(m)})$ over $m < j$,
+        where $P_m$ is the nominal mass of the first $m$ scenarios. These
+        terms are nonnegative, so the sum keeps full precision. Counting the
+        breakpoints below $2\lambda$ gives the number $k \ge 1$ of
+        scenarios with positive weight, and on that segment
+        $d = (2\lambda + \sum_{m \le k} p_{(m)} \mathrm{gap}_{(m)}) / P_k$.
+        Scenarios with zero nominal mass are sorted with gap zero, where
+        they change none of the sums. The count is at least one and at most
+        the support size, so the gather never reads out of range, even on
+        a `nan` loss or an unvalidated nonpositive penalty.
+
+        Args:
+            gap: Detached shortfall below the largest loss on the support,
+                of shape `(..., n)`.
+            weights: Detached nominal in working precision.
+            penalty: Penalty in working precision, a float or a tensor of
+                the batch shape's trailing dimensions.
+            batch_shape: Broadcast batch shape of the evaluation.
+
+        Returns:
+            The detached cut depth $d^\star = \max \ell - c^\star$, of shape
+            `batch_shape`.
+        """
+        shape = _broadcast_batch_shapes(gap=gap.shape, weights=weights.shape)
+        sorted_gap, order = torch.sort(
+            torch.where(weights > 0.0, gap, 0.0).expand(shape), dim=-1
+        )
+        mass = torch.gather(weights.expand(shape), -1, order)
+        head_mass = torch.cumsum(mass, dim=-1)
+        head_gap = torch.cumsum(mass * sorted_gap, dim=-1)
+        breakpoint_mass = torch.cumsum(
+            head_mass[..., :-1] * torch.diff(sorted_gap, dim=-1), dim=-1
+        )
+        budget = (
+            2.0 * penalty.detach().unsqueeze(-1)
+            if isinstance(penalty, torch.Tensor)
+            else 2.0 * penalty
+        )
+        last = torch.sum(breakpoint_mass < budget, dim=-1, keepdim=True)
+        last = last.expand(*batch_shape, 1)
+        support_size = shape[-1]
+
+        def at_last(values: torch.Tensor) -> torch.Tensor:
+            expanded = values.expand(*batch_shape, support_size)
+            return torch.gather(expanded, -1, last).squeeze(-1)
+
+        if isinstance(budget, torch.Tensor):
+            budget = budget.squeeze(-1)
+        return (budget + at_last(head_gap)) / at_last(head_mass)
 
 
 class TotalVariationAmbiguitySet(AmbiguitySet):

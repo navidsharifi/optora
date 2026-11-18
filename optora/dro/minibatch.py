@@ -19,10 +19,11 @@ log-sum-exp of the minibatch losses at the optimal temperature.
 This module provides the two standard remedies.
 
 - `MultilevelMonteCarloEstimator` keeps the exact plug-in solve of any
-  ambiguity set and removes its bias up to the largest batch size by
-  randomized multilevel Monte Carlo (Blanchet and Glynn 2015; Levy et al.
-  2020). The expected batch size grows only logarithmically in that
-  largest batch size.
+  ambiguity set, or of the penalized objective
+  `optora.dro.PenalizedChiSquareDRO`, and removes its bias up to the
+  largest batch size by randomized multilevel Monte Carlo (Blanchet and
+  Glynn 2015; Levy et al. 2020). The expected batch size grows only
+  logarithmically in that largest batch size.
 - `StochasticPhiDual` keeps the dual variables of a phi-divergence ball as
   learnable parameters, which turns the worst case into a plain expectation
   over $P_0$ whose minibatch mean is exactly unbiased (Ben-Tal et al. 2013;
@@ -38,6 +39,7 @@ from torch import nn
 
 from optora.core.dro_base import AmbiguitySet
 from optora.core.precision import working_dtype
+from optora.dro.phi_dro import PenalizedChiSquareDRO
 
 
 class MultilevelMonteCarloEstimator(nn.Module):
@@ -76,7 +78,10 @@ class MultilevelMonteCarloEstimator(nn.Module):
     correction is the gap between one solve and the mean of two solves on
     the same samples, which vanishes as the plug-in converges. With
     `max_level=0` there is no correction and the estimator is the plain
-    plug-in on $n_0$ samples.
+    plug-in on $n_0$ samples. The same construction applies to the
+    penalized chi-square objective `optora.dro.PenalizedChiSquareDRO`,
+    which is also a nonlinear functional of the sample and which Levy et
+    al. (2020) estimate this way.
 
     In a training loop the batch size is drawn anew at every step.
 
@@ -92,10 +97,11 @@ class MultilevelMonteCarloEstimator(nn.Module):
     ```
 
     Attributes:
-        ambiguity_sets: One ambiguity set per level `j = 0, ..., max_level`,
-            centered on the uniform distribution over `base_batch_size *
-            2 ** j` samples. Registered as submodules, so `.to(...)` moves
-            and casts every level together.
+        ambiguity_sets: One ambiguity set, or penalized objective, per
+            level `j = 0, ..., max_level`, centered on the uniform
+            distribution over `base_batch_size * 2 ** j` samples.
+            Registered as submodules, so `.to(...)` moves and casts every
+            level together.
         base_batch_size: Number of samples $n_0$ of the base level.
         max_level: Largest level $L$. The bias is that of a batch of
             `base_batch_size * 2 ** max_level` samples.
@@ -103,7 +109,9 @@ class MultilevelMonteCarloEstimator(nn.Module):
 
     def __init__(
         self,
-        ambiguity_set_factory: Callable[[torch.Tensor], AmbiguitySet],
+        ambiguity_set_factory: Callable[
+            [torch.Tensor], AmbiguitySet | PenalizedChiSquareDRO
+        ],
         base_batch_size: int,
         max_level: int,
         device: torch.device | str | None = None,
@@ -121,7 +129,10 @@ class MultilevelMonteCarloEstimator(nn.Module):
                 qualifies, such as the KL, chi-square, total-variation,
                 CVaR, and general phi sets. The Wasserstein, Sinkhorn, and
                 MMD sets also need a ground cost or a Gram matrix over the
-                samples and do not qualify.
+                samples and do not qualify. The factory may instead return
+                a `PenalizedChiSquareDRO`, for example
+                `functools.partial(PenalizedChiSquareDRO, penalty=0.5)`,
+                whose value is then estimated in place of a worst case.
             base_batch_size: Number of samples $n_0$ of the base level, at
                 least one.
             max_level: Largest level $L$, at least zero.
@@ -197,13 +208,19 @@ class MultilevelMonteCarloEstimator(nn.Module):
         )
         return self._sampled_sizes[int(level)]
 
-    def _ambiguity_set(self, level: int) -> AmbiguitySet:
-        """Return the ambiguity set of `level`, typed as an `AmbiguitySet`."""
-        return cast(AmbiguitySet, self.ambiguity_sets[level])
-
     def _plug_in(self, level: int, loss: torch.Tensor) -> torch.Tensor:
-        """Return the plug-in worst case of `level` on its `(..., m)` loss."""
-        return self._ambiguity_set(level).worst_case_expectation(loss)
+        """Return the plug-in value of `level` on its `(..., m)` loss.
+
+        This is the worst-case expectation of an ambiguity set, or the value
+        of a penalized objective, which is the module's own call.
+        """
+        objective = cast(
+            AmbiguitySet | PenalizedChiSquareDRO, self.ambiguity_sets[level]
+        )
+        if isinstance(objective, AmbiguitySet):
+            return objective.worst_case_expectation(loss)
+        value: torch.Tensor = objective(loss)
+        return value
 
     def forward(self, loss: torch.Tensor) -> torch.Tensor:
         """Estimate the worst-case expected loss from one multilevel batch.
@@ -212,14 +229,14 @@ class MultilevelMonteCarloEstimator(nn.Module):
             loss: Per-sample losses of shape `(..., m)` for `m` i.i.d.
                 samples, where `m` is a size `sample_batch_size` can return.
                 The level is read off `m`. Leading dimensions are
-                independent batches, broadcast against a tensor radius as in
-                `AmbiguitySet.worst_case_expectation`.
+                independent batches, broadcast against a tensor radius or
+                penalty as in `AmbiguitySet.worst_case_expectation`.
 
         Returns:
-            The multilevel estimate, of the batch shape the ambiguity sets
-            return for a `(..., m)` loss. Its expectation and the
-            expectation of its gradient are those of the plug-in worst case
-            on `base_batch_size * 2 ** max_level` samples.
+            The multilevel estimate, of the batch shape the levels return
+            for a `(..., m)` loss. Its expectation and the expectation of
+            its gradient are those of the plug-in value on
+            `base_batch_size * 2 ** max_level` samples.
 
         Raises:
             ValueError: If `loss` is zero-dimensional or its trailing size is
@@ -236,12 +253,12 @@ class MultilevelMonteCarloEstimator(nn.Module):
         if level == 0:
             return base
         full = self._plug_in(level, loss)
-        radius = self._ambiguity_set(0).radius
-        radius_rank = radius.ndim if isinstance(radius, torch.Tensor) else 0
         # The halves index goes in front of every batch dimension, padded so a
-        # tensor radius still aligns with the loss's batch dimensions.
+        # tensor radius or penalty still aligns with the loss's batch
+        # dimensions. The nominals are unbatched, so the padding is the number
+        # of batch dimensions that parameter adds to the result.
         halves = loss.reshape(*loss.shape[:-1], 2, size // 2).movedim(-2, 0)
-        halves = halves[(slice(None),) + (None,) * max(0, radius_rank - loss.ndim + 1)]
+        halves = halves[(slice(None),) + (None,) * (full.ndim - loss.ndim + 1)]
         correction = full - torch.mean(self._plug_in(level - 1, halves), dim=0)
         return base + correction / self._level_probabilities[level - 1]
 

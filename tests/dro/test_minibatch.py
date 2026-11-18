@@ -3,7 +3,8 @@
 `MultilevelMonteCarloEstimator` is checked against its definition, composed
 here from independently built plug-in sets, and against the claim it exists
 for: on a population whose plug-in worst case has an exact expectation, its
-mean matches the plug-in at the largest batch size, not the base one.
+mean matches the plug-in at the largest batch size, not the base one. The
+same checks run with `PenalizedChiSquareDRO` levels in place of sets.
 `StochasticPhiDual` is checked for exact minibatch unbiasedness, weak and
 strong duality against the exact KL and chi-square sets, and joint
 minimization with a decision variable.
@@ -23,6 +24,7 @@ from optora.dro.minibatch import MultilevelMonteCarloEstimator, StochasticPhiDua
 from optora.dro.phi_dro import (
     ChiSquareAmbiguitySet,
     CVaRAmbiguitySet,
+    PenalizedChiSquareDRO,
     TotalVariationAmbiguitySet,
     chi_square_conjugate,
     cvar_conjugate,
@@ -595,3 +597,144 @@ class TestStochasticPhiDual:
             dual(loss).backward()
 
         assert len(syncs) == 0
+
+
+class TestMultilevelPenalizedObjective:
+    """The estimator takes the penalized chi-square objective of Levy et al."""
+
+    PENALTY = 0.4
+
+    @staticmethod
+    def _plug_in(penalty: float | torch.Tensor, loss: torch.Tensor) -> torch.Tensor:
+        """Plug-in penalized value on a freshly built objective over `loss`."""
+        return PenalizedChiSquareDRO(_uniform(loss.shape[-1]), penalty)(loss)
+
+    def _reference(
+        self, penalty: float | torch.Tensor, loss: torch.Tensor, level: int
+    ) -> torch.Tensor:
+        size = loss.shape[-1]
+        halves = (
+            self._plug_in(penalty, loss[..., : size // 2]),
+            self._plug_in(penalty, loss[..., size // 2 :]),
+        )
+        correction = self._plug_in(penalty, loss) - 0.5 * (halves[0] + halves[1])
+        return self._plug_in(penalty, loss[..., :3]) + correction / _probability(
+            level, 3
+        )
+
+    @pytest.mark.parametrize("level", [1, 2, 3])
+    def test_matches_the_definition_at_every_level(self, level: int) -> None:
+        loss = torch.randn(
+            3 * 2**level, generator=torch.Generator().manual_seed(level), dtype=DTYPE
+        )
+        estimator = _estimator(
+            functools.partial(PenalizedChiSquareDRO, penalty=self.PENALTY)
+        )
+
+        result = estimator(loss)
+
+        expected = self._reference(self.PENALTY, loss, level)
+        torch.testing.assert_close(result, expected, rtol=1e-12, atol=1e-12)
+        assert isinstance(estimator.ambiguity_sets[0], PenalizedChiSquareDRO)
+
+    def test_gradient_is_the_combination_of_level_maximizers(self) -> None:
+        generator = torch.Generator().manual_seed(0)
+        loss = torch.randn(12, generator=generator, dtype=DTYPE).requires_grad_()
+        estimator = _estimator(
+            functools.partial(PenalizedChiSquareDRO, penalty=self.PENALTY)
+        )
+
+        estimator(loss).backward()
+
+        reference = loss.detach().clone().requires_grad_()
+        self._reference(self.PENALTY, reference, 2).backward()
+        assert loss.grad is not None and reference.grad is not None
+        torch.testing.assert_close(loss.grad, reference.grad, rtol=0.0, atol=1e-12)
+        assert float(loss.grad.sum()) == pytest.approx(1.0, abs=1e-12)
+
+    @pytest.mark.parametrize("loss_shape", [(12,), (5, 1, 12)], ids=str)
+    def test_tensor_penalty_sweeps_in_one_call(
+        self, loss_shape: tuple[int, ...]
+    ) -> None:
+        penalties = [0.05, 0.4, 3.0]
+        loss = torch.randn(
+            loss_shape, generator=torch.Generator().manual_seed(2), dtype=DTYPE
+        )
+        sweep = _estimator(
+            functools.partial(
+                PenalizedChiSquareDRO, penalty=torch.tensor(penalties, dtype=DTYPE)
+            )
+        )
+
+        result = sweep(loss)
+
+        expected = torch.stack(
+            [
+                _estimator(functools.partial(PenalizedChiSquareDRO, penalty=penalty))(
+                    loss
+                )
+                for penalty in penalties
+            ],
+            dim=-1,
+        )
+        assert result.shape == torch.broadcast_shapes(loss_shape[:-1], (3,))
+        torch.testing.assert_close(
+            result, expected.reshape(result.shape), rtol=0.0, atol=1e-12
+        )
+
+    def test_forward_and_backward_never_synchronize(
+        self, host_sync_counter: Callable[[], Any]
+    ) -> None:
+        estimator = _estimator(
+            functools.partial(PenalizedChiSquareDRO, penalty=self.PENALTY)
+        )
+        loss = torch.linspace(-1.0, 1.0, 24, dtype=DTYPE).requires_grad_()
+
+        with host_sync_counter() as syncs:
+            estimator(loss).backward()
+
+        assert len(syncs) == 0
+
+    def test_mean_matches_the_largest_level_on_bernoulli_losses(self) -> None:
+        # On Bernoulli losses a plug-in value on m samples depends only on
+        # the number of ones, so its exact mean is a binomial sum, and the
+        # estimator's mean must match the largest level rather than the base.
+        success, base, max_level, replicates = 0.15, 2, 4, 40000
+        support = torch.tensor([0.0, 1.0], dtype=DTYPE)
+
+        def exact_mean(size: int) -> float:
+            total = 0.0
+            for ones in range(size + 1):
+                nominal = torch.tensor([1 - ones / size, ones / size], dtype=DTYPE)
+                value = PenalizedChiSquareDRO(nominal, self.PENALTY)(support)
+                weight = (
+                    math.comb(size, ones)
+                    * success**ones
+                    * (1 - success) ** (size - ones)
+                )
+                total += weight * float(value)
+            return total
+
+        estimator = _estimator(
+            functools.partial(PenalizedChiSquareDRO, penalty=self.PENALTY),
+            base,
+            max_level,
+        )
+        generator = torch.Generator().manual_seed(0)
+        sizes = torch.tensor(
+            [estimator.sample_batch_size(generator) for _ in range(replicates)]
+        )
+        estimates = []
+        for size in sizes.unique().tolist():
+            count = int((sizes == size).sum())
+            draws = torch.bernoulli(
+                torch.full((count, size), success, dtype=DTYPE), generator=generator
+            )
+            estimates.append(estimator(draws))
+        values = torch.cat(estimates)
+        mean = float(values.mean())
+        standard_error = float(values.std()) / math.sqrt(replicates)
+
+        target = exact_mean(base * 2**max_level)
+        assert abs(mean - target) < 4.0 * standard_error
+        assert abs(exact_mean(base) - target) > 8.0 * standard_error

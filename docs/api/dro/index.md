@@ -28,6 +28,7 @@
     - [`cvar_conjugate`](phi_dro.md#optora.dro.phi_dro.cvar_conjugate)
     - [`PhiAmbiguitySet`](phi_dro.md#optora.dro.phi_dro.PhiAmbiguitySet)
     - [`ChiSquareAmbiguitySet`](phi_dro.md#optora.dro.phi_dro.ChiSquareAmbiguitySet)
+    - [`PenalizedChiSquareDRO`](phi_dro.md#optora.dro.phi_dro.PenalizedChiSquareDRO)
     - [`TotalVariationAmbiguitySet`](phi_dro.md#optora.dro.phi_dro.TotalVariationAmbiguitySet)
     - [`CVaRAmbiguitySet`](phi_dro.md#optora.dro.phi_dro.CVaRAmbiguitySet)
 - [`optora.dro.sinkhorn_dro`](sinkhorn_dro.md)

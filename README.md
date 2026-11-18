@@ -60,8 +60,9 @@ Ambiguity sets (`optora.dro`), the divergences underneath them
 are implemented end to end: `KLAmbiguitySet`, `PhiAmbiguitySet` (plus
 `ChiSquareAmbiguitySet`, `TotalVariationAmbiguitySet`, and
 `CVaRAmbiguitySet`), `SinkhornAmbiguitySet`, `MMDAmbiguitySet`, and
-`WassersteinAmbiguitySet`, wired together by `MinimaxSolver`. Minibatch
-training is covered by `MultilevelMonteCarloEstimator`,
+`WassersteinAmbiguitySet`, wired together by `MinimaxSolver`. The penalized
+chi-square objective of Levy et al. (2020) is `PenalizedChiSquareDRO`.
+Minibatch training is covered by `MultilevelMonteCarloEstimator`,
 `StochasticPhiDual`, and `OnlineGroupDRO` (group DRO, with
 `optora.dro.group_losses`). Every piece
 is covered by pytest tests checked against known closed-form results,

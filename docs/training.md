@@ -297,7 +297,10 @@ remedies.
     set built from a nominal alone. It reduces the bias to that of a
     single solve on $n_0 2^L$ samples, at an expected batch size of
     $n_0 L / (1 - 2^{-L})$ (Blanchet and Glynn 2015; Levy et al. 2020).
-    The batch size is drawn at every step.
+    The batch size is drawn at every step. The factory may also return the
+    penalized objective `PenalizedChiSquareDRO`, for example
+    `functools.partial(PenalizedChiSquareDRO, penalty=0.5)`, which is the
+    other chi-square objective Levy et al. estimate this way.
 
     ```python
     import functools
@@ -368,6 +371,70 @@ remedies.
 [Minibatch DRO against the full batch](tutorials/minibatch_dro_training.md)
 measures the bias of the plug-in estimate, trains with all three
 estimators and compares each with the exact full-batch optimum.
+
+### Launch-bound minibatch steps
+
+On a GPU, a minibatch step of a small model is bound by kernel launches
+rather than by arithmetic. The exact solve of `ChiSquareAmbiguitySet`, for
+example, is about a hundred small kernels in the forward and backward pass,
+whatever the batch size. None of them reads a value back to the host, so
+the forward and backward pass can be captured once in a CUDA graph and
+replayed at the cost of a single launch (PyTorch CUDA semantics notes,
+"CUDA Graphs").
+
+```python
+import torch
+
+from optora import ChiSquareAmbiguitySet
+
+ambiguity_set = ChiSquareAmbiguitySet(
+    torch.full((batch_size,), 1.0 / batch_size, device="cuda"), radius=2.0
+)
+static_features = torch.zeros(batch_size, num_features, device="cuda")
+static_targets = torch.zeros(batch_size, dtype=torch.long, device="cuda")
+
+
+def forward_backward() -> None:
+    per_sample_loss = torch.nn.functional.cross_entropy(
+        model(static_features), static_targets, reduction="none"
+    )
+    ambiguity_set.worst_case_expectation(per_sample_loss).backward()
+
+
+stream = torch.cuda.Stream()
+stream.wait_stream(torch.cuda.current_stream())
+with torch.cuda.stream(stream):
+    for _ in range(3):
+        model.zero_grad(set_to_none=True)
+        forward_backward()
+torch.cuda.current_stream().wait_stream(stream)
+graph = torch.cuda.CUDAGraph()
+model.zero_grad(set_to_none=True)
+with torch.cuda.graph(graph):
+    forward_backward()
+
+for features, targets in loader:
+    static_features.copy_(features)
+    static_targets.copy_(targets)
+    graph.replay()
+    optimizer.step()
+```
+
+The gradients are set to `None` before capture, so every replay overwrites
+them instead of accumulating, and `optimizer.zero_grad()` must not be called
+between replays. The optimizer update runs outside the graph here. Put it
+inside only if the optimizer supports capture, which `torch.optim` marks
+with its `capturable` flag. A graph fixes every shape, so a
+`MultilevelMonteCarloEstimator` loop captures one graph per level.
+
+Every exact set can be captured this way, and so can `StochasticPhiDual`,
+`MultilevelMonteCarloEstimator` at a fixed level and the `OnlineGroupDRO`
+step (`tests/dro/test_cuda_graphs.py`). `PhiAmbiguitySet` with a
+`dual_solver`, `MMDAmbiguitySet` and `MinimaxSolver` read a convergence flag
+on the host and cannot be captured. On a laptop RTX 3050, the guard
+`test_chi_square_minibatch_training_step` in `tests/benchmarks/test_dro.py`
+measures a chi-square step on a batch of 50 at about 0.14 ms replayed and
+about 7 ms eager.
 
 ## Group DRO
 

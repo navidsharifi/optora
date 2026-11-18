@@ -1,4 +1,4 @@
-"""Tests for batched losses and batched radii across every ambiguity set."""
+"""Tests for batched losses, radii, and penalties across every DRO objective."""
 
 from collections.abc import Callable
 from typing import Any, Protocol
@@ -11,6 +11,7 @@ from optora.dro.kl_dro import KLAmbiguitySet
 from optora.dro.phi_dro import (
     ChiSquareAmbiguitySet,
     CVaRAmbiguitySet,
+    PenalizedChiSquareDRO,
     TotalVariationAmbiguitySet,
 )
 from optora.dro.sinkhorn_dro import SinkhornAmbiguitySet
@@ -293,5 +294,117 @@ def test_batched_solver_free_sets_never_synchronize(
 
     with host_sync_counter() as syncs:
         ambiguity_set.worst_case_expectation(BATCHED_LOSS)
+
+    assert len(syncs) == 0
+
+
+# --- PenalizedChiSquareDRO ---------------------------------------------------
+
+PENALTIES = torch.tensor([0.05, 0.4, 3.0], dtype=torch.float64)
+
+
+def test_penalized_chi_square_batched_loss_matches_a_per_row_reference() -> None:
+    objective = PenalizedChiSquareDRO(NOMINAL, 0.4)
+
+    value = objective(BATCHED_LOSS)
+
+    expected = torch.stack([objective(row) for row in BATCHED_LOSS])
+    assert value.shape == (3,)
+    torch.testing.assert_close(value, expected, rtol=0.0, atol=0.0)
+
+
+def test_penalized_chi_square_leading_batch_dimensions_are_preserved() -> None:
+    loss = BATCHED_LOSS.reshape(3, 1, 1, 3).expand(3, 2, 4, 3)
+
+    value = PenalizedChiSquareDRO(NOMINAL, 0.4)(loss)
+
+    assert value.shape == (3, 2, 4)
+    torch.testing.assert_close(value[:, 1, 3], value[:, 0, 0], rtol=0.0, atol=0.0)
+
+
+def test_penalized_chi_square_penalty_sweep_matches_a_per_penalty_reference() -> None:
+    value = PenalizedChiSquareDRO(NOMINAL, PENALTIES)(BATCHED_LOSS[1])
+
+    expected = torch.stack(
+        [
+            PenalizedChiSquareDRO(NOMINAL, float(penalty))(BATCHED_LOSS[1])
+            for penalty in PENALTIES
+        ]
+    )
+    assert value.shape == (3,)
+    torch.testing.assert_close(value, expected, rtol=1e-15, atol=1e-15)
+
+
+def test_penalized_chi_square_penalty_sweep_broadcasts_against_a_batched_loss() -> None:
+    objective = PenalizedChiSquareDRO(NOMINAL, PENALTIES)
+
+    value = objective(BATCHED_LOSS.unsqueeze(-2))
+
+    expected = torch.stack(
+        [
+            torch.stack(
+                [
+                    PenalizedChiSquareDRO(NOMINAL, float(penalty))(row)
+                    for penalty in PENALTIES
+                ]
+            )
+            for row in BATCHED_LOSS
+        ]
+    )
+    assert value.shape == (3, 3)
+    torch.testing.assert_close(value, expected, rtol=1e-15, atol=1e-15)
+
+
+def test_penalized_chi_square_batched_nominal_broadcasts_against_the_loss() -> None:
+    objective = PenalizedChiSquareDRO(BATCHED_NOMINAL.unsqueeze(-2), 0.4)
+
+    value = objective(BATCHED_LOSS)
+
+    expected = torch.stack(
+        [
+            PenalizedChiSquareDRO(nominal, 0.4)(BATCHED_LOSS)
+            for nominal in BATCHED_NOMINAL
+        ]
+    )
+    assert value.shape == (2, 3)
+    torch.testing.assert_close(value, expected, rtol=0.0, atol=0.0)
+
+
+def test_penalized_chi_square_batched_gradients_match_a_per_row_reference() -> None:
+    penalty = PENALTIES.clone().requires_grad_(True)
+    nominal = BATCHED_NOMINAL[1].clone().requires_grad_(True)
+    loss = BATCHED_LOSS.clone().requires_grad_(True)
+
+    batched = torch.autograd.grad(
+        PenalizedChiSquareDRO(nominal, penalty)(loss).sum(), (loss, nominal, penalty)
+    )
+
+    rows = [
+        torch.autograd.grad(
+            PenalizedChiSquareDRO(nominal, penalty[index])(loss[index]),
+            (loss, nominal, penalty),
+        )
+        for index in range(3)
+    ]
+    for position, expected in enumerate(zip(*rows, strict=True)):
+        torch.testing.assert_close(
+            batched[position], sum(expected), rtol=1e-14, atol=1e-14
+        )
+
+
+def test_penalized_chi_square_never_synchronizes(
+    host_sync_counter: Callable[[], Any],
+) -> None:
+    penalty = PENALTIES.clone().requires_grad_(True)
+    nominal = BATCHED_NOMINAL[1].clone().requires_grad_(True)
+    loss = BATCHED_LOSS.unsqueeze(-2).clone().requires_grad_(True)
+
+    with host_sync_counter() as syncs:
+        value = PenalizedChiSquareDRO(nominal, penalty)(loss).sum()
+        gradients = torch.autograd.grad(
+            value, (loss, nominal, penalty), create_graph=True
+        )
+        curvature = torch.sum(gradients[0] * loss.detach())
+        torch.autograd.grad(curvature, (loss, nominal, penalty))
 
     assert len(syncs) == 0
