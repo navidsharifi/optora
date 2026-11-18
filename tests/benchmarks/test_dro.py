@@ -121,6 +121,64 @@ def test_chi_square_reproduction_workload(
     assert grad.shape == loss.shape
 
 
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="no CUDA device is available")
+@pytest.mark.parametrize("graphed", [False, True], ids=["eager", "graphed"])
+def test_chi_square_minibatch_training_step(
+    graphed: bool, guarded_benchmark: Callable[..., Any]
+) -> None:
+    # Levy et al. (2020) train a linear head on 500 features with the
+    # chi-square plug-in on minibatches of 10 to 5000. One eager step is
+    # bound by kernel launches at every batch size on a laptop GPU, and
+    # replaying the captured forward and backward pass removes that cost.
+    # The optimizer update runs eagerly in both legs.
+    device = torch.device("cuda")
+    batch, features, classes = 50, 500, 10
+    generator = torch.Generator().manual_seed(0)
+    data = torch.randn(batch, features, generator=generator).to(device)
+    targets = torch.randint(classes, (batch,), generator=generator).to(device)
+    ambiguity_set = ChiSquareAmbiguitySet(
+        torch.full((batch,), 1.0 / batch, device=device), radius=2.0
+    )
+    model = torch.nn.Linear(features, classes).to(device)
+    optimizer = torch.optim.SGD(
+        model.parameters(), lr=1e-3, momentum=0.9, nesterov=True
+    )
+
+    def forward_backward() -> None:
+        per_sample = torch.nn.functional.cross_entropy(
+            model(data), targets, reduction="none"
+        )
+        ambiguity_set.worst_case_expectation(per_sample).backward()
+
+    if graphed:
+        stream = torch.cuda.Stream()
+        stream.wait_stream(torch.cuda.current_stream())
+        with torch.cuda.stream(stream):
+            for _ in range(3):
+                model.zero_grad(set_to_none=True)
+                forward_backward()
+        torch.cuda.current_stream().wait_stream(stream)
+        graph = torch.cuda.CUDAGraph()
+        model.zero_grad(set_to_none=True)
+        with torch.cuda.graph(graph):
+            forward_backward()
+
+        def step() -> None:
+            graph.replay()
+            optimizer.step()
+
+    else:
+
+        def step() -> None:
+            optimizer.zero_grad()
+            forward_backward()
+            optimizer.step()
+
+    guarded_benchmark(step, host_syncs=0)
+
+    assert all(parameter.grad is not None for parameter in model.parameters())
+
+
 @pytest.mark.parametrize("dtype", [torch.float32, torch.float64])
 @pytest.mark.parametrize("device", DEVICES)
 def test_kl_batched_tilt_search(

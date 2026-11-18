@@ -507,18 +507,18 @@ class PhiAmbiguitySet(DualAmbiguitySet):
             raise ValueError(
                 "initial_log_eta and initial_lam must be given together or not at all."
             )
+        # Filled on the device rather than copied from a host list, so that
+        # building the set does not block CUDA-graph capture.
+        initial_dual_point = torch.zeros(2, dtype=nominal.dtype, device=nominal.device)
+        if initial_log_eta is not None and initial_lam is not None:
+            initial_dual_point[0] = initial_log_eta
+            initial_dual_point[1] = initial_lam
         super().__init__(
             nominal=nominal,
             divergence=divergence,
             radius=radius,
             dual_solver=dual_solver,
-            initial_dual_point=torch.tensor(
-                [0.0, 0.0]
-                if initial_log_eta is None
-                else [initial_log_eta, initial_lam],
-                dtype=nominal.dtype,
-                device=nominal.device,
-            ),
+            initial_dual_point=initial_dual_point,
             initial_in_raw_units=initial_log_eta is not None,
             validate=validate,
         )
