@@ -213,6 +213,41 @@ set and is the same on every device.
 finite differences, and checks smooth points with `gradcheck` and
 `gradgradcheck` in float64.
 
+### Kinks at the minimizer
+
+A kink is harmless while the iterates pass through it, but it can also
+sit at the minimizer of the robust risk $R(\theta) = V(\ell(\theta))$.
+Minimizing a worst case pushes the highest losses toward each other, and
+once the radius saturates the set on those tied losses, $R$ is not
+differentiable at its minimizer. For a uniform nominal on $n$ points, the
+chi-square ball of radius $\rho$ contains the uniform distribution on $k$
+tied highest losses as soon as
+
+$$
+\rho \ge \frac{n}{k} - 1,
+$$
+
+so a large radius relative to the sample size reaches this regime with
+only a handful of ties. There the negative subgradient that autograd
+returns need not be a descent direction, and a gradient method with a
+backtracking (Armijo) line search shrinks its step until it makes no
+further progress, short of the minimizer. A first-order outer solver
+therefore needs a method for nonsmooth problems, such as a projected
+subgradient method with a diminishing step size and averaged iterates.
+With `torch.optim`, this is `SGD` under a learning-rate schedule that
+decays like $1/t$ in the iteration count $t$, with the parameters
+averaged over the iterations.
+
+The [Duchi and Namkoong reproduction](examples/reproductions.md#variance-based-regularization)
+is a worked case. At $n = 100$ its chi-square ball has radius about 12 and
+holds every distribution on the roughly 8 tied highest losses at the
+minimizer. Projected gradient descent with an Armijo line search stalls
+at a robust to ERM risk ratio of 0.52, while a projected subgradient
+method with averaged iterates reaches 0.0055, the exact minimizer that an
+independent conic solver (Clarabel) confirms. The
+[full report](https://github.com/navidsharifi/optora-reproductions/blob/main/papers/duchi2019_variance_regularization/README.md)
+gives the solver settings.
+
 ## Gradients with respect to `nominal` and `radius`
 
 `nominal` and a tensor `radius` (or a tensor `alpha` for
