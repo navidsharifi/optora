@@ -14,7 +14,7 @@ footnote with its source. Corrections are welcome as
 
 ## Overview
 
-Optora is a small set of composable PyTorch classes, namely a `Divergence`,
+Optora is a set of composable PyTorch classes, namely a `Divergence`,
 an `AmbiguitySet` that solves its worst case on a finite support, and a
 `Solver`. Its worst-case expectation is an ordinary differentiable loss for
 any `nn.Module` and `torch.optim` loop, and the test suite checks every

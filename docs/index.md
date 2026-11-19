@@ -9,7 +9,7 @@ icon: lucide/house
 ![Optora](assets/images/optora-logo.png){ .hero__logo }
 
 <p class="hero__tagline" markdown>
-A small, composable PyTorch library for <b>distributionally robust
+A composable PyTorch library for <b>distributionally robust
 optimization</b>. Its ambiguity sets compute differentiable worst-case
 expectations on any PyTorch device, and its minimax solver trains a
 decision against them.

@@ -8,7 +8,7 @@ cff-version: 1.2.0
 message: "If you use Optora in your research, please cite it as below."
 type: software
 title: Optora
-abstract: "A small, composable, PyTorch-native library for distributionally robust optimization."
+abstract: "A composable, PyTorch-native library for distributionally robust optimization."
 doi: 10.5281/zenodo.23850922
 authors:
   - family-names: Sharifi

@@ -611,7 +611,7 @@ package is type-checked under mypy's strict mode.
 
 ## Design principles
 
-- **Small, component-oriented public API.** There are no package-level
+- **Component-oriented public API.** There are no package-level
   workflow dispatchers (`minimize(...)`, `train(...)`) that hide the method
   being studied, so researchers instantiate the exact algorithm they want.
 - **Mathematical objects separated from numerical solvers.** A divergence,

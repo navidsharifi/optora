@@ -6,7 +6,7 @@
 
 # Optora
 
-**A small, composable, PyTorch-native library for distributionally robust optimization (DRO).**
+**A composable, PyTorch-native library for distributionally robust optimization (DRO).**
 
 Status: alpha &middot; Python 3.10+ &middot; PyTorch &ge;2.2 &middot; MIT License
 
@@ -14,7 +14,7 @@ Status: alpha &middot; Python 3.10+ &middot; PyTorch &ge;2.2 &middot; MIT Licens
 
 I started building Optora because most of the DRO code I ran into while
 reading papers lived inside one-off experiment scripts, hard-wired to
-whatever setup that particular paper used. Optora is a small, composable
+whatever setup that particular paper used. Optora is a composable
 set of pieces instead — a divergence, an ambiguity set, a solver — that
 you wire together yourself rather than calling a `fit()` that picks an
 algorithm on your behalf. Everything runs on PyTorch tensors, so gradients
