@@ -625,6 +625,34 @@ class TestOnlineGroupDRO:
         torch.testing.assert_close(value, adversary.weights @ group_loss)
         torch.testing.assert_close(_gradient(adversary, group_loss), adversary.weights)
 
+    @pytest.mark.parametrize("micro_batch_size", [1, 5, 12])
+    def test_micro_batches_accumulate_the_gradient_of_the_whole_batch(
+        self, micro_batch_size: int
+    ) -> None:
+        # forward is linear in the group losses, so the group sums of each
+        # micro-batch over the group counts of the whole batch add up to the
+        # group losses of the whole batch (docs/training.md, Group DRO).
+        adversary = OnlineGroupDRO(_uniform(), STEP_SIZE)
+        adversary.step(group_losses(LOSS, GROUPS, NUM_GROUPS))
+        whole = LOSS.clone().requires_grad_()
+        expected = adversary(group_losses(whole, GROUPS, NUM_GROUPS))
+        torch.autograd.backward(expected)
+
+        parts = LOSS.clone().requires_grad_()
+        value = torch.zeros((), dtype=DTYPE)
+        for index in torch.split(torch.arange(len(LOSS)), micro_batch_size):
+            counts = torch.bincount(GROUPS[index], minlength=NUM_GROUPS).to(DTYPE)
+            partial = (
+                group_losses(parts[index], GROUPS[index], NUM_GROUPS) * counts / COUNTS
+            )
+            term = adversary(partial)
+            torch.autograd.backward(term)
+            value = value + term.detach()
+
+        torch.testing.assert_close(value, expected.detach(), rtol=1e-14, atol=1e-15)
+        assert parts.grad is not None and whole.grad is not None
+        torch.testing.assert_close(parts.grad, whole.grad, rtol=1e-14, atol=1e-16)
+
     def test_zero_step_size_is_erm_over_the_initial_weights(self) -> None:
         adversary = OnlineGroupDRO(PROPORTIONS, 0.0)
         for seed in range(5):
