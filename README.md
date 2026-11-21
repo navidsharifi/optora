@@ -61,7 +61,9 @@ are implemented end to end: `KLAmbiguitySet`, `PhiAmbiguitySet` (plus
 `ChiSquareAmbiguitySet`, `TotalVariationAmbiguitySet`, and
 `CVaRAmbiguitySet`), `SinkhornAmbiguitySet`, `MMDAmbiguitySet`, and
 `WassersteinAmbiguitySet`, wired together by `MinimaxSolver`. The penalized
-chi-square objective of Levy et al. (2020) is `PenalizedChiSquareDRO`.
+chi-square objective of Levy et al. (2020) is `PenalizedChiSquareDRO`, and
+the penalized Wasserstein adversary of Sinha et al. (2018), which moves
+every input over a continuous space, is `optora.dro.transport_map`.
 Minibatch training is covered by `MultilevelMonteCarloEstimator`,
 `StochasticPhiDual`, and `OnlineGroupDRO` (group DRO, with
 `optora.dro.group_losses`). Every piece

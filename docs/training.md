@@ -548,6 +548,63 @@ centred on the group proportions.
 | Many models at once | Initial weights of shape `(..., G)` give one adversary per batch element of the losses, and a tensor `step_size` sweeps several step sizes in one module. |
 | Reading the weights | After $T$ steps on fixed group losses the weights are the exponential tilt $q_0 e^{T\eta\ell} / Z$, which is the worst case of a KL ball around $q_0$. The iterates therefore follow the KL-DRO worst-case path toward the worst group. |
 
+## Penalized adversarial training
+
+The ambiguity sets above reweight a fixed set of scenarios. When the
+adversary may instead move every input of the model, as in the
+Wasserstein robust method (WRM) of Sinha, Namkoong and Duchi (2018), the
+inner problem is a maximization over the inputs. The function
+[`transport_map`](api/dro/continuous_wasserstein.md) solves it for a
+batch by gradient ascent and returns the moved inputs, and the model
+step descends the loss at those inputs. The
+[formulations page](formulations.md#transport_map-and-squared_distance)
+derives the objective.
+
+```python
+import torch
+from torch import nn
+
+from optora.dro import squared_distance, transport_map
+
+for inputs, labels in loader:
+
+    def per_example_loss(points: torch.Tensor) -> torch.Tensor:
+        return nn.functional.cross_entropy(model(points), labels, reduction="none")
+
+    transported = transport_map(per_example_loss, inputs, penalty)
+    optimizer.zero_grad()
+    per_example_loss(transported).mean().backward()
+    optimizer.step()
+```
+
+`transport_map` differentiates only the inputs, so it leaves no gradient
+on the parameters, and it returns detached points. By Danskin's theorem,
+the gradient of the penalized objective is the gradient of the loss at the
+maximizer, which is what the backward pass above computes. The same call
+under `torch.no_grad()` gives the certificate of Sinha et al. on held-out
+data.
+
+```python
+model.eval()
+with torch.no_grad():
+    transported = transport_map(per_example_loss, test_inputs, penalty)
+    radius = squared_distance(transported, test_inputs).mean()
+    worst_case = per_example_loss(transported).mean()
+```
+
+Here `radius` is $\hat\rho_{\mathrm{test}}$ (their Eq. 20), and
+`worst_case` is the worst-case loss over the Wasserstein ball of that
+radius around the test sample, a lower bound on it when the ascent has
+not converged.
+
+| Topic | Guidance |
+| --- | --- |
+| Choosing the penalty | The inner problem is strongly concave once $\gamma$ exceeds half the Lipschitz constant of $\nabla_z \ell$, and the ascent then converges to the unique maximizer. A smaller $\gamma$ allows larger moves but may leave several local maxima. Sinha et al. use smooth ELU activations instead of ReLU so that the loss has Lipschitz gradients in the inputs. |
+| Number of steps | `num_steps` is a fixed budget, 16 by default, and there is no tolerance. The decaying step $1/\sqrt{t}$ is slow on examples where the inner objective is only weakly concave, and the surrogate is then underestimated. Compare the result with a run of more steps on a few batches. [Penalized adversarial training](examples/training/penalized_adversarial_training.md) shows such a check. |
+| Per-example losses | Every example is solved at once by differentiating the sum of the losses, so the loss of one example must not depend on the others. Batch normalization in training mode breaks this. Compute the adversarial inputs with the model in evaluation mode, or use a normalization layer that acts on each example separately. |
+| Several penalties | A tensor `penalty` of shape `(n,)` sets one value per example, and `torch.func.vmap` over a tensor of penalties solves one problem per penalty in a single call. |
+| Precision and devices | The points stay on the device of `inputs`. Half-precision inputs are moved in float32 and passed to `loss` in their own dtype, and the ascent never reads a value back to the host, so it can be captured in a CUDA graph. |
+
 ## Practical notes
 
 | Topic | Guidance |

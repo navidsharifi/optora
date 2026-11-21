@@ -28,7 +28,7 @@ ambiguity set against an independent reference implementation.
 | License | MIT | BSD-3-Clause[^skwdro-repo] | MIT[^dro-pypi] |
 | Runtime dependencies | `torch` only | torch, scikit-learn, cvxpy, cvxopt, dask and others[^skwdro-pypi] | torch, scikit-learn, cvxpy, xgboost, lightgbm and others[^dro-pypi] |
 | Ambiguity sets | KL, general $\varphi$, $\chi^2$, total variation, CVaR, Wasserstein, Sinkhorn, MMD, group DRO | Wasserstein, entropically smoothed[^skwdro-why] | $\chi^2$, KL, CVaR, TV, Wasserstein, Sinkhorn, MMD, group DRO, holistic robust, outlier-robust Wasserstein and more, depending on the model family[^dro-repo] |
-| Adversary support | finite, on the nominal's scenarios, with a user-given cost or kernel matrix | continuous, sampled by Monte Carlo around each data point[^skwdro-why] | depends on the method, with finite-sample convex programs for linear models and adversarial perturbations for neural networks[^dro-wnn] |
+| Adversary support | finite, on the nominal's scenarios, with a user-given cost or kernel matrix, and continuous for the penalized Wasserstein adversary of Sinha et al. (2018)[^sinha-wrm] | continuous, sampled by Monte Carlo around each data point[^skwdro-why] | depends on the method, with finite-sample convex programs for linear models and adversarial perturbations for neural networks[^dro-wnn] |
 | Interface | a robust-risk operator on a loss tensor, for any model | scikit-learn estimators, and `robustify` to wrap a PyTorch loss[^skwdro-torch] | scikit-learn-style estimators for fixed model families (linear, kernel, tree ensembles, neural networks)[^dro-linear] |
 | Inner solve | bracketed tilt, closed form, bisection or interior-point cone program, accurate to the working dtype | stochastic gradient on the smoothed dual[^skwdro-paper] | cvxpy with CLARABEL by default for linear models, and gradient methods for neural networks[^dro-repo] |
 | Worst-case distribution | every set, as the gradient of the worst case with respect to the loss | not documented | $\chi^2$, KL and Wasserstein estimators[^dro-worst] |
@@ -100,7 +100,9 @@ CPU runner. Timings are in float32 and the agreement is in float64.
       points anywhere in feature space, as in Wasserstein DRO with a
       continuous transport cost, use `skwdro`[^skwdro-why] or the adversarial
       Wasserstein estimators of `dro`[^dro-wnn]. Optora's sets are restricted
-      to a finite support that you choose.
+      to a finite support that you choose, and its only continuous adversary
+      is the penalized one of Sinha et al.[^sinha-wrm], `transport_map`, at a
+      fixed penalty rather than a fixed radius.
     - **A ready-made estimator.** For a robust logistic regression, support
       vector machine or gradient-boosted tree behind `fit` and `predict`,
       `dro` covers many formulations for each model family[^dro-repo].
@@ -125,4 +127,5 @@ new set on top of tested contracts.
 [^dro-wnn]: Wasserstein neural DRO, <https://python-dro.org/api/apis/wdro_nn.html>.
 [^dro-worst]: <https://python-dro.org/api/apis/chi2dro_linear.html>, <https://python-dro.org/api/apis/kldro_linear.html>, <https://python-dro.org/api/apis/wdro_linear.html>.
 [^dro-tests]: Test directory, <https://github.com/namkoong-lab/dro/tree/HEAD/tests>.
+[^sinha-wrm]: Sinha, Namkoong and Duchi, "Certifying some distributional robustness with principled adversarial training", ICLR 2018, <https://arxiv.org/abs/1710.10571>.
 [^rsome]: RSOME documentation, <https://xiongpengnus.github.io/rsome/>.

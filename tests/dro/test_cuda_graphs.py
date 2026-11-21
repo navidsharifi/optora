@@ -7,7 +7,8 @@ can be captured once with `torch.cuda.graph` and replayed, which removes the
 launch cost (see the "Launch-bound minibatch steps" section of
 `docs/training.md`). These tests pin that property. Each captures a forward
 and backward pass, replays it on new data, and compares the result with an
-eager evaluation of the same data.
+eager evaluation of the same data. The ascent of `transport_map` also has a
+fixed trip count and is pinned the same way.
 
 The general `PhiAmbiguitySet` with a `dual_solver`, `MMDAmbiguitySet` and
 `MinimaxSolver` read a convergence flag on the host by design, so they are
@@ -22,6 +23,7 @@ import pytest
 import torch
 
 from optora.core.dro_base import AmbiguitySet
+from optora.dro.continuous_wasserstein import transport_map
 from optora.dro.group_dro import OnlineGroupDRO, group_losses
 from optora.dro.kl_dro import KLAmbiguitySet
 from optora.dro.minibatch import MultilevelMonteCarloEstimator, StochasticPhiDual
@@ -224,6 +226,31 @@ def test_online_group_dro_step_replays_eagerly() -> None:
 
     torch.testing.assert_close(replayed_gradient, eager_gradient)
     torch.testing.assert_close(adversary.weights, reference.weights)
+
+
+def test_continuous_wasserstein_transport_map_replays_eagerly() -> None:
+    # The ascent has a fixed trip count and differentiates only the inputs,
+    # so its forward and backward passes capture without touching the
+    # parameters' gradients.
+    features, classes = 8, 3
+    generator = torch.Generator().manual_seed(0)
+    torch.manual_seed(0)
+    network = torch.nn.Sequential(
+        torch.nn.Linear(features, 16), torch.nn.ELU(), torch.nn.Linear(16, classes)
+    ).to(DEVICE)
+    labels = torch.randint(classes, (SUPPORT,), generator=generator).to(DEVICE)
+    inputs = torch.randn(SUPPORT, features, generator=generator).to(DEVICE)
+    new_inputs = torch.randn(SUPPORT, features, generator=generator).to(DEVICE)
+
+    def loss(points: torch.Tensor) -> torch.Tensor:
+        return torch.nn.functional.cross_entropy(
+            network(points), labels, reduction="none"
+        )
+
+    _replay_matches_eager(
+        lambda: (transport_map(loss, inputs, 0.5),), inputs, new_inputs
+    )
+    assert all(parameter.grad is None for parameter in network.parameters())
 
 
 def _group_dro_step(

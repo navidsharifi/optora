@@ -28,6 +28,8 @@ NOT_REEXPORTED = frozenset(
         "phi_divergence_radius",
         "wasserstein_radius",
         "require_gradient",
+        "squared_distance",
+        "transport_map",
         "validate_check_interval",
         "working_dtype",
     }
