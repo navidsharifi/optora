@@ -44,7 +44,9 @@ paper and the findings. The numbers below are taken from those reports as
 of 21 November 2026. The
 [results table](https://github.com/navidsharifi/optora-reproductions#results)
 of the repository is generated from the result records and stays the
-reference for every value.
+reference for every value. The figures below are those of the reports.
+The repository draws them from the same records and this page loads them
+from its `main` branch.
 
 ### Variance-based regularization
 
@@ -81,6 +83,14 @@ the report cannot say which solver setting produces it. The
 [training guide](../training.md) describes where the worst case of each
 set has such kinks.
 
+<figure class="figure" markdown="span">
+  ![Ratio of the mean robust risk to the mean ERM risk at n = 100 for four noise levels and two solvers, against the value of the paper](https://raw.githubusercontent.com/navidsharifi/optora-reproductions/main/papers/duchi2019_variance_regularization/figures/risk_ratio-light.svg#only-light){ loading=lazy }
+  ![Ratio of the mean robust risk to the mean ERM risk at n = 100 for four noise levels and two solvers, against the value of the paper](https://raw.githubusercontent.com/navidsharifi/optora-reproductions/main/papers/duchi2019_variance_regularization/figures/risk_ratio-dark.svg#only-dark){ loading=lazy }
+  <figcaption>Mean robust risk over mean ERM risk at $n = 100$. The band is the
+  tolerance around the value of the paper, which lies between the
+  line-search method and the exact minimizer at every noise level.</figcaption>
+</figure>
+
 ### Fast Bellman updates for robust MDPs
 
 Ho, Petrik and Wiesemann compute the robust value of one state-action
@@ -109,6 +119,15 @@ implementation against Gurobi, so its ratio compares a different pair of
 programs. A measurement made after the run, and not part of any claim,
 evaluates 400 instances at nine budgets in one batched call in 22.7 ms,
 about 6 $\mu$s per value.
+
+<figure class="figure" markdown="span">
+  ![Largest error of Optora against the linear program and the time of one call for HiGHS and Optora, against the number of states](https://raw.githubusercontent.com/navidsharifi/optora-reproductions/main/papers/ho2018_fast_bellman_updates/figures/bellman_update-light.svg#only-light){ loading=lazy }
+  ![Largest error of Optora against the linear program and the time of one call for HiGHS and Optora, against the number of states](https://raw.githubusercontent.com/navidsharifi/optora-reproductions/main/papers/ho2018_fast_bellman_updates/figures/bellman_update-dark.svg#only-dark){ loading=lazy }
+  <figcaption>Left, the largest error against HiGHS for each number of states,
+  with the tolerance of the first claim. Right, the time of a single
+  call, where the HiGHS time grows with $S$ and the Optora time does
+  not.</figcaption>
+</figure>
 
 ### Large-scale methods for DRO
 
@@ -153,6 +172,14 @@ losses recorded after every epoch, the same comparison lies inside the
 range from epoch 17 to epoch 47, while ERM is still fitting the typed
 digits, and settles near 15% once both methods converge.
 
+<figure class="figure" markdown="span">
+  ![Reduction of the worst-group test loss against ERM read at every epoch, against the range of the paper](https://raw.githubusercontent.com/navidsharifi/optora-reproductions/main/papers/levy2020_large_scale_dro/figures/group_loss_reduction-light.svg#only-light){ loading=lazy }
+  ![Reduction of the worst-group test loss against ERM read at every epoch, against the range of the paper](https://raw.githubusercontent.com/navidsharifi/optora-reproductions/main/papers/levy2020_large_scale_dro/figures/group_loss_reduction-dark.svg#only-dark){ loading=lazy }
+  <figcaption>The fourth claim read at every epoch, mean over five seeds with one
+  sample standard deviation. The band is the range of the paper, and
+  the claim fixed before the run is the last point.</figcaption>
+</figure>
+
 ### Wasserstein DRO with performance guarantees
 
 Mohajerin Esfahani and Kuhn solve a mean-risk portfolio problem over a
@@ -179,6 +206,15 @@ figure in the paper. Every certificate is within $1.6 \cdot 10^{-6}$ of
 the optimal value of the linear program in the paper, solved by HiGHS.
 The panels for $N = 3000$ are not reproduced, because a dense ground cost
 for 200 such datasets needs about 14.6 GB.
+
+<figure class="figure" markdown="span">
+  ![Out-of-sample performance and reliability of the certificate against the Wasserstein radius for N = 30](https://raw.githubusercontent.com/navidsharifi/optora-reproductions/main/papers/mohajerin2018_wasserstein_dro/figures/radius_sweep-light.svg#only-light){ loading=lazy }
+  ![Out-of-sample performance and reliability of the certificate against the Wasserstein radius for N = 30](https://raw.githubusercontent.com/navidsharifi/optora-reproductions/main/papers/mohajerin2018_wasserstein_dro/figures/radius_sweep-dark.svg#only-dark){ loading=lazy }
+  <figcaption>Out-of-sample performance and reliability over the radius for
+  $N = 30$, as in Figure 5(a) of the paper. The performance is best
+  at an intermediate radius, where the certificate already holds in
+  90% of the simulations.</figcaption>
+</figure>
 
 The example [Batched ground costs](ambiguity_sets/batched_ground_costs.md)
 shows the same batching on a small problem.
@@ -216,6 +252,14 @@ under bfloat16 autocast to fit a 6 GB GPU, which raised the question of
 how the online update combines with gradient accumulation. The
 [training guide](../training.md) now answers it.
 
+<figure class="figure" markdown="span">
+  ![Average and worst-group test accuracy of ERM and group DRO in the three training regimes](https://raw.githubusercontent.com/navidsharifi/optora-reproductions/main/papers/sagawa2020_group_dro/figures/test_accuracy-light.svg#only-light){ loading=lazy }
+  ![Average and worst-group test accuracy of ERM and group DRO in the three training regimes](https://raw.githubusercontent.com/navidsharifi/optora-reproductions/main/papers/sagawa2020_group_dro/figures/test_accuracy-dark.svg#only-dark){ loading=lazy }
+  <figcaption>Test accuracy on Waterbirds in the three regimes of Table 1. The
+  average accuracies of the two methods agree within two points,
+  and the worst-group accuracies differ by up to 67 points.</figcaption>
+</figure>
+
 ### Certifiable distributional robustness
 
 Sinha, Namkoong and Duchi train with the Lagrangian relaxation of the
@@ -248,6 +292,14 @@ that may differ per example, is now part of Optora as
 [`transport_map`](../api/dro/continuous_wasserstein.md)
 ([#122](https://github.com/navidsharifi/optora/issues/122)). It will ship with the next release, and the reproduction
 will switch to it from the prototype then.
+
+<figure class="figure" markdown="span">
+  ![Certificate of the WRM model and its test worst-case loss against the robustness level, on synthetic data and on MNIST](https://raw.githubusercontent.com/navidsharifi/optora-reproductions/main/papers/sinha2018_certifiable_robustness/figures/certificate-light.svg#only-light){ loading=lazy }
+  ![Certificate of the WRM model and its test worst-case loss against the robustness level, on synthetic data and on MNIST](https://raw.githubusercontent.com/navidsharifi/optora-reproductions/main/papers/sinha2018_certifiable_robustness/figures/certificate-dark.svg#only-dark){ loading=lazy }
+  <figcaption>Certificate and test worst-case loss of the WRM model for each of
+  the five seeds, as in Figure 2 of the paper. The marker is the
+  level $\hat\rho_n$ reached in training.</figcaption>
+</figure>
 
 ## What the reproductions changed in Optora
 
