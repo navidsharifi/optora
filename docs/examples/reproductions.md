@@ -21,9 +21,10 @@ configurations.
 Each paper is reduced to a few numbered claims. For every claim, the
 location in the paper, the metric, the value the paper reports and a
 tolerance are committed before the full run. A claim counts as reproduced
-when the mean over seeds lies within that tolerance. Each reproduction
-also solves its problem with a reference solver that shares no code with
-Optora, either HiGHS or Clarabel. When a result disagrees with the paper,
+when the mean over seeds lies within that tolerance. When the problem
+has a convex reformulation, the reproduction also solves it with a
+reference solver that shares no code with Optora, either HiGHS or
+Clarabel. When a result disagrees with the paper,
 the report traces the cause, and a cause that lies in the library becomes
 an issue on the Optora tracker.
 
@@ -33,11 +34,14 @@ an issue on the Optora tracker.
 | --- | --- | --- | --- |
 | [Duchi and Namkoong (2019)](https://github.com/navidsharifi/optora-reproductions/blob/main/papers/duchi2019_variance_regularization/README.md)[^duchi] | Simulation of Section 5.2 | [`ChiSquareAmbiguitySet`](../api/dro/phi_dro.md) | 2 of 3 |
 | [Ho, Petrik and Wiesemann (2018)](https://github.com/navidsharifi/optora-reproductions/blob/main/papers/ho2018_fast_bellman_updates/README.md)[^ho] | Robust Bellman update of Section 5 under an $L_1$ ambiguity set | [`TotalVariationAmbiguitySet`](../api/dro/phi_dro.md) | 1 of 2 |
+| [Levy, Carmon, Duchi and Sidford (2020)](https://github.com/navidsharifi/optora-reproductions/blob/main/papers/levy2020_large_scale_dro/README.md)[^levy] | Digits experiment of Section 7 | [`CVaRAmbiguitySet`](../api/dro/phi_dro.md), [`ChiSquareAmbiguitySet`](../api/dro/phi_dro.md), [`PenalizedChiSquareDRO`](../api/dro/phi_dro.md) | 3 of 4 |
 | [Mohajerin Esfahani and Kuhn (2018)](https://github.com/navidsharifi/optora-reproductions/blob/main/papers/mohajerin2018_wasserstein_dro/README.md)[^mohajerin] | Mean-risk portfolio of Section 7.2 | [`WassersteinAmbiguitySet`](../api/dro/wasserstein_dro.md) | 3 of 3 |
+| [Sagawa, Koh, Hashimoto and Liang (2020)](https://github.com/navidsharifi/optora-reproductions/blob/main/papers/sagawa2020_group_dro/README.md)[^sagawa] | Waterbirds experiment of Section 3 | [`OnlineGroupDRO`](../api/dro/group_dro.md), [`group_losses`](../api/dro/group_dro.md) | 5 of 5 |
+| [Sinha, Namkoong and Duchi (2018)](https://github.com/navidsharifi/optora-reproductions/blob/main/papers/sinha2018_certifiable_robustness/README.md)[^sinha] | Synthetic data and MNIST of Section 4 | [`transport_map`](../api/dro/continuous_wasserstein.md), prototyped in the reproductions repository first ([#122](https://github.com/navidsharifi/optora/issues/122)) | 6 of 6 |
 
 Each link opens the full report, with the setup, every deviation from the
 paper and the findings. The numbers below are taken from those reports as
-of 16 November 2026. The
+of 21 November 2026. The
 [results table](https://github.com/navidsharifi/optora-reproductions#results)
 of the repository is generated from the result records and stays the
 reference for every value.
@@ -106,6 +110,49 @@ programs. A measurement made after the run, and not part of any claim,
 evaluates 400 instances at nine budgets in one batched call in 22.7 ms,
 about 6 $\mu$s per value.
 
+### Large-scale methods for DRO
+
+Levy, Carmon, Duchi and Sidford train a linear classifier on fixed
+features of the Digits data, the 60,000 MNIST training images and 600
+typed digits, under three robust objectives over the training
+distribution $P_0$,
+
+$$
+\mathrm{CVaR}_{\alpha}(\ell), \qquad
+\sup_{Q} \left\{ \mathbb{E}_Q[\ell] \,:\, D_{\chi^2}(Q \,\|\, P_0) \le \rho \right\}, \qquad
+\sup_{Q} \left\{ \mathbb{E}_Q[\ell] - \lambda D_{\chi^2}(Q \,\|\, P_0) \right\},
+$$
+
+with $\alpha = 0.02$, $\rho = 1$ and $\lambda = 0.05$. Each minibatch
+method takes stochastic gradient steps on the plug-in robust loss of a
+batch of $n$ samples. The paper defines
+$D_{\chi^2}(Q \,\|\, P) = \tfrac{1}{2} \mathbb{E}_P[(dQ/dP - 1)^2]$, half
+of the chi-square divergence of Optora, so the ball has radius $2\rho$ and
+the penalty is $\lambda / 2$.
+
+```python
+nominal = torch.full((n,), 1.0 / n)
+cvar = CVaRAmbiguitySet(nominal, alpha=0.02).worst_case_expectation(losses)
+ball = ChiSquareAmbiguitySet(nominal, radius=2.0).worst_case_expectation(losses)
+penalized = PenalizedChiSquareDRO(nominal, penalty=0.025)(losses)
+```
+
+Three of the four claims reproduce. The best minibatch size reaches 2% of
+the optimal training objective in 8.7, 9.5 and 11.6 times fewer epochs
+than the full-batch method, against 9.0, 9.5 and 16.2 in the paper. Every
+minibatch epoch count lies within about one standard deviation of the
+paper. The count that differs is the full batch on the penalized
+objective, 1215 epochs against 1680, and the report could not trace its
+cause. The fourth claim, a worst-group test loss 17.5% to 27% lower than
+ERM, does not reproduce under the comparison fixed before the run. After
+the last epoch, DRO lowers the loss of the worst group, the typed digit 9,
+by 14.9% against the better of the two ERM baselines and by about 25%
+against the other one. The paper reads its range from training curves
+that show both baselines and does not name the epoch. With the group
+losses recorded after every epoch, the same comparison lies inside the
+range from epoch 17 to epoch 47, while ERM is still fitting the typed
+digits, and settles near 15% once both methods converge.
+
 ### Wasserstein DRO with performance guarantees
 
 Mohajerin Esfahani and Kuhn solve a mean-risk portfolio problem over a
@@ -136,15 +183,88 @@ for 200 such datasets needs about 14.6 GB.
 The example [Batched ground costs](ambiguity_sets/batched_ground_costs.md)
 shows the same batching on a small problem.
 
+### Group DRO under subgroup shift
+
+Sagawa, Koh, Hashimoto and Liang train a ResNet-50 on Waterbirds, where
+the background matches the label in 95% of the training images. Group DRO
+minimizes the worst empirical risk over the $m = 4$ groups of label and
+background,
+
+$$
+\min_{\theta} \max_{g \le m} \; \mathbb{E}_{\hat{P}_g}[\ell(\theta; (x, y))],
+$$
+
+with the exponentiated-gradient update of the group weights $q$ from
+their Algorithm 1. `OnlineGroupDRO` holds $q$, and `group_losses` averages
+the per-sample losses within each group.
+
+```python
+adversary = OnlineGroupDRO(torch.full((4,), 0.25), step_size=0.01)
+adversary.step(group_losses(losses.detach(), groups, 4))
+loss = adversary(group_losses(losses, groups, 4))
+```
+
+All five claims reproduce. With the default $\ell_2$ penalty and 300
+epochs both methods fit every training group, and the worst-group test
+accuracy of ERM ends at 69.3% (60.0% in the paper). With the penalty
+$\lambda = 1$, group DRO reaches a worst-group test accuracy of 84.6%
+against 27.6% for ERM (84.6% and 21.3%). With early stopping after one
+epoch it reaches 85.0% against 17.8%, means over five seeds (86.0% and
+6.7%). In both regularized regimes the average test accuracy of group DRO
+stays within about one point of ERM. The runs used micro-batches of 64
+under bfloat16 autocast to fit a 6 GB GPU, which raised the question of
+how the online update combines with gradient accumulation. The
+[training guide](../training.md) now answers it.
+
+### Certifiable distributional robustness
+
+Sinha, Namkoong and Duchi train with the Lagrangian relaxation of the
+worst case over a Wasserstein ball with transport cost
+$c(z, z_0) = \lVert x - x_0 \rVert_2^2$ on the inputs,
+
+$$
+\min_{\theta} \; \mathbb{E}_{\hat{P}_n}\big[\phi_\gamma(\theta; Z)\big], \qquad
+\phi_\gamma(\theta; z_0) = \sup_{z} \big\{ \ell(\theta; z) - \gamma\, c(z, z_0) \big\},
+$$
+
+and certify the trained model with the bound
+$\gamma \rho + \mathbb{E}_{\hat{P}_n}[\phi_\gamma(\theta; Z)]$ on the
+worst-case loss over the ball of radius $\rho$ (their Theorem 3). For a
+smooth loss and a large enough $\gamma$ the inner problem is strongly
+concave, so gradient ascent solves it. Optora `v0.4.0` had no continuous
+adversary of this kind, so the reproduction ran the inner ascent from a
+prototype in its own repository.
+
+All six claims reproduce. On MNIST the robustness level reached on the
+training set is $\hat\rho_n = 0.192$ (0.209 in the paper), where the
+certificate of 0.695 bounds the test worst-case loss of 0.321 (0.707 and
+0.329). Under an $\ell_2$ PGM attack at the training radius WRM errs on
+2.2% of the test set and ERM on 11.3% (2.3% and 10.8%). Under an
+$\ell_\infty$ attack with $\epsilon = 0.1$ WRM errs on 17.2% against 26.6%
+for the best of the three adversarially trained baselines (14.7% and
+25.2%). The interface the prototype needed, a batched ascent for any
+differentiable loss with a step size of order $1/\sqrt{t}$ and a penalty
+that may differ per example, is now part of Optora as
+[`transport_map`](../api/dro/continuous_wasserstein.md)
+([#122](https://github.com/navidsharifi/optora/issues/122)). It will ship with the next release, and the reproduction
+will switch to it from the prototype then.
+
 ## What the reproductions changed in Optora
 
-Three issues came out of these runs, and all three are fixed in `v0.3.0`.
+Eight issues came out of these runs, and all eight are closed, by the
+`v0.3.0` and `v0.4.0` releases, by changes to the documentation, or on
+`main` for the next release.
 
 | Issue | Found in | Change |
 | --- | --- | --- |
-| [#108](https://github.com/navidsharifi/optora/issues/108) | Duchi and Namkoong | `ChiSquareAmbiguitySet` finds its tilt exactly from one sort instead of a bisection, which removes most of the kernel launches of a solve on a GPU. |
-| [#109](https://github.com/navidsharifi/optora/issues/109) | Duchi and Namkoong | The scalar search behind the KL, Sinkhorn and general $\varphi$ sets tests more tilts per step on a GPU, where small problems are bound by kernel launches. |
-| [#112](https://github.com/navidsharifi/optora/issues/112) | Mohajerin Esfahani and Kuhn | `WassersteinAmbiguitySet` accepts a batch of ground costs, so datasets with different supports are solved in one call. |
+| [#108](https://github.com/navidsharifi/optora/issues/108) | Duchi and Namkoong | `ChiSquareAmbiguitySet` finds its tilt exactly from one sort instead of a bisection, which removes most of the kernel launches of a solve on a GPU (`v0.3.0`). |
+| [#109](https://github.com/navidsharifi/optora/issues/109) | Duchi and Namkoong | The scalar search behind the KL, Sinkhorn and general $\varphi$ sets tests more tilts per step on a GPU, where small problems are bound by kernel launches (`v0.3.0`). |
+| [#112](https://github.com/navidsharifi/optora/issues/112) | Mohajerin Esfahani and Kuhn | `WassersteinAmbiguitySet` accepts a batch of ground costs, so datasets with different supports are solved in one call (`v0.3.0`). |
+| [#114](https://github.com/navidsharifi/optora/issues/114) | Duchi and Namkoong | The [training guide](../training.md) notes that a descent method with a line search stalls on a saturated chi-square ball and that a nonsmooth outer solver is needed. |
+| [#116](https://github.com/navidsharifi/optora/issues/116) | Levy et al. | `PenalizedChiSquareDRO` adds the penalized chi-square objective (`v0.4.0`). |
+| [#117](https://github.com/navidsharifi/optora/issues/117) | Levy et al. | Capturing a minibatch step in a CUDA graph is tested, and the chi-square set is built without a copy to the host (`v0.4.0`). |
+| [#120](https://github.com/navidsharifi/optora/issues/120) | Sagawa et al. | The [training guide](../training.md) shows how to combine `OnlineGroupDRO` with gradient accumulation over micro-batches. |
+| [#122](https://github.com/navidsharifi/optora/issues/122) | Sinha et al. | `transport_map` and `squared_distance` add the continuous Wasserstein adversary that the reproduction prototyped (on `main`, not yet released). |
 
 The searches of #108 and #109 are described under
 [Mathematical formulations](../formulations.md#tilt-solved-sets-and-the-bracketed-scalar-search).
@@ -165,8 +285,9 @@ python -m papers.ho2018_fast_bellman_updates.run --config papers/ho2018_fast_bel
 
 Every paper has a `smoke.toml` that runs in seconds on a CPU and a
 `full.toml` with the settings of the paper. The full runs recorded above
-took about three minutes on a CPU for Ho, Petrik and Wiesemann, and 3.8
-hours and 2.2 hours on a laptop GPU for the other two.
+took about three minutes on a CPU for Ho, Petrik and Wiesemann. The other
+five ran on a laptop GPU with 6 GB of memory and took between 2.2 hours
+for Mohajerin Esfahani and Kuhn and 12 hours for Sagawa et al.
 
 [^duchi]: John Duchi and Hongseok Namkoong. Variance-based regularization
     with convex objectives. *Journal of Machine Learning Research*,
@@ -174,7 +295,17 @@ hours and 2.2 hours on a laptop GPU for the other two.
 [^ho]: Chin Pang Ho, Marek Petrik and Wolfram Wiesemann. Fast Bellman
     updates for robust MDPs. *Proceedings of the 35th International
     Conference on Machine Learning*, PMLR 80:1979-1988, 2018.
+[^levy]: Daniel Levy, Yair Carmon, John C. Duchi and Aaron Sidford.
+    Large-scale methods for distributionally robust optimization.
+    *Advances in Neural Information Processing Systems 33*, pages
+    8847-8860, 2020.
 [^mohajerin]: Peyman Mohajerin Esfahani and Daniel Kuhn. Data-driven
     distributionally robust optimization using the Wasserstein metric:
     performance guarantees and tractable reformulations. *Mathematical
     Programming*, 171(1-2):115-166, 2018.
+[^sagawa]: Shiori Sagawa, Pang Wei Koh, Tatsunori B. Hashimoto and Percy
+    Liang. Distributionally robust neural networks. *International
+    Conference on Learning Representations*, 2020.
+[^sinha]: Aman Sinha, Hongseok Namkoong and John Duchi. Certifying some
+    distributional robustness with principled adversarial training.
+    *International Conference on Learning Representations*, 2018.
