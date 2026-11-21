@@ -56,6 +56,7 @@ python examples/01_divergences/01_phi_divergences.py
 | [Training with torch.optim](training/robust_regression.md) | Fit an `nn.Linear` with Adam on the worst case over a KL ball by passing the per-sample losses to `KLAmbiguitySet.worst_case_expectation`. Radius zero is ordinary least squares. The data mix a large group with a small one that follows a different slope, and a larger radius trades some majority loss for a lower minority loss. |
 | [Minibatch estimators](training/minibatch_estimators.md) | The worst case of a minibatch is a biased estimate of the worst case of the full dataset. Measure that bias for the plug-in estimate, remove most of it with `MultilevelMonteCarloEstimator`, and recover the full-batch value from minibatches alone with `StochasticPhiDual`. |
 | [Group DRO](training/group_dro.md) | Average the per-sample losses within each group with `group_losses`, and train on the worst group in two ways: exactly on the full batch with `CVaRAmbiguitySet(alpha=0)`, whose worst case is the largest group loss, and on minibatches with the exponentiated-gradient adversary `OnlineGroupDRO`. |
+| [Penalized adversarial training](training/penalized_adversarial_training.md) | Train a classifier on the penalized Wasserstein objective of Sinha, Namkoong and Duchi (2018), in which an adversary may move every input at a squared Euclidean cost. `transport_map` finds the moved inputs and `squared_distance` measures how far they moved, which gives the radius of the Wasserstein ball that the reported worst-case loss refers to. |
 
 ## Paper reproductions
 

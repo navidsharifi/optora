@@ -6,6 +6,7 @@ from optora.dro.calibration import (
     phi_divergence_radius,
     wasserstein_radius,
 )
+from optora.dro.continuous_wasserstein import squared_distance, transport_map
 from optora.dro.group_dro import OnlineGroupDRO, group_losses
 from optora.dro.kl_dro import KLAmbiguitySet
 from optora.dro.minibatch import MultilevelMonteCarloEstimator, StochasticPhiDual
@@ -44,6 +45,8 @@ __all__ = [
     "cvar_conjugate",
     "kl_conjugate",
     "group_losses",
+    "squared_distance",
+    "transport_map",
     "chi_square_radius",
     "kl_radius",
     "phi_divergence_radius",

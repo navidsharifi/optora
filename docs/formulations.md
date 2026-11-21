@@ -456,6 +456,76 @@ checks this against one set per dataset.
   returns.</figcaption>
 </figure>
 
+### `transport_map` and `squared_distance`
+
+`WassersteinAmbiguitySet` moves probability mass between the support
+points of the nominal distribution. Sinha, Namkoong and Duchi (2018)
+instead let the adversary move each input $z_0$ to any point $z$ of the
+input space at the cost $c(z, z_0) = \lVert z - z_0 \rVert_2^2$, and they
+penalize this cost rather than bound it. Their robust surrogate (Eq. 2b)
+is
+
+$$
+\phi_\gamma(\theta; z_0)
+= \sup_{z} \big\{ \ell(\theta; z) - \gamma \lVert z - z_0 \rVert_2^2 \big\},
+\qquad \gamma > 0,
+$$
+
+and by their Proposition 1 the worst case over a Wasserstein ball of
+radius $\rho$ is
+
+$$
+\sup_{P:\, W_c(P, P_0) \le \rho} \mathbb{E}_P[\ell(\theta; Z)]
+= \inf_{\gamma \ge 0} \big\{ \gamma \rho
+    + \mathbb{E}_{P_0}[\phi_\gamma(\theta; Z)] \big\} .
+$$
+
+Training on $\mathbb{E}_{P_0}[\phi_\gamma]$ at a fixed $\gamma$ is the
+Lagrangian relaxation of the constrained problem, the same relation that
+links `PenalizedChiSquareDRO` to `ChiSquareAmbiguitySet`. The inner
+supremum is over the inputs of a model, not over the weights of a finite
+set of scenarios, so it is not an `AmbiguitySet`. It is the function
+`transport_map(loss, inputs, penalty)` in `optora.dro`, which takes a
+closure from a batch of inputs to the loss of each example.
+
+If $z \mapsto \ell(\theta; z)$ has $L$-Lipschitz gradients, the inner
+objective is $(2\gamma - L)$-strongly concave for $\gamma > L / 2$, so it
+has a unique maximizer $T_\gamma(\theta; z_0)$, the transport map of
+their Eq. (9). `transport_map` approximates it by the ascent of the
+authors' `wrm` code. The objective is divided by $2\gamma$,
+
+$$
+f(z) = \frac{\ell(\theta; z)}{2\gamma} - \frac{1}{2} \lVert z - z_0 \rVert_2^2,
+\qquad z_{t+1} = z_t + \frac{\nabla f(z_t)}{\sqrt{t}},
+\quad z_1 = z_0,
+$$
+
+for a fixed number of steps $t = 1, \dots, T$, with $T = 16$ by default.
+The first step moves by $\nabla_z \ell(\theta; z_0) / (2\gamma)$, which is
+already the maximizer when the loss is linear in $z$. All examples are
+solved together by differentiating the sum of their losses, so the loss
+of an example may depend only on its own input. By Danskin's theorem
+(their Lemma 1), $\nabla_\theta \phi_\gamma(\theta; z_0) =
+\nabla_\theta \ell(\theta; T_\gamma(\theta; z_0))$, so the map is
+returned detached and the model is trained on the loss at the moved
+inputs. The trip count is fixed and nothing is read back to the host, so
+the ascent can be captured in a CUDA graph, and inside a `torch.func`
+transform it differentiates with `torch.func.grad`.
+
+`squared_distance(points, inputs)` returns the cost of each example. Its
+mean over a sample is the radius
+$\hat\rho_n = \mathbb{E}_{\hat P_n} \lVert T_\gamma(\theta; Z) - Z
+\rVert_2^2$ of their Eq. (14). The moved inputs form a distribution in the
+empirical ball of that radius, and the dual bound at the same $\gamma$
+equals their mean loss, so the worst case over that ball is
+$\mathbb{E}_{\hat P_n}[\ell(\theta; T_\gamma(\theta; Z))]$. For an
+approximate map, the mean loss of the moved inputs is a lower bound on
+this worst case. For any other radius $\rho$, weak duality bounds the
+empirical worst case by
+$\gamma \rho + \mathbb{E}_{\hat P_n}[\phi_\gamma(\theta; Z)]$, and their
+Theorem 3 extends the bound to the population worst case up to a
+generalization term.
+
 ### `SinkhornAmbiguitySet`
 
 Sinkhorn DRO (Wang, Gao, and Xie, 2025) replaces the Wasserstein distance

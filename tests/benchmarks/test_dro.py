@@ -4,9 +4,10 @@ Workloads are batched float32 losses, the shape a training step produces,
 except for the float64 chi-square case taken from a paper reproduction.
 Every exact set runs a trip count fixed by the dtype, so its forward and
 backward passes must issue zero host synchronizations, and so must the
-minibatch estimators built on them, the penalized chi-square objective, and
-the online group-DRO step; the general `PhiAmbiguitySet` dual and the
-nested minimax solve pay one per convergence checkpoint.
+minibatch estimators built on them, the penalized chi-square objective,
+the online group-DRO step and the continuous Wasserstein adversary; the
+general `PhiAmbiguitySet` dual and the nested minimax solve pay one per
+convergence checkpoint.
 """
 
 import functools
@@ -17,6 +18,7 @@ import pytest
 import torch
 
 from optora.divergences.f_divergence import PhiDivergence
+from optora.dro.continuous_wasserstein import squared_distance, transport_map
 from optora.dro.group_dro import OnlineGroupDRO, group_losses
 from optora.dro.kl_dro import KLAmbiguitySet
 from optora.dro.minibatch import MultilevelMonteCarloEstimator, StochasticPhiDual
@@ -372,3 +374,28 @@ def test_stochastic_phi_dual_gradient(guarded_benchmark: Callable[..., Any]) -> 
     grad = guarded_benchmark(gradient, host_syncs=0)
 
     assert grad.shape == loss.shape
+
+
+@pytest.mark.parametrize("device", DEVICES)
+def test_continuous_wasserstein_transport_map(
+    device: str, guarded_benchmark: Callable[..., Any]
+) -> None:
+    # The inner ascent of Sinha et al. (2018) on a small classifier: 16 steps
+    # of a forward and backward pass over a batch of SUPPORT inputs.
+    features, classes = 32, 10
+    generator = torch.Generator().manual_seed(0)
+    torch.manual_seed(0)
+    network = torch.nn.Sequential(
+        torch.nn.Linear(features, 64), torch.nn.ELU(), torch.nn.Linear(64, classes)
+    ).to(device)
+    inputs = torch.randn(SUPPORT, features, generator=generator).to(device)
+    labels = torch.randint(classes, (SUPPORT,), generator=generator).to(device)
+
+    def loss(points: torch.Tensor) -> torch.Tensor:
+        return torch.nn.functional.cross_entropy(
+            network(points), labels, reduction="none"
+        )
+
+    points = guarded_benchmark(lambda: transport_map(loss, inputs, 0.5), host_syncs=0)
+
+    assert squared_distance(points, inputs).shape == (SUPPORT,)

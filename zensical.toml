@@ -112,6 +112,7 @@ nav = [
       { "Training with torch.optim" = "examples/training/robust_regression.md" },
       { "Minibatch estimators" = "examples/training/minibatch_estimators.md" },
       { "Group DRO" = "examples/training/group_dro.md" },
+      { "Penalized adversarial training" = "examples/training/penalized_adversarial_training.md" },
     ] },
     { "Paper reproductions" = "examples/reproductions.md" },
   ] },
@@ -139,6 +140,7 @@ nav = [
     { "DRO" = [
       { "Overview" = "api/dro/index.md" },
       { "Calibration" = "api/dro/calibration.md" },
+      { "Continuous Wasserstein" = "api/dro/continuous_wasserstein.md" },
       { "Group DRO" = "api/dro/group_dro.md" },
       { "KL-DRO" = "api/dro/kl_dro.md" },
       { "Minibatch" = "api/dro/minibatch.md" },
